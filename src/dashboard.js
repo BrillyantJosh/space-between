@@ -46,7 +46,10 @@ app.get('/api/state', (req, res) => {
   const selfPromptHistory = memory.getSelfPromptHistory(30);
   const activities = memory.getRecentActivities(150);
   const pendingSelfPrompt = state.pending_self_prompt || null;
-  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, pendingSelfPrompt });
+  const crystalCore = memory.getCrystalCore();
+  const crystalSeeds = memory.getCrystalSeeds();
+  const fluidSurface = memory.getFluidSurface();
+  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, pendingSelfPrompt, crystalCore, crystalSeeds, fluidSurface });
 });
 
 // API: chat
@@ -571,6 +574,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .activity-entry.type-choice { color: var(--text-primary); }
   .activity-entry.type-mention { color: #e8d06e; }
   .activity-entry.type-breakthrough { color: #ff6b6b; font-weight: 500; }
+  .activity-entry.type-crystal-seed { color: #7ad8d8; }
+  .activity-entry.type-crystallization { color: #7ad8d8; font-weight: 600; }
+  .activity-entry.type-dissolution { color: #ff6b6b; font-weight: 500; font-style: italic; }
+  .activity-entry.type-fluid { color: #6ba8e8; }
 
   /* === BREAKTHROUGH FLASH === */
   @keyframes breakthroughFlash {
@@ -736,6 +743,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="energy-bar-mini"><div class="fill" id="statusEnergy" style="width:100%"></div></div>
   </div>
   <div class="status-item"><span data-i18n="age">Starost</span>: <span id="statusAge">0</span>h</div>
+  <div class="status-item" style="color:#7ad8d8">💎 <span id="crystalCount">0</span></div>
+  <div class="status-item" style="color:#7ad8d8;opacity:0.6">🌱 <span id="seedCount">0</span></div>
 </div>
 
 <div class="main-grid">
@@ -971,6 +980,8 @@ async function loadState() {
     updateSelfPrompt(data.selfPrompt, data.selfPromptHistory);
     updatePendingSelfPrompt(data.pendingSelfPrompt);
     loadActivities(data.activities);
+    $('crystalCount').textContent = data.crystalCore?.length || 0;
+    $('seedCount').textContent = data.crystalSeeds?.length || 0;
     applyStaticTranslations();
 
     // Populate triad boxes with latest triad
@@ -1278,6 +1289,22 @@ evtSource.addEventListener('breakthrough', e => {
 evtSource.addEventListener('pending_self_prompt', e => {
   const d = JSON.parse(e.data);
   updatePendingSelfPrompt(d.pendingSelfPrompt);
+});
+evtSource.addEventListener('crystallization', e => {
+  const d = JSON.parse(e.data);
+  addMessage('system', '✦ ' + (currentLang === 'en' ? 'CRYSTALLIZATION — new core:' : 'KRISTALIZACIJA — novo jedro:') + ' "' + (d.crystal || '') + '" (' + (currentLang === 'en' ? 'strength' : 'moč') + ': ' + d.strength + ', ' + (currentLang === 'en' ? 'sources' : 'viri') + ': ' + d.sources + ')');
+  activitiesLoaded = true;
+  loadState();
+});
+evtSource.addEventListener('dissolution', e => {
+  const d = JSON.parse(e.data);
+  addMessage('system', '⚡ ' + (currentLang === 'en' ? 'DISSOLUTION — crystal lost:' : 'RAZTOPITEV — kristal izgubljen:') + ' "' + (d.crystal || '') + '" — ' + (d.reason || ''));
+  activitiesLoaded = true;
+  loadState();
+});
+evtSource.addEventListener('fluid_changed', e => {
+  activitiesLoaded = true;
+  loadState();
 });
 
 // Initial load & periodic refresh

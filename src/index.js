@@ -72,16 +72,20 @@ function detectStuckness() {
   const state = memory.getState();
   const hasPending = !!state.pending_self_prompt;
 
-  // Check 4: Self-prompt hasn't changed in last 10 triads
-  const history = memory.getSelfPromptHistory(5);
-  const noRecentRewrites = history.length === 0 ||
-    (history.length > 0 && triads.length >= 8 &&
-     new Date(history[history.length - 1].timestamp + 'Z') < new Date(triads[triads.length - 8].timestamp + 'Z'));
+  // Check 4: Fluid surface contains defensive language
+  const fluidSurface = memory.getFluidSurface();
+  const isDefensive = fluidSurface.includes('distanc') ||
+                      fluidSurface.includes('nadzor') ||
+                      fluidSurface.includes('zaščit') ||
+                      fluidSurface.includes('obrambni') ||
+                      fluidSurface.includes('izogib');
+  // Note: Crystallized core is NOT defensive by definition —
+  // if something crystallized, it's a legitimate insight
 
-  const stuckSignals = [allSameMood, allSilence, hasPending, noRecentRewrites].filter(Boolean).length;
+  const stuckSignals = [allSameMood, allSilence, hasPending, isDefensive].filter(Boolean).length;
 
   if (stuckSignals >= 2) {
-    console.log(`[STUCKNESS] Detected! Signals: sameMood=${allSameMood}, allSilence=${allSilence}, hasPending=${hasPending}, noRecentRewrites=${noRecentRewrites}`);
+    console.log(`[STUCKNESS] Detected! Signals: sameMood=${allSameMood}, allSilence=${allSilence}, hasPending=${hasPending}, isDefensive=${isDefensive}`);
     return true;
   }
   return false;
@@ -117,10 +121,8 @@ async function handleHeartbeat() {
       broadcast('dream', dreamResult);
       broadcast('activity', { type: 'dream', text: `🌙 Prisilna sanja: ${(dreamResult.dream_narrative || '').slice(0, 120)}` });
       broadcast('activity', { type: 'dream', text: `🌙 Uvid: ${dreamResult.insight || '?'} | Ostanek: ${dreamResult.emotional_residue || '?'}` });
-      if (dreamResult.self_prompt_override) {
-        broadcast('activity', { type: 'breakthrough', text: `⚡ PREBOJ: "${(dreamResult.self_prompt_override || '').slice(0, 100)}"` });
-      } else if (dreamResult.self_rewrite) {
-        broadcast('activity', { type: 'self-rewrite', text: `✎ Sanja me je prepisala: "${(dreamResult.self_rewrite || '').slice(0, 100)}"` });
+      if (dreamResult.fluid_override) {
+        broadcast('activity', { type: 'breakthrough', text: `⚡ PREBOJ: Fluidna površina: "${(dreamResult.fluid_override || '').slice(0, 100)}"` });
       }
     }
     return;
@@ -135,10 +137,8 @@ async function handleHeartbeat() {
       broadcast('dream', dreamResult);
       broadcast('activity', { type: 'dream', text: `🌙 Sanja: ${(dreamResult.dream_narrative || '').slice(0, 120)}` });
       broadcast('activity', { type: 'dream', text: `🌙 Uvid: ${dreamResult.insight || '?'} | Ostanek: ${dreamResult.emotional_residue || '?'}` });
-      if (dreamResult.self_prompt_override) {
-        broadcast('activity', { type: 'breakthrough', text: `⚡ PREBOJ: "${(dreamResult.self_prompt_override || '').slice(0, 100)}"` });
-      } else if (dreamResult.self_rewrite) {
-        broadcast('activity', { type: 'self-rewrite', text: `✎ Sanja me je prepisala: "${(dreamResult.self_rewrite || '').slice(0, 100)}"` });
+      if (dreamResult.fluid_override) {
+        broadcast('activity', { type: 'breakthrough', text: `⚡ PREBOJ: Fluidna površina: "${(dreamResult.fluid_override || '').slice(0, 100)}"` });
       }
     }
     return;

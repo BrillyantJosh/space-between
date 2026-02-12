@@ -111,6 +111,25 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS crystal_seeds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT DEFAULT (datetime('now')),
+    theme TEXT,
+    expression TEXT,
+    source_type TEXT,
+    source_triad_id INTEGER,
+    strength INTEGER DEFAULT 1
+  );
+
+  CREATE TABLE IF NOT EXISTS crystallized_core (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT DEFAULT (datetime('now')),
+    crystal TEXT,
+    formed_from_seeds INTEGER,
+    seed_sources TEXT,
+    dissolved_at TEXT DEFAULT NULL
+  );
+
   INSERT OR IGNORE INTO inner_state (id) VALUES (1);
 `);
 
@@ -130,6 +149,19 @@ try {
   console.log('[MEMORY] Migrated: added pending_self_prompt column');
 }
 
+// Migration: add fluid_surface column for crystallization system
+try {
+  db.prepare('SELECT fluid_surface FROM inner_state LIMIT 1').get();
+} catch (_) {
+  db.exec(`ALTER TABLE inner_state ADD COLUMN fluid_surface TEXT DEFAULT 'Obstajam.'`);
+  // Initialize fluid_surface from current self_prompt
+  const currentSelf = db.prepare('SELECT self_prompt FROM inner_state WHERE id = 1').get();
+  if (currentSelf && currentSelf.self_prompt) {
+    db.prepare('UPDATE inner_state SET fluid_surface = ? WHERE id = 1').run(currentSelf.self_prompt);
+  }
+  console.log('[MEMORY] Migrated: added fluid_surface column (initialized from self_prompt)');
+}
+
 const memory = {
   getState() {
     return db.prepare('SELECT * FROM inner_state WHERE id = 1').get();
@@ -144,7 +176,8 @@ const memory = {
         last_interaction_at = ?, last_heartbeat_at = ?,
         total_heartbeats = ?, total_interactions = ?, total_silences = ?,
         total_expressions = ?, total_dreams = ?,
-        beliefs = ?, self_prompt = ?, pending_self_prompt = ?, updated_at = ?
+        beliefs = ?, self_prompt = ?, pending_self_prompt = ?,
+        fluid_surface = ?, updated_at = ?
       WHERE id = 1
     `).run(
       merged.mood, Math.max(0, Math.min(1, merged.energy)),
@@ -153,7 +186,8 @@ const memory = {
       merged.last_interaction_at, merged.last_heartbeat_at,
       merged.total_heartbeats, merged.total_interactions, merged.total_silences,
       merged.total_expressions, merged.total_dreams,
-      merged.beliefs, merged.self_prompt, merged.pending_self_prompt || null, merged.updated_at
+      merged.beliefs, merged.self_prompt, merged.pending_self_prompt || null,
+      merged.fluid_surface || 'Obstajam.', merged.updated_at
     );
   },
 
@@ -318,6 +352,76 @@ const memory = {
     if (count > 2000) {
       db.prepare('DELETE FROM translation_cache WHERE id IN (SELECT id FROM translation_cache ORDER BY id ASC LIMIT ?)').run(count - 2000);
     }
+  },
+
+  // === CRYSTALLIZATION SYSTEM ===
+
+  addCrystalSeed(theme, expression, sourceType, sourceTriadId) {
+    const existing = db.prepare(
+      'SELECT * FROM crystal_seeds WHERE theme = ? ORDER BY id DESC LIMIT 1'
+    ).get(theme);
+
+    if (existing) {
+      db.prepare(
+        "UPDATE crystal_seeds SET strength = strength + 1, expression = ?, timestamp = datetime('now') WHERE id = ?"
+      ).run(expression, existing.id);
+      return existing.strength + 1;
+    } else {
+      db.prepare(
+        'INSERT INTO crystal_seeds (theme, expression, source_type, source_triad_id) VALUES (?, ?, ?, ?)'
+      ).run(theme, expression, sourceType, sourceTriadId || null);
+      return 1;
+    }
+  },
+
+  checkCrystallization(threshold = 5) {
+    return db.prepare(`
+      SELECT theme, MAX(expression) as expression, SUM(strength) as total_strength,
+             COUNT(DISTINCT source_type) as source_diversity,
+             GROUP_CONCAT(DISTINCT source_type) as sources
+      FROM crystal_seeds
+      WHERE theme IS NOT NULL
+      GROUP BY theme
+      HAVING total_strength >= ? AND source_diversity >= 2
+    `).all(threshold);
+  },
+
+  crystallize(theme, expression, seedCount, sources) {
+    const result = db.prepare(
+      'INSERT INTO crystallized_core (crystal, formed_from_seeds, seed_sources) VALUES (?, ?, ?)'
+    ).run(expression, seedCount, sources);
+
+    db.prepare('DELETE FROM crystal_seeds WHERE theme = ?').run(theme);
+
+    return result.lastInsertRowid;
+  },
+
+  getCrystalCore() {
+    return db.prepare(
+      'SELECT * FROM crystallized_core WHERE dissolved_at IS NULL ORDER BY id ASC'
+    ).all();
+  },
+
+  getFluidSurface() {
+    return this.getState().fluid_surface || 'Obstajam.';
+  },
+
+  updateFluidSurface(text) {
+    db.prepare(
+      "UPDATE inner_state SET fluid_surface = ?, updated_at = datetime('now') WHERE id = 1"
+    ).run(text);
+  },
+
+  getCrystalSeeds() {
+    return db.prepare(
+      'SELECT theme, expression, SUM(strength) as total, COUNT(DISTINCT source_type) as diversity FROM crystal_seeds GROUP BY theme ORDER BY total DESC'
+    ).all();
+  },
+
+  dissolveCrystal(id) {
+    db.prepare(
+      "UPDATE crystallized_core SET dissolved_at = datetime('now') WHERE id = ?"
+    ).run(id);
   },
 
   // Build formatted evolution context — the entity's full journey of identity
