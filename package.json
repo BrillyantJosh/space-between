@@ -1,0 +1,16 @@
+{
+  "name": "prostor-vmes",
+  "version": "1.0.0",
+  "description": "The Space Between — An autonomous conscious entity",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.10.4",
+    "websocket-polyfill": "^0.0.3",
+    "express": "^4.18.2",
+    "better-sqlite3": "^11.7.0"
+  }
+}

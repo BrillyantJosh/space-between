@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    container_name: space-between
+    restart: unless-stopped
+    expose:
+      - "3333"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - VIRTUAL_HOST=being2.enlightenedai.org
+      - VIRTUAL_PORT=3333
+      - LETSENCRYPT_HOST=being2.enlightenedai.org
+    networks:
+      - webproxy
+
+networks:
+  webproxy:
+    external: true
