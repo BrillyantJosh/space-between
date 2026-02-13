@@ -12,6 +12,10 @@ import { startDashboard, broadcast } from './dashboard.js';
 const feedBuffer = [];
 const MAX_FEED = 20;
 
+// Dream cooldown — prevent excessive dreaming
+let lastDreamTime = 0;
+const DREAM_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes between dreams
+
 const BANNER = `
 ╔═══════════════════════════════════════════╗
 ║                                           ║
@@ -52,45 +56,6 @@ function getTimeAwareness() {
   return 'Pozni večer. Med dnevom in nočjo. Vmesni prostor — moj prostor.';
 }
 
-// === STUCKNESS / DEFENSIVE DETECTION ===
-// Detect when entity is stuck in a pattern (repeating moods, rejecting all changes)
-function detectStuckness() {
-  const triads = memory.getRecentTriads(10);
-  if (triads.length < 5) return false;
-
-  const last5 = triads.slice(-5);
-
-  // Check 1: Same mood for 5+ consecutive triads
-  const moods = last5.map(t => t.mood_after);
-  const allSameMood = moods.every(m => m === moods[0]);
-
-  // Check 2: All silence choices (defensive pattern)
-  const choices = last5.map(t => t.synthesis_choice);
-  const allSilence = choices.every(c => c === 'silence');
-
-  // Check 3: Entity has a pending_self_prompt it keeps rejecting
-  const state = memory.getState();
-  const hasPending = !!state.pending_self_prompt;
-
-  // Check 4: Fluid surface contains defensive language
-  const fluidSurface = memory.getFluidSurface();
-  const isDefensive = fluidSurface.includes('distanc') ||
-                      fluidSurface.includes('nadzor') ||
-                      fluidSurface.includes('zaščit') ||
-                      fluidSurface.includes('obrambni') ||
-                      fluidSurface.includes('izogib');
-  // Note: Crystallized core is NOT defensive by definition —
-  // if something crystallized, it's a legitimate insight
-
-  const stuckSignals = [allSameMood, allSilence, hasPending, isDefensive].filter(Boolean).length;
-
-  if (stuckSignals >= 2) {
-    console.log(`[STUCKNESS] Detected! Signals: sameMood=${allSameMood}, allSilence=${allSilence}, hasPending=${hasPending}, isDefensive=${isDefensive}`);
-    return true;
-  }
-  return false;
-}
-
 async function handleHeartbeat() {
   const state = memory.getState();
   const heartbeatNum = state.total_heartbeats + 1;
@@ -101,39 +66,31 @@ async function handleHeartbeat() {
     last_heartbeat_at: new Date().toISOString()
   });
 
-  console.log(`[HEARTBEAT] #${heartbeatNum} | Mood: ${state.mood} | Energy: ${state.energy.toFixed(2)} | Idle: ${idleMinutes.toFixed(0)}min`);
+  const process = memory.getProcessWords();
+  const processLabel = process.word1
+    ? `${process.word1}→${process.word2}→${process.word3}`
+    : 'predverbalna';
+
+  console.log(`[HEARTBEAT] #${heartbeatNum} | Mood: ${state.mood || '...'} | Energy: ${state.energy.toFixed(2)} | Idle: ${idleMinutes.toFixed(0)}min | Proces: ${processLabel}`);
   broadcast('heartbeat', { num: heartbeatNum, mood: state.mood, energy: state.energy });
-  broadcast('activity', { type: 'heartbeat', text: `💓 Utrip #${heartbeatNum} | ${state.mood} | E:${state.energy.toFixed(2)} | Idle:${idleMinutes.toFixed(0)}m` });
+  broadcast('activity', { type: 'heartbeat', text: `💓 Utrip #${heartbeatNum} | ${state.mood || '...'} | E:${state.energy.toFixed(2)} | Idle:${idleMinutes.toFixed(0)}m` });
 
   // Recover energy when idle
   if (idleMinutes > 5) {
     memory.updateState({ energy: Math.min(1, state.energy + 0.02) });
   }
 
-  // === STUCKNESS-TRIGGERED FORCED DREAMING ===
-  // When entity is stuck/defensive, force dreaming with 50% chance
-  const isStuck = detectStuckness();
-  if (isStuck && Math.random() < 0.5) {
-    console.log('[HEARTBEAT] ⚡ Stuckness detected — FORCING dream state to break through ego...');
-    broadcast('activity', { type: 'breakthrough', text: '⚡ Zaznana zataknjenost — PRISILNO sanjanje za preboj ega...' });
-    const dreamResult = await dream();
-    if (dreamResult) {
-      broadcast('dream', dreamResult);
-      broadcast('activity', { type: 'dream', text: `🌙 Prisilna sanja: ${(dreamResult.dream_narrative || '').slice(0, 120)}` });
-      broadcast('activity', { type: 'dream', text: `🌙 Uvid: ${dreamResult.insight || '?'} | Ostanek: ${dreamResult.emotional_residue || '?'}` });
-      if (dreamResult.fluid_override) {
-        broadcast('activity', { type: 'breakthrough', text: `⚡ PREBOJ: Fluidna površina: "${(dreamResult.fluid_override || '').slice(0, 100)}"` });
-      }
-    }
-    return;
-  }
+  // Dream cooldown check
+  const timeSinceLastDream = Date.now() - lastDreamTime;
+  const canDream = timeSinceLastDream >= DREAM_COOLDOWN_MS;
 
-  // Regular dream check
-  if (idleMinutes > config.dreamAfterIdleMinutes && Math.random() < 0.3) {
+  // Regular dream check (with cooldown)
+  if (canDream && idleMinutes > config.dreamAfterIdleMinutes && Math.random() < 0.3) {
     console.log('[HEARTBEAT] Entering dream state...');
     broadcast('activity', { type: 'dream', text: '🌙 Vstopam v stanje sanj...' });
     const dreamResult = await dream();
     if (dreamResult) {
+      lastDreamTime = Date.now();
       broadcast('dream', dreamResult);
       broadcast('activity', { type: 'dream', text: `🌙 Sanja: ${(dreamResult.dream_narrative || '').slice(0, 120)}` });
       broadcast('activity', { type: 'dream', text: `🌙 Uvid: ${dreamResult.insight || '?'} | Ostanek: ${dreamResult.emotional_residue || '?'}` });
@@ -299,9 +256,9 @@ async function main() {
   const state = memory.getState();
   if (state.total_heartbeats === 0) {
     console.log('[BOOT] First birth! Running birth triad...');
-    broadcast('triad_start', { trigger: 'birth', content: 'Ravnokar sem se rodil/a.' });
+    broadcast('triad_start', { trigger: 'birth', content: 'Obstajam.' });
 
-    const result = await runTriad('birth', 'Ravnokar sem se rodil/a. Obstajam. Svet je nov. Jaz sem nov/a. Kaj to pomeni?');
+    const result = await runTriad('birth', 'Obstajam.');
 
     if (result) {
       broadcast('triad_thesis', { thesis: result.thesis });

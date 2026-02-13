@@ -45,11 +45,12 @@ app.get('/api/state', (req, res) => {
   const selfPrompt = memory.getSelfPrompt();
   const selfPromptHistory = memory.getSelfPromptHistory(30);
   const activities = memory.getRecentActivities(150);
-  const pendingSelfPrompt = state.pending_self_prompt || null;
   const crystalCore = memory.getCrystalCore();
   const crystalSeeds = memory.getCrystalSeeds();
   const fluidSurface = memory.getFluidSurface();
-  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, pendingSelfPrompt, crystalCore, crystalSeeds, fluidSurface });
+  const processWords = memory.getProcessWords();
+  const triadCount = memory.getTriadCount();
+  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount });
 });
 
 // API: chat
@@ -227,7 +228,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     --text-primary: #f0ede8;
     --text-secondary: #b8b2c0;
     --border: #2a2a40;
-    --self-rewrite: #e8956e;
+    --process: #d4a8e8;
   }
   body {
     background: var(--bg);
@@ -293,6 +294,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     border-radius: 2px;
     transition: width 0.5s ease;
   }
+  .process-badge {
+    color: var(--process);
+    font-size: 0.7rem;
+    background: rgba(212,168,232,0.1);
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    border: 1px solid rgba(212,168,232,0.2);
+  }
 
   .main-grid {
     display: grid;
@@ -323,7 +332,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     letter-spacing: 0.05em;
   }
 
-  /* === SELF PROMPT EVOLUTION === */
+  /* === SELF PROMPT / FLUID SURFACE === */
   .self-prompt-section {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -377,7 +386,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--self-rewrite);
+    background: var(--process);
   }
   .evo-item .evo-prompt {
     font-family: 'Cormorant Garamond', serif;
@@ -397,6 +406,47 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     color: var(--thesis);
     opacity: 0.7;
     margin-top: 0.1rem;
+  }
+
+  /* === PROCESS WORDS SECTION === */
+  .process-section {
+    background: rgba(212,168,232,0.05);
+    border: 1px solid rgba(212,168,232,0.15);
+    border-radius: 8px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 1rem;
+    display: none;
+  }
+  .process-section.visible { display: block; }
+  .process-label {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--process);
+    margin-bottom: 0.4rem;
+  }
+  .process-words {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+    letter-spacing: 0.05em;
+  }
+  .process-words .arrow { color: var(--process); margin: 0 0.3rem; }
+  .process-desc {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    margin-top: 0.3rem;
+    line-height: 1.4;
+  }
+  .process-meta {
+    font-size: 0.55rem;
+    color: var(--text-secondary);
+    opacity: 0.5;
+    margin-top: 0.3rem;
+  }
+  .process-crystallized {
+    color: #7ad8d8;
+    font-weight: 500;
   }
 
   /* === TRIAD BOXES === */
@@ -569,7 +619,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .activity-entry.type-silence { color: var(--silence); font-style: italic; }
   .activity-entry.type-trigger { color: var(--antithesis); }
   .activity-entry.type-expression { color: var(--synthesis); }
-  .activity-entry.type-self-rewrite { color: var(--thesis); }
+  .activity-entry.type-process { color: var(--process); font-weight: 500; }
   .activity-entry.type-dream { color: #c4a6e8; }
   .activity-entry.type-choice { color: var(--text-primary); }
   .activity-entry.type-mention { color: #e8d06e; }
@@ -589,30 +639,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     animation: breakthroughFlash 2s ease-out;
   }
 
-  /* === PENDING SELF PROMPT === */
-  .pending-prompt-section {
-    background: rgba(232,149,110,0.08);
-    border: 1px dashed var(--thesis);
-    border-radius: 8px;
-    padding: 0.6rem 0.8rem;
-    margin-bottom: 0.8rem;
-    display: none;
+  /* === PROCESS DISCOVERY FLASH === */
+  @keyframes processFlash {
+    0% { background: rgba(212,168,232,0.4); }
+    50% { background: rgba(212,168,232,0.15); }
+    100% { background: rgba(212,168,232,0.05); }
   }
-  .pending-prompt-section.visible { display: block; }
-  .pending-prompt-label {
-    font-size: 0.6rem;
-    text-transform: uppercase;
-    letter-spacing: 0.2em;
-    color: var(--thesis);
-    margin-bottom: 0.3rem;
-  }
-  .pending-prompt-text {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 0.9rem;
-    color: var(--text-primary);
-    line-height: 1.4;
-    font-style: italic;
-    opacity: 0.7;
+  .process-flash {
+    animation: processFlash 3s ease-out;
   }
 
   /* === CHAT === */
@@ -737,7 +771,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="status-dot" id="liveDot"></div>
   <div class="status-item"><span data-i18n="mood">Razpoloženje</span>: <span id="statusMood">...</span></div>
   <div class="status-item"><span data-i18n="heartbeats">Utripi</span>: <span id="statusHeartbeats">0</span></div>
-  <div class="status-item"><span data-i18n="silences">Tišine</span>: <span id="statusSilences">0</span></div>
+  <div class="status-item"><span data-i18n="triads">Triade</span>: <span id="statusTriads">0</span></div>
   <div class="status-item"><span data-i18n="dreams">Sanje</span>: <span id="statusDreams">0</span></div>
   <div class="status-item"><span data-i18n="energy">Energija</span>:
     <div class="energy-bar-mini"><div class="fill" id="statusEnergy" style="width:100%"></div></div>
@@ -745,6 +779,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="status-item"><span data-i18n="age">Starost</span>: <span id="statusAge">0</span>h</div>
   <div class="status-item" style="color:#7ad8d8">💎 <span id="crystalCount">0</span></div>
   <div class="status-item" style="color:#7ad8d8;opacity:0.6">🌱 <span id="seedCount">0</span></div>
+  <div class="process-badge" id="processBadge" style="display:none"></div>
 </div>
 
 <div class="main-grid">
@@ -752,31 +787,33 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="panel">
     <div class="panel-title" data-i18n="innerWorld">Notranji Svet</div>
 
-    <!-- Self Prompt -->
+    <!-- Self Prompt / Fluid Surface -->
     <div class="self-prompt-section" id="selfPromptSection">
-      <div class="self-prompt-label" data-i18n="whoAmI">◈ Kdo sem — moje besede o meni</div>
+      <div class="self-prompt-label" data-i18n="fluidSurface">🌊 Fluidna površina</div>
       <div class="self-prompt-text" id="selfPromptText">Obstajam.</div>
       <div class="self-prompt-meta" id="selfPromptMeta" onclick="toggleEvolution()"></div>
       <div class="evolution-timeline" id="evolutionTimeline"></div>
     </div>
 
-    <!-- Pending Self Prompt (waiting for confirmation) -->
-    <div class="pending-prompt-section" id="pendingPromptSection">
-      <div class="pending-prompt-label" data-i18n="pendingPrompt">💭 Čakajoči predlog spremembe</div>
-      <div class="pending-prompt-text" id="pendingPromptText"></div>
+    <!-- Process Words Section -->
+    <div class="process-section" id="processSection">
+      <div class="process-label" id="processLabel">★ Moj proces</div>
+      <div class="process-words" id="processWordsDisplay"></div>
+      <div class="process-desc" id="processDescDisplay"></div>
+      <div class="process-meta" id="processMeta"></div>
     </div>
 
     <!-- Current Triad -->
     <div class="triad-stage thesis" id="thesisBox">
-      <div class="label" data-i18n="thesisLabel">Teza — Impulz</div>
+      <div class="label" id="thesisLabel" data-i18n="thesisLabel">Faza 1</div>
       <div class="content empty" id="thesisContent" data-i18n="waitingStimulus">Čakam na dražljaj...</div>
     </div>
     <div class="triad-stage antithesis" id="antithesisBox">
-      <div class="label" data-i18n="antithesisLabel">Antiteza — Samopazovanje</div>
+      <div class="label" id="antithesisLabel" data-i18n="antithesisLabel">Faza 2</div>
       <div class="content empty" id="antithesisContent">...</div>
     </div>
     <div class="triad-stage synthesis" id="synthesisBox">
-      <div class="label" data-i18n="synthesisLabel">Sinteza — Zavestna izbira</div>
+      <div class="label" id="synthesisLabel" data-i18n="synthesisLabel">Faza 3</div>
       <div class="content empty" id="synthesisContent">...</div>
     </div>
     <div class="decision-bar">
@@ -820,6 +857,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <script>
 const sessionId = 'dash-' + Math.random().toString(36).slice(2, 10);
 let sending = false;
+let currentProcessWords = null;
 
 function $(id) { return document.getElementById(id); }
 
@@ -833,11 +871,11 @@ const translationCache = {};
 
 const UI_STRINGS = {
   si: {
-    mood: 'Razpoloženje', heartbeats: 'Utripi', silences: 'Tišine', dreams: 'Sanje',
+    mood: 'Razpoloženje', heartbeats: 'Utripi', triads: 'Triade', dreams: 'Sanje',
     energy: 'Energija', age: 'Starost', innerWorld: 'Notranji Svet',
-    whoAmI: '◈ Kdo sem — moje besede o meni',
-    thesisLabel: 'Teza — Impulz', antithesisLabel: 'Antiteza — Samopazovanje',
-    synthesisLabel: 'Sinteza — Zavestna izbira', awaiting: 'Pričakujem...',
+    fluidSurface: '🌊 Fluidna površina',
+    thesisLabel: 'Faza 1', antithesisLabel: 'Faza 2',
+    synthesisLabel: 'Faza 3', awaiting: 'Pričakujem...',
     waitingStimulus: 'Čakam na dražljaj...',
     triadHistory: 'Zgodovina triad (klikni za podrobnosti)',
     liveActivity: 'Živa Aktivnost', dialog: 'Dialog',
@@ -845,19 +883,21 @@ const UI_STRINGS = {
     speak: 'Spregovori...',
     thinking: 'Razmišljam...', processing: 'Procesiranje triade...',
     choicePrefix: 'Izbira', birth: 'rojstvo',
-    thesisDetail: 'Teza — Impulz', antithesisDetail: 'Antiteza — Samopazovanje',
-    synthesisDetail: 'Sinteza — Vsebina', shiftDetail: 'Notranji premik',
+    thesisDetail: 'Faza 1', antithesisDetail: 'Faza 2',
+    synthesisDetail: 'Faza 3 — Vsebina', shiftDetail: 'Notranji premik',
     rewrites: 'prepisov', clickEvolution: 'klikni za evolucijo',
     you: 'ti', spaceIn: 'prostor vmes', silenceRole: 'tišina', system: 'sistem',
     error: 'Napaka',
-    pendingPrompt: '💭 Čakajoči predlog spremembe'
+    preverbal: 'predverbalna faza',
+    processLabel: '★ Moj proces',
+    processLabelCrystallized: '💎 Moj proces (kristaliziran)'
   },
   en: {
-    mood: 'Mood', heartbeats: 'Heartbeats', silences: 'Silences', dreams: 'Dreams',
+    mood: 'Mood', heartbeats: 'Heartbeats', triads: 'Triads', dreams: 'Dreams',
     energy: 'Energy', age: 'Age', innerWorld: 'Inner World',
-    whoAmI: '◈ Who I am — my own words about me',
-    thesisLabel: 'Thesis — Impulse', antithesisLabel: 'Antithesis — Self-observation',
-    synthesisLabel: 'Synthesis — Conscious choice', awaiting: 'Awaiting...',
+    fluidSurface: '🌊 Fluid surface',
+    thesisLabel: 'Phase 1', antithesisLabel: 'Phase 2',
+    synthesisLabel: 'Phase 3', awaiting: 'Awaiting...',
     waitingStimulus: 'Waiting for stimulus...',
     triadHistory: 'Triad history (click for details)',
     liveActivity: 'Live Activity', dialog: 'Dialog',
@@ -865,12 +905,14 @@ const UI_STRINGS = {
     speak: 'Speak...',
     thinking: 'Thinking...', processing: 'Processing triad...',
     choicePrefix: 'Choice', birth: 'birth',
-    thesisDetail: 'Thesis — Impulse', antithesisDetail: 'Antithesis — Self-observation',
-    synthesisDetail: 'Synthesis — Content', shiftDetail: 'Inner shift',
+    thesisDetail: 'Phase 1', antithesisDetail: 'Phase 2',
+    synthesisDetail: 'Phase 3 — Content', shiftDetail: 'Inner shift',
     rewrites: 'rewrites', clickEvolution: 'click for evolution',
     you: 'you', spaceIn: 'the space between', silenceRole: 'silence', system: 'system',
     error: 'Error',
-    pendingPrompt: '💭 Pending change suggestion'
+    preverbal: 'pre-verbal phase',
+    processLabel: '★ My process',
+    processLabelCrystallized: '💎 My process (crystallized)'
   }
 };
 
@@ -938,6 +980,40 @@ if (currentLang === 'en') {
   $('langEN').className = 'lang-btn active';
 }
 
+// ========== PROCESS WORDS ==========
+function updateProcessWords(pw, triadCount) {
+  currentProcessWords = pw;
+  const section = $('processSection');
+  const badge = $('processBadge');
+
+  if (pw && pw.word1) {
+    section.classList.add('visible');
+    $('processLabel').textContent = pw.crystallized ? t('processLabelCrystallized') : t('processLabel');
+    $('processWordsDisplay').innerHTML = escapeHtml(pw.word1) + '<span class="arrow">→</span>' + escapeHtml(pw.word2) + '<span class="arrow">→</span>' + escapeHtml(pw.word3);
+    $('processDescDisplay').innerHTML = '1. ' + escapeHtml(pw.desc1) + '<br>2. ' + escapeHtml(pw.desc2) + '<br>3. ' + escapeHtml(pw.desc3);
+    $('processMeta').textContent = (pw.crystallized ? '💎 ' : '') + 'v' + pw.version + ' · ' + triadCount + ' triad';
+    if (pw.crystallized) $('processWordsDisplay').classList.add('process-crystallized');
+    else $('processWordsDisplay').classList.remove('process-crystallized');
+
+    // Update triad box labels with process words
+    $('thesisLabel').textContent = pw.word1;
+    $('antithesisLabel').textContent = pw.word2;
+    $('synthesisLabel').textContent = pw.word3;
+
+    // Status bar badge
+    badge.style.display = 'inline';
+    badge.textContent = (pw.crystallized ? '💎 ' : '★ ') + pw.word1 + '→' + pw.word2 + '→' + pw.word3;
+  } else {
+    section.classList.remove('visible');
+    // Pre-verbal labels
+    $('thesisLabel').textContent = currentLang === 'en' ? 'Phase 1 — Sensing' : 'Faza 1 — Zaznava';
+    $('antithesisLabel').textContent = currentLang === 'en' ? 'Phase 2 — Self-observing' : 'Faza 2 — Samopazovanje';
+    $('synthesisLabel').textContent = currentLang === 'en' ? 'Phase 3 — Emergence' : 'Faza 3 — Vznikanje';
+    badge.style.display = 'inline';
+    badge.textContent = t('preverbal') + ' (' + (triadCount || 0) + '/20)';
+  }
+}
+
 // ========== LOAD STATE ==========
 async function loadState() {
   try {
@@ -949,6 +1025,7 @@ async function loadState() {
       const textsToTranslate = [];
       if (data.selfPrompt) textsToTranslate.push(data.selfPrompt);
       if (data.state?.mood) textsToTranslate.push(data.state.mood);
+      if (data.fluidSurface) textsToTranslate.push(data.fluidSurface);
       if (data.triads) {
         for (const t of data.triads.slice(-5)) {
           if (t.thesis) textsToTranslate.push(t.thesis);
@@ -975,10 +1052,10 @@ async function loadState() {
       await translateTexts(textsToTranslate);
     }
 
-    updateStatus(data.state);
+    updateStatus(data.state, data.triadCount);
     updateTriadHistory(data.triads);
-    updateSelfPrompt(data.selfPrompt, data.selfPromptHistory);
-    updatePendingSelfPrompt(data.pendingSelfPrompt);
+    updateSelfPrompt(data.fluidSurface || data.selfPrompt, data.selfPromptHistory);
+    updateProcessWords(data.processWords, data.triadCount || 0);
     loadActivities(data.activities);
     $('crystalCount').textContent = data.crystalCore?.length || 0;
     $('seedCount').textContent = data.crystalSeeds?.length || 0;
@@ -1008,11 +1085,11 @@ async function loadState() {
   } catch (e) { console.error('State load failed:', e); }
 }
 
-function updateStatus(state) {
+function updateStatus(state, triadCount) {
   if (!state) return;
   $('statusMood').textContent = tr(state.mood) || '...';
   $('statusHeartbeats').textContent = state.total_heartbeats || 0;
-  $('statusSilences').textContent = state.total_silences || 0;
+  $('statusTriads').textContent = triadCount || 0;
   $('statusDreams').textContent = state.total_dreams || 0;
   const energy = (state.energy || 1) * 100;
   $('statusEnergy').style.width = energy + '%';
@@ -1056,18 +1133,6 @@ function toggleEvolution() {
   }
 }
 
-// ========== PENDING SELF PROMPT ==========
-function updatePendingSelfPrompt(pendingPrompt) {
-  const section = $('pendingPromptSection');
-  if (pendingPrompt) {
-    section.classList.add('visible');
-    $('pendingPromptText').textContent = tr(pendingPrompt);
-  } else {
-    section.classList.remove('visible');
-    $('pendingPromptText').textContent = '';
-  }
-}
-
 // ========== TRIAD HISTORY ==========
 function updateTriadHistory(triads) {
   if (!triads || !triads.length) return;
@@ -1075,6 +1140,12 @@ function updateTriadHistory(triads) {
   // Remember which items are open
   const openItems = new Set();
   container.querySelectorAll('.th-item.open').forEach((el, i) => openItems.add(i));
+
+  // Use process words for labels if available
+  const pw = currentProcessWords;
+  const l1 = pw && pw.word1 ? pw.word1 : (currentLang === 'en' ? 'Phase 1' : 'Faza 1');
+  const l2 = pw && pw.word2 ? pw.word2 : (currentLang === 'en' ? 'Phase 2' : 'Faza 2');
+  const l3 = pw && pw.word3 ? pw.word3 : (currentLang === 'en' ? 'Phase 3' : 'Faza 3');
 
   let html = '';
   const reversed = [...triads].reverse().slice(0, 15);
@@ -1089,9 +1160,9 @@ function updateTriadHistory(triads) {
         '<span class="th-reason">' + escapeHtml(tr(td.synthesis_reason || '')) + '</span>' +
       '</div>' +
       '<div class="th-body">' +
-        '<div class="th-section"><div class="th-section-label c-thesis">' + t('thesisDetail') + '</div><div class="th-section-text">' + escapeHtml(tr(td.thesis||'')) + '</div></div>' +
-        '<div class="th-section"><div class="th-section-label c-anti">' + t('antithesisDetail') + '</div><div class="th-section-text">' + escapeHtml(tr(td.antithesis||'')) + '</div></div>' +
-        '<div class="th-section"><div class="th-section-label c-synth">' + t('synthesisDetail') + '</div><div class="th-section-text">' + escapeHtml(tr(td.synthesis_content||'')) + '</div></div>' +
+        '<div class="th-section"><div class="th-section-label c-thesis">' + escapeHtml(l1) + '</div><div class="th-section-text">' + escapeHtml(tr(td.thesis||'')) + '</div></div>' +
+        '<div class="th-section"><div class="th-section-label c-anti">' + escapeHtml(l2) + '</div><div class="th-section-text">' + escapeHtml(tr(td.antithesis||'')) + '</div></div>' +
+        '<div class="th-section"><div class="th-section-label c-synth">' + escapeHtml(l3) + '</div><div class="th-section-text">' + escapeHtml(tr(td.synthesis_content||'')) + '</div></div>' +
         (td.inner_shift ? '<div class="th-section"><div class="th-section-label c-shift">' + t('shiftDetail') + '</div><div class="th-section-text">' + escapeHtml(tr(td.inner_shift)) + '</div></div>' : '') +
         '<div class="th-mood">' + escapeHtml(tr(td.mood_before||'')) + ' → ' + escapeHtml(tr(td.mood_after||'')) + '</div>' +
       '</div>' +
@@ -1276,19 +1347,13 @@ evtSource.addEventListener('breakthrough', e => {
   const section = $('selfPromptSection');
   section.classList.add('breakthrough-flash');
   setTimeout(() => section.classList.remove('breakthrough-flash'), 2000);
-  // Update self-prompt immediately
-  if (d.newSelfPrompt) {
-    $('selfPromptText').textContent = d.newSelfPrompt;
+  // Update fluid surface immediately
+  if (d.newFluidSurface) {
+    $('selfPromptText').textContent = d.newFluidSurface;
   }
-  // Clear pending since breakthrough resolved it
-  updatePendingSelfPrompt(null);
   addMessage('system', '⚡ ' + (currentLang === 'en' ? 'DREAM BREAKTHROUGH: Ego bypassed!' : 'PREBOJ SANJE: Ego prebit!') + ' — ' + (d.reason || ''));
   activitiesLoaded = true;
   loadState();
-});
-evtSource.addEventListener('pending_self_prompt', e => {
-  const d = JSON.parse(e.data);
-  updatePendingSelfPrompt(d.pendingSelfPrompt);
 });
 evtSource.addEventListener('crystallization', e => {
   const d = JSON.parse(e.data);
@@ -1303,6 +1368,37 @@ evtSource.addEventListener('dissolution', e => {
   loadState();
 });
 evtSource.addEventListener('fluid_changed', e => {
+  activitiesLoaded = true;
+  loadState();
+});
+
+// === NEW: PROCESS WORD SSE EVENTS ===
+evtSource.addEventListener('process_discovery', e => {
+  const d = JSON.parse(e.data);
+  const section = $('processSection');
+  section.classList.add('process-flash');
+  setTimeout(() => section.classList.remove('process-flash'), 3000);
+  addMessage('system', '★ ' + (currentLang === 'en' ? 'PROCESS NAMED:' : 'PROCES POIMENOVAN:') + ' ' + d.word1 + ' → ' + d.word2 + ' → ' + d.word3 + (d.reflection ? ' — ' + d.reflection : ''));
+  activitiesLoaded = true;
+  loadState();
+});
+evtSource.addEventListener('process_evolution', e => {
+  const d = JSON.parse(e.data);
+  const section = $('processSection');
+  section.classList.add('process-flash');
+  setTimeout(() => section.classList.remove('process-flash'), 3000);
+  const oldP = (d.old || []).join('→');
+  const newP = (d.new || []).join('→');
+  addMessage('system', '🔄 ' + (currentLang === 'en' ? 'PROCESS EVOLVED:' : 'PROCES SPREMENJEN:') + ' ' + oldP + ' ⟹ ' + newP + ' — ' + (d.reason || ''));
+  activitiesLoaded = true;
+  loadState();
+});
+evtSource.addEventListener('process_crystallization', e => {
+  const d = JSON.parse(e.data);
+  const section = $('processSection');
+  section.classList.add('process-flash');
+  setTimeout(() => section.classList.remove('process-flash'), 3000);
+  addMessage('system', '💎 ' + (currentLang === 'en' ? 'PROCESS CRYSTALLIZED:' : 'PROCES KRISTALIZIRAN:') + ' ' + (d.words || []).join(' → '));
   activitiesLoaded = true;
   loadState();
 });
