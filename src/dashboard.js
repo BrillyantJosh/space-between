@@ -1,7 +1,7 @@
 import express from 'express';
 import config from './config.js';
 import memory from './memory.js';
-import { getIdentity, getRelayStatus } from './nostr.js';
+import { getIdentity, getRelayStatus, fetchProfiles } from './nostr.js';
 
 const app = express();
 app.use(express.json());
@@ -51,6 +51,53 @@ app.get('/api/state', (req, res) => {
   const triadCount = memory.getTriadCount();
   const entityName = memory.getEntityName();
   res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName });
+});
+
+// API: conversations list (all users who chatted with entity)
+app.get('/api/conversations', async (req, res) => {
+  try {
+    const identities = memory.getAllIdentities();
+    const pubkeys = identities.map(i => i.pubkey);
+
+    // Fetch NOSTR KIND 0 profiles for all pubkeys
+    let profiles = {};
+    try {
+      profiles = await fetchProfiles(pubkeys);
+    } catch (_) {}
+
+    const users = identities.map(i => {
+      const profile = profiles[i.pubkey] || {};
+      const lastMsg = memory.getConversation(i.pubkey, 1);
+      return {
+        pubkey: i.pubkey,
+        name: profile.name || profile.display_name || i.name || 'neznanec',
+        picture: profile.picture || '',
+        nip05: profile.nip05 || '',
+        notes: i.notes,
+        interactionCount: i.interaction_count,
+        firstSeen: i.first_seen,
+        lastSeen: i.last_seen,
+        lastMessage: lastMsg.length > 0 ? lastMsg[lastMsg.length - 1] : null
+      };
+    });
+
+    res.json({ users });
+  } catch (err) {
+    console.error('[DASHBOARD] Conversations error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: single conversation with a user
+app.get('/api/conversations/:pubkey', (req, res) => {
+  try {
+    const { pubkey } = req.params;
+    const messages = memory.getConversation(pubkey, 100);
+    const identity = memory.getIdentity(pubkey);
+    res.json({ pubkey, identity, messages });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // API: translate batch of texts
@@ -612,6 +659,163 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   }
   .translating-indicator.visible { display: inline; }
 
+  /* === TAB BAR === */
+  .tab-bar {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    padding: 0.5rem 1.2rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+  .tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.03); }
+  .tab-btn.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--silence);
+  }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* === CONVERSATIONS VIEW === */
+  .conv-container {
+    display: flex;
+    min-height: calc(100vh - 150px);
+  }
+  .conv-sidebar {
+    width: 280px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    background: var(--bg);
+  }
+  .conv-main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.2rem;
+    background: var(--bg);
+  }
+  .conv-user {
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid rgba(42,42,64,0.3);
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .conv-user:hover { background: var(--surface); }
+  .conv-user.active { background: var(--surface2); border-left: 3px solid var(--silence); }
+  .conv-user-avatar {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--surface2);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+  }
+  .conv-user-avatar img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+  .conv-user-info { flex: 1; min-width: 0; }
+  .conv-user-name {
+    font-size: 0.78rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-user-preview {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 0.1rem;
+  }
+  .conv-user-meta {
+    font-size: 0.55rem;
+    color: rgba(184,178,192,0.4);
+    flex-shrink: 0;
+  }
+  .conv-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-style: italic;
+    opacity: 0.5;
+  }
+  .conv-header {
+    padding-bottom: 0.8rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1rem;
+  }
+  .conv-header-name {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.3rem;
+    color: var(--text-primary);
+  }
+  .conv-header-meta {
+    font-size: 0.6rem;
+    color: var(--text-secondary);
+    margin-top: 0.2rem;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .conv-msg {
+    margin-bottom: 0.5rem;
+    padding: 0.5rem 0.8rem;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    max-width: 85%;
+  }
+  .conv-msg.user {
+    background: var(--surface2);
+    border-left: 3px solid var(--text-secondary);
+  }
+  .conv-msg.entity {
+    background: var(--surface);
+    border-left: 3px solid var(--synthesis);
+  }
+  .conv-msg.silence {
+    background: var(--surface);
+    border-left: 3px solid var(--silence);
+    color: var(--silence);
+    font-style: italic;
+  }
+  .conv-msg .conv-role {
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-secondary);
+    margin-bottom: 0.15rem;
+  }
+  .conv-msg .conv-time {
+    font-size: 0.5rem;
+    color: rgba(184,178,192,0.3);
+    margin-top: 0.2rem;
+  }
+  @media (max-width: 700px) {
+    .conv-sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); max-height: 40vh; }
+    .conv-container { flex-direction: column; }
+  }
+
   .loading { opacity: 0.5; }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(5px); }
@@ -646,6 +850,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="process-badge" id="processBadge" style="display:none"></div>
 </div>
 
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('observe')" id="tabObserve">◈ Opazovanje</button>
+  <button class="tab-btn" onclick="switchTab('conversations')" id="tabConversations">💬 Pogovori</button>
+</div>
+
+<div class="tab-content active" id="viewObserve">
 <div class="main-grid">
   <!-- LEFT PANEL: Inner State -->
   <div class="panel">
@@ -700,6 +910,18 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     </div>
   </div>
 
+</div>
+</div><!-- end viewObserve -->
+
+<div class="tab-content" id="viewConversations">
+  <div class="conv-container">
+    <div class="conv-sidebar" id="convSidebar">
+      <div class="conv-empty" id="convLoading">Nalagam pogovore...</div>
+    </div>
+    <div class="conv-main" id="convMain">
+      <div class="conv-empty">Izberi pogovor na levi.</div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1069,6 +1291,125 @@ function addActivity(type, text) {
   log.scrollTop = log.scrollHeight;
 }
 
+// ========== TAB SYSTEM ==========
+let currentTab = 'observe';
+let conversationsLoaded = false;
+let selectedConvPubkey = null;
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+  if (tab === 'observe') {
+    $('tabObserve').classList.add('active');
+    $('viewObserve').classList.add('active');
+  } else if (tab === 'conversations') {
+    $('tabConversations').classList.add('active');
+    $('viewConversations').classList.add('active');
+    if (!conversationsLoaded) loadConversations();
+  }
+}
+
+async function loadConversations() {
+  const sidebar = $('convSidebar');
+  sidebar.innerHTML = '<div class="conv-empty">Nalagam...</div>';
+
+  try {
+    const res = await fetch('/api/conversations');
+    const data = await res.json();
+    conversationsLoaded = true;
+
+    if (!data.users || data.users.length === 0) {
+      sidebar.innerHTML = '<div class="conv-empty">' + (currentLang === 'en' ? 'No conversations yet.' : 'Še ni pogovorov.') + '</div>';
+      return;
+    }
+
+    sidebar.innerHTML = '';
+    for (const user of data.users) {
+      const div = document.createElement('div');
+      div.className = 'conv-user' + (selectedConvPubkey === user.pubkey ? ' active' : '');
+      div.setAttribute('data-pubkey', user.pubkey);
+      div.onclick = function() { openConversation(user.pubkey, user.name, user.picture); };
+
+      const avatarContent = user.picture
+        ? '<img src="' + escapeHtml(user.picture) + '" onerror="this.parentNode.textContent=\\'◈\\'" />'
+        : '◈';
+      const preview = user.lastMessage
+        ? (user.lastMessage.role === 'user' ? '→ ' : '← ') + (user.lastMessage.content || '').slice(0, 40)
+        : '';
+      const timeSince = user.lastSeen ? timeAgo(user.lastSeen) : '';
+
+      div.innerHTML =
+        '<div class="conv-user-avatar">' + avatarContent + '</div>' +
+        '<div class="conv-user-info">' +
+          '<div class="conv-user-name">' + escapeHtml(user.name) + '</div>' +
+          '<div class="conv-user-preview">' + escapeHtml(preview) + '</div>' +
+        '</div>' +
+        '<div class="conv-user-meta">' + escapeHtml(timeSince) + '<br>' + user.interactionCount + 'x</div>';
+      sidebar.appendChild(div);
+    }
+  } catch (err) {
+    sidebar.innerHTML = '<div class="conv-empty">Napaka: ' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+async function openConversation(pubkey, name, picture) {
+  selectedConvPubkey = pubkey;
+
+  const main = $('convMain');
+  main.innerHTML = '<div class="conv-empty">Nalagam...</div>';
+
+  try {
+    const res = await fetch('/api/conversations/' + encodeURIComponent(pubkey));
+    const data = await res.json();
+
+    const entityName = currentEntityName || (currentLang === 'en' ? 'being' : 'bitje');
+    const userName = name || data.identity?.name || 'neznanec';
+
+    let html = '<div class="conv-header">' +
+      '<div class="conv-header-name">' + escapeHtml(userName) + '</div>' +
+      '<div class="conv-header-meta">' + pubkey.slice(0, 16) + '...' +
+        (data.identity?.notes ? ' · ' + escapeHtml(data.identity.notes) : '') +
+        (data.identity?.interaction_count ? ' · ' + data.identity.interaction_count + ' interakcij' : '') +
+      '</div></div>';
+
+    if (data.messages && data.messages.length > 0) {
+      for (const msg of data.messages) {
+        const roleClass = msg.role === 'user' ? 'user' : msg.role === 'silence' ? 'silence' : 'entity';
+        const roleName = msg.role === 'user' ? userName : msg.role === 'silence' ? (currentLang === 'en' ? 'silence' : 'tišina') : entityName;
+        const ts = msg.timestamp ? new Date(msg.timestamp + 'Z').toLocaleString(currentLang === 'en' ? 'en-US' : 'sl-SI', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+        html += '<div class="conv-msg ' + roleClass + '">' +
+          '<div class="conv-role">' + escapeHtml(roleName) + '</div>' +
+          escapeHtml(msg.content) +
+          '<div class="conv-time">' + escapeHtml(ts) + '</div>' +
+        '</div>';
+      }
+    } else {
+      html += '<div class="conv-empty">' + (currentLang === 'en' ? 'No messages.' : 'Ni sporočil.') + '</div>';
+    }
+
+    main.innerHTML = html;
+    main.scrollTop = main.scrollHeight;
+  } catch (err) {
+    main.innerHTML = '<div class="conv-empty">Napaka: ' + escapeHtml(err.message) + '</div>';
+  }
+
+  // Re-highlight sidebar
+  document.querySelectorAll('.conv-user').forEach(el => {
+    el.classList.toggle('active', el.getAttribute('data-pubkey') === pubkey);
+  });
+}
+
+function timeAgo(dateStr) {
+  const d = new Date(dateStr + 'Z');
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return (currentLang === 'en' ? 'now' : 'zdaj');
+  if (diff < 3600) return Math.floor(diff / 60) + 'm';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h';
+  return Math.floor(diff / 86400) + 'd';
+}
+
 // ========== SSE ==========
 const evtSource = new EventSource('/api/events');
 evtSource.addEventListener('triad_thesis', e => {
@@ -1104,6 +1445,15 @@ evtSource.addEventListener('triad_complete', e => {
 evtSource.addEventListener('activity', e => {
   const d = JSON.parse(e.data);
   addActivity(d.type || 'info', d.text || '...');
+  // Refresh conversations when a new DM/mention comes in
+  if (d.type === 'mention' && currentTab === 'conversations') {
+    conversationsLoaded = false;
+    loadConversations();
+    // Also refresh the open conversation
+    if (selectedConvPubkey) {
+      openConversation(selectedConvPubkey, '', '');
+    }
+  }
 });
 evtSource.addEventListener('self_prompt_changed', e => {
   const d = JSON.parse(e.data);

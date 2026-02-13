@@ -188,6 +188,45 @@ export function subscribeToFeed(callback, limit = 20) {
   }
 }
 
+export async function fetchProfiles(pubkeys) {
+  if (!pubkeys.length) return {};
+  const profiles = {};
+  const firstRelay = [...relays.values()][0];
+  if (!firstRelay) return profiles;
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(profiles), 8000);
+    try {
+      firstRelay.subscribe(
+        [{ kinds: [0], authors: pubkeys }],
+        {
+          onevent(event) {
+            try {
+              const profile = JSON.parse(event.content);
+              // Keep the newest profile per pubkey
+              if (!profiles[event.pubkey] || event.created_at > profiles[event.pubkey]._ts) {
+                profiles[event.pubkey] = { ...profile, _ts: event.created_at };
+              }
+            } catch (_) {}
+          },
+          oneose() {
+            clearTimeout(timeout);
+            // Clean _ts
+            for (const pk of Object.keys(profiles)) {
+              delete profiles[pk]._ts;
+            }
+            resolve(profiles);
+          }
+        }
+      );
+    } catch (err) {
+      console.error('[NOSTR] fetchProfiles error:', err.message);
+      clearTimeout(timeout);
+      resolve(profiles);
+    }
+  });
+}
+
 export function getIdentity() {
   return { pubkey, npub };
 }
