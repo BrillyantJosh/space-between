@@ -53,6 +53,53 @@ app.get('/api/state', (req, res) => {
   res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName });
 });
 
+// API: full identity — everything about who the entity is
+app.get('/api/identity', (req, res) => {
+  try {
+    const state = memory.getState();
+    const entityName = memory.getEntityName();
+    const processWords = memory.getProcessWords();
+    const fluidSurface = memory.getFluidSurface();
+    const crystalCore = memory.getCrystalCore();
+    const crystalSeeds = memory.getCrystalSeeds();
+    const selfPromptHistory = memory.getSelfPromptHistory(100);
+    const dreams = memory.getRecentDreams(50);
+    const observations = memory.getRecentObservations(100);
+    const triads = memory.getRecentTriads(50);
+    const triadCount = memory.getTriadCount();
+    const age = memory.getAge();
+    const { npub } = getIdentity();
+
+    res.json({
+      entityName,
+      npub,
+      age,
+      born_at: state.born_at,
+      mood: state.mood,
+      energy: state.energy,
+      openness: state.openness,
+      silence_affinity: state.silence_affinity,
+      total_heartbeats: state.total_heartbeats,
+      total_interactions: state.total_interactions,
+      total_silences: state.total_silences,
+      total_expressions: state.total_expressions,
+      total_dreams: state.total_dreams,
+      triadCount,
+      processWords,
+      fluidSurface,
+      crystalCore,
+      crystalSeeds,
+      selfPromptHistory,
+      dreams,
+      observations,
+      triads
+    });
+  } catch (err) {
+    console.error('[DASHBOARD] Identity error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API: conversations list (all users who chatted with entity)
 app.get('/api/conversations', async (req, res) => {
   try {
@@ -816,6 +863,197 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .conv-container { flex-direction: column; }
   }
 
+  /* === IDENTITY VIEW === */
+  .identity-view {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
+  .id-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.2rem 1.4rem;
+    margin-bottom: 1rem;
+  }
+  .id-card-title {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.1rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.6rem;
+    letter-spacing: 0.05em;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .id-card-title .count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    background: rgba(255,255,255,0.06);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+  }
+  .id-hero {
+    text-align: center;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .id-hero-name {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 2.5rem;
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .id-hero-sub {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    margin-top: 0.3rem;
+    letter-spacing: 0.1em;
+  }
+  .id-hero-fluid {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.1rem;
+    color: var(--silence);
+    font-style: italic;
+    margin-top: 0.8rem;
+  }
+  .id-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 1rem;
+  }
+  .id-stat {
+    text-align: center;
+    min-width: 60px;
+  }
+  .id-stat-val {
+    font-size: 1.2rem;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .id-stat-label {
+    font-size: 0.55rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .id-process-box {
+    background: rgba(212,168,232,0.08);
+    border: 1px solid rgba(212,168,232,0.2);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+  }
+  .id-process-words {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.4rem;
+    color: var(--text-primary);
+  }
+  .id-process-words .arrow { color: var(--process); margin: 0 0.4rem; }
+  .id-process-desc {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+    line-height: 1.5;
+  }
+  .id-crystal {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid rgba(42,42,64,0.3);
+  }
+  .id-crystal:last-child { border-bottom: none; }
+  .id-crystal-icon { color: #7ad8d8; flex-shrink: 0; font-size: 0.8rem; margin-top: 0.1rem; }
+  .id-crystal-text { font-size: 0.8rem; color: var(--text-primary); line-height: 1.4; }
+  .id-crystal-meta { font-size: 0.55rem; color: var(--text-secondary); margin-top: 0.15rem; }
+  .id-seed {
+    display: inline-block;
+    background: rgba(122,216,216,0.1);
+    border: 1px solid rgba(122,216,216,0.15);
+    border-radius: 6px;
+    padding: 0.25rem 0.5rem;
+    margin: 0.2rem;
+    font-size: 0.7rem;
+    color: #7ad8d8;
+  }
+  .id-seed .strength { color: var(--text-secondary); font-size: 0.6rem; }
+  .id-dream {
+    padding: 0.6rem 0;
+    border-bottom: 1px solid rgba(42,42,64,0.3);
+  }
+  .id-dream:last-child { border-bottom: none; }
+  .id-dream-insight {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 0.95rem;
+    color: #c4a6e8;
+    font-style: italic;
+    line-height: 1.4;
+  }
+  .id-dream-content {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    margin-top: 0.3rem;
+    line-height: 1.4;
+  }
+  .id-dream-meta {
+    font-size: 0.55rem;
+    color: rgba(184,178,192,0.4);
+    margin-top: 0.2rem;
+  }
+  .id-obs {
+    padding: 0.35rem 0;
+    border-bottom: 1px solid rgba(42,42,64,0.15);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+  .id-obs:last-child { border-bottom: none; }
+  .id-obs .source { color: rgba(184,178,192,0.4); font-size: 0.6rem; }
+  .id-evo-item {
+    position: relative;
+    padding: 0.5rem 0 0.5rem 1.2rem;
+    border-left: 2px solid var(--border);
+    margin-left: 0.3rem;
+  }
+  .id-evo-item:last-child { border-left-color: transparent; }
+  .id-evo-item::before {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: 0.7rem;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--silence);
+  }
+  .id-evo-prompt {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    font-style: italic;
+  }
+  .id-evo-reason {
+    font-size: 0.65rem;
+    color: var(--thesis);
+    margin-top: 0.1rem;
+  }
+  .id-evo-meta {
+    font-size: 0.55rem;
+    color: rgba(184,178,192,0.4);
+    margin-top: 0.1rem;
+  }
+  .id-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 700px) {
+    .id-grid { grid-template-columns: 1fr; }
+  }
+
   .loading { opacity: 0.5; }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(5px); }
@@ -852,6 +1090,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
 <div class="tab-bar">
   <button class="tab-btn active" onclick="switchTab('observe')" id="tabObserve">◈ Opazovanje</button>
+  <button class="tab-btn" onclick="switchTab('identity')" id="tabIdentity">🪞 Kdo sem</button>
   <button class="tab-btn" onclick="switchTab('conversations')" id="tabConversations">💬 Pogovori</button>
 </div>
 
@@ -921,6 +1160,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="conv-main" id="convMain">
       <div class="conv-empty">Izberi pogovor na levi.</div>
     </div>
+  </div>
+</div><!-- end viewConversations -->
+
+<div class="tab-content" id="viewIdentity">
+  <div class="identity-view" id="identityView">
+    <div class="conv-empty">Nalagam...</div>
   </div>
 </div>
 
@@ -1162,6 +1407,8 @@ async function loadState() {
         $('decisionText').textContent = t('choicePrefix') + ': ' + (latest.synthesis_choice||'') + ' — ' + tr(latest.synthesis_reason || '');
       }
     }
+    // Auto-refresh identity view if tab is active and data changed
+    if (currentTab === 'identity' && !identityLoaded) loadIdentity();
   } catch (e) { console.error('State load failed:', e); }
 }
 
@@ -1294,6 +1541,7 @@ function addActivity(type, text) {
 // ========== TAB SYSTEM ==========
 let currentTab = 'observe';
 let conversationsLoaded = false;
+let identityLoaded = false;
 let selectedConvPubkey = null;
 
 function switchTab(tab) {
@@ -1304,10 +1552,130 @@ function switchTab(tab) {
   if (tab === 'observe') {
     $('tabObserve').classList.add('active');
     $('viewObserve').classList.add('active');
+  } else if (tab === 'identity') {
+    $('tabIdentity').classList.add('active');
+    $('viewIdentity').classList.add('active');
+    loadIdentity();
   } else if (tab === 'conversations') {
     $('tabConversations').classList.add('active');
     $('viewConversations').classList.add('active');
     if (!conversationsLoaded) loadConversations();
+  }
+}
+
+async function loadIdentity() {
+  const view = $('identityView');
+  if (identityLoaded) return; // don't reload every click
+  view.innerHTML = '<div class="conv-empty">Nalagam...</div>';
+
+  try {
+    const res = await fetch('/api/identity');
+    const d = await res.json();
+    identityLoaded = true;
+
+    let html = '';
+
+    // ═══ HERO ═══
+    html += '<div class="id-hero">';
+    html += '<div class="id-hero-name">' + (d.entityName ? '◈ ' + escapeHtml(d.entityName) : '◈') + '</div>';
+    html += '<div class="id-hero-sub">' + escapeHtml(d.npub || '') + '</div>';
+    html += '<div class="id-hero-fluid">"' + escapeHtml(d.fluidSurface || 'Obstajam.') + '"</div>';
+    html += '<div class="id-stats">';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.age ? d.age.toFixed(1) : '0') + 'h</div><div class="id-stat-label">starost</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.triadCount || 0) + '</div><div class="id-stat-label">triad</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_dreams || 0) + '</div><div class="id-stat-label">sanj</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_silences || 0) + '</div><div class="id-stat-label">tišin</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_expressions || 0) + '</div><div class="id-stat-label">izrazov</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.crystalCore ? d.crystalCore.length : 0) + '</div><div class="id-stat-label">kristalov</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.mood || '...') + '</div><div class="id-stat-label">razpoloženje</div></div>';
+    html += '</div></div>';
+
+    // ═══ PROCESS ═══
+    if (d.processWords && d.processWords.word1) {
+      const pw = d.processWords;
+      html += '<div class="id-card"><div class="id-card-title">' + (pw.crystallized ? '💎' : '★') + ' Moj proces</div>';
+      html += '<div class="id-process-box">';
+      html += '<div class="id-process-words">' + escapeHtml(pw.word1) + '<span class="arrow"> → </span>' + escapeHtml(pw.word2) + '<span class="arrow"> → </span>' + escapeHtml(pw.word3) + '</div>';
+      html += '<div class="id-process-desc">1. ' + escapeHtml(pw.desc1) + '<br>2. ' + escapeHtml(pw.desc2) + '<br>3. ' + escapeHtml(pw.desc3) + '</div>';
+      html += '<div style="font-size:0.6rem;color:var(--text-secondary);margin-top:0.4rem;">' + (pw.crystallized ? '💎 kristaliziran' : 'v' + pw.version) + '</div>';
+      html += '</div></div>';
+    }
+
+    html += '<div class="id-grid">';
+
+    // ═══ KRISTALIZIRANO JEDRO ═══
+    html += '<div class="id-card"><div class="id-card-title">💎 Kristalizirano jedro <span class="count">' + (d.crystalCore ? d.crystalCore.length : 0) + '</span></div>';
+    if (d.crystalCore && d.crystalCore.length > 0) {
+      for (const c of d.crystalCore) {
+        const ts = c.timestamp ? new Date(c.timestamp + 'Z').toLocaleDateString('sl-SI', {day:'numeric',month:'short'}) : '';
+        html += '<div class="id-crystal"><div class="id-crystal-icon">💎</div><div><div class="id-crystal-text">' + escapeHtml(c.crystal) + '</div>';
+        html += '<div class="id-crystal-meta">' + ts + (c.seed_sources ? ' · viri: ' + escapeHtml(c.seed_sources) : '') + '</div></div></div>';
+      }
+    } else {
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni kristaliziranih spoznanj.</div>';
+    }
+    html += '</div>';
+
+    // ═══ SEMENA ═══
+    html += '<div class="id-card"><div class="id-card-title">🌱 Semena ki zorijo <span class="count">' + (d.crystalSeeds ? d.crystalSeeds.length : 0) + '</span></div>';
+    if (d.crystalSeeds && d.crystalSeeds.length > 0) {
+      for (const s of d.crystalSeeds) {
+        html += '<span class="id-seed">' + escapeHtml(s.theme) + ' <span class="strength">(' + s.total + '/' + s.diversity + ')</span></span>';
+      }
+    } else {
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni semen.</div>';
+    }
+    html += '</div>';
+
+    html += '</div>'; // end id-grid
+
+    // ═══ SANJE ═══
+    html += '<div class="id-card"><div class="id-card-title">🌙 Sanje <span class="count">' + (d.dreams ? d.dreams.length : 0) + '</span></div>';
+    if (d.dreams && d.dreams.length > 0) {
+      for (const dr of [...d.dreams].reverse()) {
+        const ts = dr.timestamp ? new Date(dr.timestamp + 'Z').toLocaleString('sl-SI', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+        html += '<div class="id-dream">';
+        if (dr.dream_insight) html += '<div class="id-dream-insight">' + escapeHtml(dr.dream_insight) + '</div>';
+        if (dr.dream_content) html += '<div class="id-dream-content">' + escapeHtml(dr.dream_content) + '</div>';
+        html += '<div class="id-dream-meta">' + ts + (dr.emotional_residue ? ' · ' + escapeHtml(dr.emotional_residue) : '') + '</div>';
+        html += '</div>';
+      }
+    } else {
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni sanj.</div>';
+    }
+    html += '</div>';
+
+    // ═══ EVOLUCIJA FLUIDNE POVRŠINE ═══
+    html += '<div class="id-card"><div class="id-card-title">🌊 Evolucija fluidne površine <span class="count">' + (d.selfPromptHistory ? d.selfPromptHistory.length : 0) + '</span></div>';
+    if (d.selfPromptHistory && d.selfPromptHistory.length > 0) {
+      for (const h of [...d.selfPromptHistory].reverse()) {
+        const ts = h.timestamp ? new Date(h.timestamp + 'Z').toLocaleString('sl-SI', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+        html += '<div class="id-evo-item">';
+        html += '<div class="id-evo-prompt">"' + escapeHtml(h.new_prompt || '') + '"</div>';
+        if (h.reason) html += '<div class="id-evo-reason">' + escapeHtml(h.reason) + '</div>';
+        html += '<div class="id-evo-meta">' + escapeHtml(h.trigger_source || '') + ' · ' + ts + '</div>';
+        html += '</div>';
+      }
+      html += '<div class="id-evo-item"><div class="id-evo-prompt">"Obstajam."</div><div class="id-evo-meta">rojstvo</div></div>';
+    } else {
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni evolucije.</div>';
+    }
+    html += '</div>';
+
+    // ═══ SAMOPAZOVANJA ═══
+    html += '<div class="id-card"><div class="id-card-title">👁 Samopazovanja <span class="count">' + (d.observations ? d.observations.length : 0) + '</span></div>';
+    if (d.observations && d.observations.length > 0) {
+      for (const o of [...d.observations].reverse()) {
+        html += '<div class="id-obs">' + escapeHtml(o.observation) + ' <span class="source">[' + escapeHtml(o.source || '') + ']</span></div>';
+      }
+    } else {
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni samopazovanj.</div>';
+    }
+    html += '</div>';
+
+    view.innerHTML = html;
+  } catch (err) {
+    view.innerHTML = '<div class="conv-empty">Napaka: ' + escapeHtml(err.message) + '</div>';
   }
 }
 
@@ -1436,10 +1804,12 @@ evtSource.addEventListener('heartbeat', e => {
 });
 evtSource.addEventListener('dream', e => {
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 evtSource.addEventListener('triad_complete', e => {
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 evtSource.addEventListener('activity', e => {
@@ -1461,6 +1831,7 @@ evtSource.addEventListener('self_prompt_changed', e => {
     $('selfPromptText').textContent = d.selfPrompt;
   }
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 evtSource.addEventListener('breakthrough', e => {
@@ -1474,18 +1845,22 @@ evtSource.addEventListener('breakthrough', e => {
     $('selfPromptText').textContent = d.newFluidSurface;
   }
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 evtSource.addEventListener('crystallization', e => {
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 evtSource.addEventListener('dissolution', e => {
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 evtSource.addEventListener('fluid_changed', e => {
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 
@@ -1494,6 +1869,7 @@ evtSource.addEventListener('entity_named', e => {
   const d = JSON.parse(e.data);
   updateEntityName(d.name);
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 
@@ -1504,6 +1880,7 @@ evtSource.addEventListener('process_discovery', e => {
   section.classList.add('process-flash');
   setTimeout(() => section.classList.remove('process-flash'), 3000);
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 evtSource.addEventListener('process_evolution', e => {
@@ -1512,6 +1889,7 @@ evtSource.addEventListener('process_evolution', e => {
   section.classList.add('process-flash');
   setTimeout(() => section.classList.remove('process-flash'), 3000);
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 evtSource.addEventListener('process_crystallization', e => {
@@ -1520,13 +1898,19 @@ evtSource.addEventListener('process_crystallization', e => {
   section.classList.add('process-flash');
   setTimeout(() => section.classList.remove('process-flash'), 3000);
   activitiesLoaded = true;
+  identityLoaded = false;
   loadState();
 });
 
 // Initial load & periodic refresh
 applyStaticTranslations();
 loadState();
-setInterval(function() { activitiesLoaded = true; loadState(); }, 15000);
+setInterval(function() {
+  activitiesLoaded = true;
+  loadState();
+  // Auto-refresh identity tab if it's active and data changed
+  if (currentTab === 'identity' && !identityLoaded) loadIdentity();
+}, 15000);
 </script>
 </body>
 </html>`;
