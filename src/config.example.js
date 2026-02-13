@@ -24,4 +24,5 @@ export default {
   maxSelfObservations: 50,
   expressionProbability: 0.15,
   silenceAppreciation: true,
+  dashboardPrivateKeyHex: "YOUR_DASHBOARD_PRIVATE_KEY_HEX_HERE",
 };

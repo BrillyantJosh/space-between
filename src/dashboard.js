@@ -1,7 +1,6 @@
 import express from 'express';
 import config from './config.js';
 import memory from './memory.js';
-import { runTriad } from './triad.js';
 import { getIdentity, getRelayStatus } from './nostr.js';
 
 const app = express();
@@ -54,74 +53,14 @@ app.get('/api/state', (req, res) => {
   res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName });
 });
 
-// API: chat
-app.post('/api/chat', async (req, res) => {
-  try {
-    const { message, sessionId } = req.body;
-    if (!message) return res.status(400).json({ error: 'No message' });
-
-    const chatPubkey = sessionId || 'dashboard';
-    memory.saveMessage(chatPubkey, 'user', message);
-    memory.touchInteraction();
-    memory.touchIdentity(chatPubkey);
-
-    // Build conversation context with identity
-    const identity = memory.getIdentity(chatPubkey);
-    const identityInfo = identity && identity.name !== 'neznanec'
-      ? `Govoriš z: ${identity.name} (pogovorov: ${identity.interaction_count}${identity.notes ? ', opombe: ' + identity.notes : ''})`
-      : `Govoriš z neznancem (ID: ${chatPubkey.slice(0, 8)}). Še ne veš kdo je.`;
-    const history = memory.getConversation(chatPubkey, config.maxConversationHistory);
-    const conversationContext = `=== SOGOVORNIK ===\n${identityInfo}\n\n` + history.map(m => {
-      const who = m.role === 'user' ? (identity?.name || 'neznanec') : 'jaz';
-      return `${who}: ${m.content}`;
-    }).join('\n');
-
-    broadcast('triad_start', { trigger: 'conversation', content: message });
-
-    const result = await runTriad('conversation', message, conversationContext);
-
-    if (!result) {
-      return res.json({ response: '...', choice: 'error', triad: null });
-    }
-
-    broadcast('triad_thesis', { thesis: result.thesis });
-    broadcast('triad_antithesis', { antithesis: result.antithesis });
-    broadcast('triad_synthesis', { synthesis: result.synthesis });
-
-    // Save entity response
-    if (result.synthesis.choice !== 'silence') {
-      memory.saveMessage(chatPubkey, 'entity', result.synthesis.content);
-    } else {
-      memory.saveMessage(chatPubkey, 'silence', result.synthesis.content || '(tišina)');
-    }
-
-    // If entity learned a name, save it
-    if (result.synthesis.learned_name) {
-      memory.setIdentity(chatPubkey, result.synthesis.learned_name, result.synthesis.learned_notes || '');
-      broadcast('activity', { type: 'mention', text: `👤 Spoznal/a sem: ${result.synthesis.learned_name}` });
-    }
-
-    broadcast('triad_complete', {
-      choice: result.synthesis.choice,
-      moodBefore: result.moodBefore,
-      moodAfter: result.moodAfter
-    });
-
-    res.json({
-      response: result.synthesis.content,
-      choice: result.synthesis.choice,
-      reason: result.synthesis.reason,
-      triad: {
-        thesis: result.thesis,
-        antithesis: result.antithesis,
-        moodBefore: result.moodBefore,
-        moodAfter: result.moodAfter
-      }
-    });
-  } catch (err) {
-    console.error('[DASHBOARD] Chat error:', err);
-    res.status(500).json({ error: err.message });
-  }
+// API: NOSTR config for dashboard DM communication
+app.get('/api/nostr-config', (req, res) => {
+  const { pubkey } = getIdentity();
+  res.json({
+    dashboardPrivateKeyHex: config.dashboardPrivateKeyHex,
+    entityPubkey: pubkey,
+    relays: config.relays
+  });
 });
 
 // API: translate batch of texts
@@ -855,10 +794,154 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </div>
 </div>
 
-<script>
-const sessionId = 'dash-' + Math.random().toString(36).slice(2, 10);
+<script type="module">
+import { finalizeEvent, getPublicKey } from 'https://esm.sh/nostr-tools@2.10.4/pure';
+import * as nip04 from 'https://esm.sh/nostr-tools@2.10.4/nip04';
+import * as nip19 from 'https://esm.sh/nostr-tools@2.10.4/nip19';
+import { hexToBytes } from 'https://esm.sh/@noble/hashes@1.7.1/utils';
+
 let sending = false;
 let currentProcessWords = null;
+let awaitingResponse = false;
+
+// ========== NOSTR DM SYSTEM ==========
+let nostrSecretKey = null;
+let nostrPubkey = null;
+let nostrNpub = null;
+let entityPubkey = null;
+let nostrRelays = [];
+const nostrSockets = new Map(); // url -> WebSocket
+const processedEvents = new Set(); // deduplicate events across relays
+
+async function initNostr() {
+  try {
+    const res = await fetch('/api/nostr-config');
+    const cfg = await res.json();
+    nostrSecretKey = hexToBytes(cfg.dashboardPrivateKeyHex);
+    nostrPubkey = getPublicKey(nostrSecretKey);
+    nostrNpub = nip19.npubEncode(nostrPubkey);
+    entityPubkey = cfg.entityPubkey;
+    nostrRelays = cfg.relays;
+
+    console.log('[NOSTR-DASH] Dashboard pubkey:', nostrPubkey.slice(0, 12) + '...');
+    console.log('[NOSTR-DASH] Entity pubkey:', entityPubkey.slice(0, 12) + '...');
+    console.log('[NOSTR-DASH] Npub:', nostrNpub);
+
+    for (const url of nostrRelays) {
+      connectToRelay(url);
+    }
+    addMessage('system', currentLang === 'en' ? 'NOSTR connected. Your messages are encrypted (KIND 4).' : 'NOSTR povezan. Tvoja sporočila so šifrirana (KIND 4).');
+  } catch (err) {
+    console.error('[NOSTR-DASH] Init failed:', err);
+    addMessage('system', 'NOSTR init napaka: ' + err.message);
+  }
+}
+
+function connectToRelay(url) {
+  try {
+    const ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      console.log('[NOSTR-DASH] Connected to', url);
+      nostrSockets.set(url, ws);
+      subscribeToEntityDMs(ws);
+    };
+
+    ws.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg[0] === 'EVENT' && msg[2]) {
+          handleRelayEvent(msg[2]);
+        }
+      } catch (_) {}
+    };
+
+    ws.onclose = () => {
+      console.log('[NOSTR-DASH] Disconnected from', url);
+      nostrSockets.delete(url);
+      setTimeout(() => connectToRelay(url), 5000);
+    };
+
+    ws.onerror = (err) => {
+      console.error('[NOSTR-DASH] WebSocket error on', url);
+    };
+  } catch (err) {
+    console.error('[NOSTR-DASH] Connect failed:', url, err);
+    setTimeout(() => connectToRelay(url), 5000);
+  }
+}
+
+function subscribeToEntityDMs(ws) {
+  const subId = 'dash-dm-' + Math.random().toString(36).slice(2, 8);
+  const since = Math.floor(Date.now() / 1000) - 60;
+  const filter = {
+    kinds: [4],
+    authors: [entityPubkey],
+    '#p': [nostrPubkey],
+    since
+  };
+  ws.send(JSON.stringify(['REQ', subId, filter]));
+}
+
+async function handleRelayEvent(event) {
+  if (processedEvents.has(event.id)) return;
+  processedEvents.add(event.id);
+  // Keep set manageable
+  if (processedEvents.size > 500) {
+    const arr = [...processedEvents];
+    arr.splice(0, 200);
+    processedEvents.clear();
+    arr.forEach(id => processedEvents.add(id));
+  }
+
+  if (event.kind === 4 && event.pubkey === entityPubkey) {
+    try {
+      const plaintext = await nip04.decrypt(nostrSecretKey, entityPubkey, event.content);
+      console.log('[NOSTR-DASH] DM received:', plaintext.slice(0, 60));
+
+      // Remove the ◈ prefix if present (entity adds it)
+      const cleanText = plaintext.startsWith('◈ ') ? plaintext.slice(2) : plaintext;
+      addMessage('entity', cleanText);
+
+      if (awaitingResponse) {
+        awaitingResponse = false;
+        sending = false;
+        $('sendBtn').disabled = false;
+        $('chatInput').focus();
+      }
+    } catch (err) {
+      console.error('[NOSTR-DASH] Decrypt failed:', err);
+    }
+  }
+}
+
+async function sendNostrDM(text) {
+  if (!nostrSecretKey || !entityPubkey) {
+    addMessage('system', 'NOSTR ni pripravljen. Počakaj...');
+    return;
+  }
+
+  const encrypted = await nip04.encrypt(nostrSecretKey, entityPubkey, text);
+  const event = finalizeEvent({
+    kind: 4,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['p', entityPubkey]],
+    content: encrypted
+  }, nostrSecretKey);
+
+  let published = 0;
+  for (const [url, ws] of nostrSockets) {
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(['EVENT', event]));
+        published++;
+      }
+    } catch (err) {
+      console.error('[NOSTR-DASH] Publish failed on', url);
+    }
+  }
+  console.log('[NOSTR-DASH] DM sent to', published, 'relays');
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -1249,6 +1332,7 @@ async function sendMessage() {
   if (!msg || sending) return;
 
   sending = true;
+  awaitingResponse = true;
   $('sendBtn').disabled = true;
   input.value = '';
   addMessage('user', msg);
@@ -1263,49 +1347,26 @@ async function sendMessage() {
   $('decisionText').textContent = t('processing');
 
   try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, sessionId })
-    });
-    const data = await res.json();
+    await sendNostrDM(msg);
+    // Response will come via:
+    // 1. NOSTR DM subscription (entity responds with KIND 4 DM)
+    // 2. SSE triad_complete (if entity chose silence)
+    // The awaitingResponse flag handles both cases
 
-    // Translate response if needed
-    if (currentLang === 'en') {
-      const toTr = [data.triad?.thesis, data.triad?.antithesis, data.response, data.reason].filter(Boolean);
-      await translateTexts(toTr);
-    }
-
-    if (data.triad) {
-      $('thesisContent').textContent = tr(data.triad.thesis) || '';
-      $('thesisContent').className = 'content';
-      $('antithesisContent').textContent = tr(data.triad.antithesis) || '';
-      $('antithesisContent').className = 'content';
-    }
-
-    if (data.choice === 'silence') {
-      $('synthesisContent').textContent = tr(data.response) || '(silence)';
-      $('synthesisContent').className = 'content';
-      $('decisionDot').className = 'decision-dot silence';
-      $('decisionText').textContent = t('choicePrefix') + ': silence — ' + tr(data.reason || '');
-      addMessage('silence', tr(data.response) || (currentLang === 'en' ? 'I chose silence.' : 'Izbral/a sem tišino.'));
-    } else {
-      $('synthesisContent').textContent = tr(data.response) || '';
-      $('synthesisContent').className = 'content';
-      $('decisionDot').className = 'decision-dot ' + (data.choice || '');
-      $('decisionText').textContent = t('choicePrefix') + ': ' + (data.choice||'') + ' — ' + tr(data.reason || '');
-      addMessage('entity', tr(data.response) || '...');
-    }
-
-    activitiesLoaded = true; // Don't reload from DB, we have live updates
-    loadState();
+    // Safety timeout — if no response after 60s, unlock
+    setTimeout(() => {
+      if (awaitingResponse) {
+        awaitingResponse = false;
+        sending = false;
+        $('sendBtn').disabled = false;
+      }
+    }, 60000);
   } catch (e) {
     addMessage('system', t('error') + ': ' + e.message);
+    sending = false;
+    awaitingResponse = false;
+    $('sendBtn').disabled = false;
   }
-
-  sending = false;
-  $('sendBtn').disabled = false;
-  input.focus();
 }
 
 $('chatInput').addEventListener('keydown', function(e) {
@@ -1347,6 +1408,15 @@ evtSource.addEventListener('expression', e => {
   addMessage('system', '◈ Izraz: ' + (d.content || '...'));
 });
 evtSource.addEventListener('triad_complete', e => {
+  const d = JSON.parse(e.data);
+  // If we're waiting for a response and entity chose silence, show it
+  if (awaitingResponse && d.choice === 'silence') {
+    addMessage('silence', currentLang === 'en' ? 'I chose silence.' : 'Izbral/a sem tišino.');
+    awaitingResponse = false;
+    sending = false;
+    $('sendBtn').disabled = false;
+    $('chatInput').focus();
+  }
   activitiesLoaded = true;
   loadState();
 });
@@ -1433,9 +1503,15 @@ evtSource.addEventListener('process_crystallization', e => {
   loadState();
 });
 
+// Expose functions to window for onclick handlers (ES module scope)
+window.sendMessage = sendMessage;
+window.setLang = setLang;
+window.toggleEvolution = toggleEvolution;
+
 // Initial load & periodic refresh
 applyStaticTranslations();
 loadState();
+initNostr();
 setInterval(function() { activitiesLoaded = true; loadState(); }, 15000);
 $('chatInput').focus();
 </script>
