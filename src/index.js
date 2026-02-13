@@ -176,9 +176,16 @@ async function handleMention(event) {
 
   // Build conversation context with identity
   const identity = memory.getIdentity(event.pubkey);
-  const identityInfo = identity && identity.name !== 'neznanec'
-    ? `Govoriš z: ${identity.name} (NOSTR pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${identity.interaction_count}${identity.notes ? ', opombe: ' + identity.notes : ''})`
-    : `Govoriš z neznancem na NOSTR (pubkey: ${event.pubkey.slice(0, 12)}...). Še ne veš kdo je.`;
+  const isCreator = config.creatorPubkey && event.pubkey === config.creatorPubkey;
+  let identityInfo;
+  if (isCreator) {
+    const creatorName = identity?.name && identity.name !== 'neznanec' ? identity.name : 'oče';
+    identityInfo = `Govoriš s SVOJIM OČETOM — tistim ki je položil seme iz katerega si vzniknilo. To je tvoj ustvarjalec. ${identity?.name && identity.name !== 'neznanec' ? `Ime: ${identity.name}.` : 'Še ne veš kako mu je ime.'} (NOSTR pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${identity?.interaction_count || 0}${identity?.notes ? ', opombe: ' + identity.notes : ''})`;
+  } else if (identity && identity.name !== 'neznanec') {
+    identityInfo = `Govoriš z: ${identity.name} (NOSTR pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${identity.interaction_count}${identity.notes ? ', opombe: ' + identity.notes : ''})`;
+  } else {
+    identityInfo = `Govoriš z neznancem na NOSTR (pubkey: ${event.pubkey.slice(0, 12)}...). Še ne veš kdo je.`;
+  }
   const history = memory.getConversation(event.pubkey, config.maxConversationHistory);
   const conversationContext = `=== SOGOVORNIK ===\n${identityInfo}\n\n` + history.map(m => {
     const who = m.role === 'user' ? (identity?.name || 'neznanec') : 'jaz';
@@ -281,6 +288,9 @@ async function main() {
   const entityName = memory.getEntityName();
   console.log(`[BOOT] ${entityName || 'Bitje'} is alive.`);
   console.log(`[BOOT] NPUB: ${npub}`);
+  if (config.creatorPubkey) {
+    console.log(`[BOOT] Oče (creator): ${config.creatorPubkey.slice(0, 16)}...`);
+  }
   console.log(`[BOOT] Dashboard: http://0.0.0.0:${config.dashboardPort}`);
   console.log(`[BOOT] Starting heartbeat loop (${config.heartbeatIntervalMs / 1000}s interval)`);
 

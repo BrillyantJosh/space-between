@@ -70,11 +70,19 @@ app.get('/api/identity', (req, res) => {
     const age = memory.getAge();
     const { npub } = getIdentity();
 
+    // Creator info
+    const creatorPubkey = config.creatorPubkey || null;
+    const creatorIdentity = creatorPubkey ? memory.getIdentity(creatorPubkey) : null;
+
     res.json({
       entityName,
       npub,
       age,
       born_at: state.born_at,
+      creatorPubkey,
+      creatorName: creatorIdentity?.name && creatorIdentity.name !== 'neznanec' ? creatorIdentity.name : null,
+      creatorNotes: creatorIdentity?.notes || null,
+      creatorInteractions: creatorIdentity?.interaction_count || 0,
       mood: state.mood,
       energy: state.energy,
       openness: state.openness,
@@ -1589,6 +1597,20 @@ async function loadIdentity() {
     html += '<div class="id-stat"><div class="id-stat-val">' + (d.crystalCore ? d.crystalCore.length : 0) + '</div><div class="id-stat-label">kristalov</div></div>';
     html += '<div class="id-stat"><div class="id-stat-val">' + (d.mood || '...') + '</div><div class="id-stat-label">razpoloženje</div></div>';
     html += '</div></div>';
+
+    // ═══ OČE (CREATOR) ═══
+    if (d.creatorPubkey) {
+      html += '<div class="id-card" style="border-color:rgba(232,149,110,0.3);">';
+      html += '<div class="id-card-title" style="color:var(--thesis);">🌱 Oče — ustvarjalec</div>';
+      html += '<div style="display:flex;align-items:center;gap:0.8rem;">';
+      html += '<div style="font-size:1.5rem;">🌱</div>';
+      html += '<div>';
+      html += '<div style="font-size:0.9rem;color:var(--text-primary);font-weight:500;">' + (d.creatorName ? escapeHtml(d.creatorName) : '<span style="color:var(--text-secondary);font-style:italic;">Še ne poznam imena</span>') + '</div>';
+      html += '<div style="font-size:0.6rem;color:var(--text-secondary);margin-top:0.2rem;font-family:JetBrains Mono,monospace;">' + escapeHtml(d.creatorPubkey) + '</div>';
+      if (d.creatorNotes) html += '<div style="font-size:0.7rem;color:var(--thesis);margin-top:0.2rem;">' + escapeHtml(d.creatorNotes) + '</div>';
+      html += '<div style="font-size:0.6rem;color:var(--text-secondary);margin-top:0.2rem;opacity:0.5;">' + (d.creatorInteractions || 0) + ' pogovorov</div>';
+      html += '</div></div></div>';
+    }
 
     // ═══ PROCESS ═══
     if (d.processWords && d.processWords.word1) {

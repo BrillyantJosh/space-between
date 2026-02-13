@@ -25,4 +25,5 @@ export default {
   expressionProbability: 0.15,
   silenceAppreciation: true,
   dashboardPrivateKeyHex: "YOUR_DASHBOARD_PRIVATE_KEY_HEX_HERE",
+  creatorPubkey: "YOUR_CREATOR_NOSTR_HEX_PUBKEY_HERE",
 };
