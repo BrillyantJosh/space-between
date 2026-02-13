@@ -155,7 +155,9 @@ async function handleHeartbeat() {
 }
 
 async function handleMention(event) {
-  console.log(`[MENTION] Received ${event.kind === 4 ? 'DM' : 'mention'} from ${event.pubkey.slice(0, 8)}...`);
+  const isCreatorMsg = config.creatorPubkey && event.pubkey === config.creatorPubkey;
+  console.log(`[MENTION] Received ${event.kind === 4 ? 'DM' : 'mention'} from ${event.pubkey.slice(0, 8)}...${isCreatorMsg ? ' (OČE!)' : ''}`);
+  console.log(`[MENTION] Event ID: ${event.id?.slice(0, 16)}... | Tags: ${JSON.stringify(event.tags?.slice(0, 3))}`);
 
   memory.touchInteraction();
   memory.touchIdentity(event.pubkey);

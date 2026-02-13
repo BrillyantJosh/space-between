@@ -144,23 +144,44 @@ export async function decryptDM(event) {
 }
 
 export function subscribeToMentions(callback) {
-  const since = Math.floor(Date.now() / 1000) - 60;
+  // Use 5 min window to catch DMs sent during restarts
+  const since = Math.floor(Date.now() / 1000) - 300;
+  const seen = new Set(); // dedup across relays
+
   for (const [url, relay] of relays) {
     try {
-      // Subscribe to KIND 1 mentions and KIND 4 DMs
+      // Subscribe to KIND 1 mentions (tagged with our pubkey)
       relay.subscribe(
         [
-          { kinds: [1], '#p': [pubkey], since },
-          { kinds: [4], '#p': [pubkey], since }
+          { kinds: [1], '#p': [pubkey], since }
         ],
         {
           onevent(event) {
-            // Ignore own events
             if (event.pubkey === pubkey) return;
+            if (seen.has(event.id)) return;
+            seen.add(event.id);
+            console.log(`[NOSTR] KIND ${event.kind} from ${event.pubkey.slice(0, 12)}... on ${url}`);
             callback(event);
           }
         }
       );
+
+      // Subscribe to KIND 4 DMs separately — some relays need '#p', others deliver all
+      relay.subscribe(
+        [
+          { kinds: [4], '#p': [pubkey], since }
+        ],
+        {
+          onevent(event) {
+            if (event.pubkey === pubkey) return;
+            if (seen.has(event.id)) return;
+            seen.add(event.id);
+            console.log(`[NOSTR] DM (KIND 4) from ${event.pubkey.slice(0, 12)}... on ${url}`);
+            callback(event);
+          }
+        }
+      );
+
       console.log(`[NOSTR] Subscribed to mentions on ${url}`);
     } catch (err) {
       console.error(`[NOSTR] Subscribe failed on ${url}:`, err.message);
