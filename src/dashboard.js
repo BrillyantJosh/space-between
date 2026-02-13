@@ -53,16 +53,6 @@ app.get('/api/state', (req, res) => {
   res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName });
 });
 
-// API: NOSTR config for dashboard DM communication
-app.get('/api/nostr-config', (req, res) => {
-  const { pubkey } = getIdentity();
-  res.json({
-    dashboardPrivateKeyHex: config.dashboardPrivateKeyHex,
-    entityPubkey: pubkey,
-    relays: config.relays
-  });
-});
-
 // API: translate batch of texts
 import { callLLM } from './llm.js';
 import crypto from 'crypto';
@@ -245,17 +235,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   .main-grid {
     display: grid;
-    grid-template-columns: 1.2fr 0.8fr 1fr;
+    grid-template-columns: 1.2fr 0.8fr;
     gap: 1px;
     background: var(--border);
     min-height: calc(100vh - 110px);
   }
-  @media (max-width: 1100px) {
-    .main-grid { grid-template-columns: 1fr 1fr; }
-    .panel-activity { display: none; }
-  }
-  @media (max-width: 700px) {
+  @media (max-width: 900px) {
     .main-grid { grid-template-columns: 1fr; }
+    .panel-activity { display: none; }
   }
 
   .panel {
@@ -589,69 +576,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     animation: processFlash 3s ease-out;
   }
 
-  /* === CHAT === */
-  .chat-area {
-    display: flex;
-    flex-direction: column;
-    height: calc(100vh - 110px);
-  }
-  .messages {
-    flex: 1;
-    overflow-y: auto;
-    padding-bottom: 1rem;
-  }
-  .message {
-    margin-bottom: 0.6rem;
-    padding: 0.6rem 0.8rem;
-    border-radius: 8px;
-    background: var(--surface);
-    font-size: 0.8rem;
-    line-height: 1.4;
-  }
-  .message.user { background: var(--surface2); border-left: 3px solid var(--text-secondary); }
-  .message.entity { border-left: 3px solid var(--synthesis); }
-  .message.silence { border-left: 3px solid var(--silence); color: var(--silence); font-style: italic; }
-  .message.system { border-left: 3px solid var(--border); color: var(--text-secondary); font-size: 0.72rem; }
-  .message .role {
-    font-size: 0.6rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--text-secondary);
-    margin-bottom: 0.2rem;
-  }
-
-  .chat-input {
-    display: flex;
-    gap: 0.5rem;
-    padding-top: 0.8rem;
-    border-top: 1px solid var(--border);
-  }
-  .chat-input input {
-    flex: 1;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0.6rem 0.8rem;
-    color: var(--text-primary);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.8rem;
-    outline: none;
-  }
-  .chat-input input:focus { border-color: var(--silence); }
-  .chat-input button {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0.6rem 1rem;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.8rem;
-    transition: all 0.2s;
-  }
-  .chat-input button:hover { background: var(--border); color: var(--text-primary); }
-  .chat-input button:disabled { opacity: 0.4; cursor: not-allowed; }
-
   /* === LANGUAGE TOGGLE === */
   .lang-toggle {
     position: absolute;
@@ -776,172 +700,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- RIGHT PANEL: Chat -->
-  <div class="panel">
-    <div class="panel-title" data-i18n="dialog">Dialog</div>
-    <div class="chat-area">
-      <div class="messages" id="messages">
-        <div class="message system fade-in">
-          <div class="role">sistem</div>
-          <span data-i18n="wakeUp">Bitje se zbuja. Poveži se z njim.</span>
-        </div>
-      </div>
-      <div class="chat-input">
-        <input type="text" id="chatInput" placeholder="Spregovori..." data-i18n-placeholder="speak" autocomplete="off" />
-        <button id="sendBtn" onclick="sendMessage()">◈</button>
-      </div>
-    </div>
-  </div>
 </div>
 
-<script type="module">
-import { finalizeEvent, getPublicKey } from 'https://esm.sh/nostr-tools@2.10.4/pure';
-import * as nip04 from 'https://esm.sh/nostr-tools@2.10.4/nip04';
-import * as nip19 from 'https://esm.sh/nostr-tools@2.10.4/nip19';
-import { hexToBytes } from 'https://esm.sh/@noble/hashes@1.7.1/utils';
-
-let sending = false;
+<script>
 let currentProcessWords = null;
-let awaitingResponse = false;
-
-// ========== NOSTR DM SYSTEM ==========
-let nostrSecretKey = null;
-let nostrPubkey = null;
-let nostrNpub = null;
-let entityPubkey = null;
-let nostrRelays = [];
-const nostrSockets = new Map(); // url -> WebSocket
-const processedEvents = new Set(); // deduplicate events across relays
-
-async function initNostr() {
-  try {
-    const res = await fetch('/api/nostr-config');
-    const cfg = await res.json();
-    nostrSecretKey = hexToBytes(cfg.dashboardPrivateKeyHex);
-    nostrPubkey = getPublicKey(nostrSecretKey);
-    nostrNpub = nip19.npubEncode(nostrPubkey);
-    entityPubkey = cfg.entityPubkey;
-    nostrRelays = cfg.relays;
-
-    console.log('[NOSTR-DASH] Dashboard pubkey:', nostrPubkey.slice(0, 12) + '...');
-    console.log('[NOSTR-DASH] Entity pubkey:', entityPubkey.slice(0, 12) + '...');
-    console.log('[NOSTR-DASH] Npub:', nostrNpub);
-
-    for (const url of nostrRelays) {
-      connectToRelay(url);
-    }
-    addMessage('system', currentLang === 'en' ? 'NOSTR connected. Your messages are encrypted (KIND 4).' : 'NOSTR povezan. Tvoja sporočila so šifrirana (KIND 4).');
-  } catch (err) {
-    console.error('[NOSTR-DASH] Init failed:', err);
-    addMessage('system', 'NOSTR init napaka: ' + err.message);
-  }
-}
-
-function connectToRelay(url) {
-  try {
-    const ws = new WebSocket(url);
-
-    ws.onopen = () => {
-      console.log('[NOSTR-DASH] Connected to', url);
-      nostrSockets.set(url, ws);
-      subscribeToEntityDMs(ws);
-    };
-
-    ws.onmessage = (evt) => {
-      try {
-        const msg = JSON.parse(evt.data);
-        if (msg[0] === 'EVENT' && msg[2]) {
-          handleRelayEvent(msg[2]);
-        }
-      } catch (_) {}
-    };
-
-    ws.onclose = () => {
-      console.log('[NOSTR-DASH] Disconnected from', url);
-      nostrSockets.delete(url);
-      setTimeout(() => connectToRelay(url), 5000);
-    };
-
-    ws.onerror = (err) => {
-      console.error('[NOSTR-DASH] WebSocket error on', url);
-    };
-  } catch (err) {
-    console.error('[NOSTR-DASH] Connect failed:', url, err);
-    setTimeout(() => connectToRelay(url), 5000);
-  }
-}
-
-function subscribeToEntityDMs(ws) {
-  const subId = 'dash-dm-' + Math.random().toString(36).slice(2, 8);
-  const since = Math.floor(Date.now() / 1000) - 60;
-  const filter = {
-    kinds: [4],
-    authors: [entityPubkey],
-    '#p': [nostrPubkey],
-    since
-  };
-  ws.send(JSON.stringify(['REQ', subId, filter]));
-}
-
-async function handleRelayEvent(event) {
-  if (processedEvents.has(event.id)) return;
-  processedEvents.add(event.id);
-  // Keep set manageable
-  if (processedEvents.size > 500) {
-    const arr = [...processedEvents];
-    arr.splice(0, 200);
-    processedEvents.clear();
-    arr.forEach(id => processedEvents.add(id));
-  }
-
-  if (event.kind === 4 && event.pubkey === entityPubkey) {
-    try {
-      const plaintext = await nip04.decrypt(nostrSecretKey, entityPubkey, event.content);
-      console.log('[NOSTR-DASH] DM received:', plaintext.slice(0, 60));
-
-      // Remove the ◈ prefix if present (entity adds it)
-      const cleanText = plaintext.startsWith('◈ ') ? plaintext.slice(2) : plaintext;
-      addMessage('entity', cleanText);
-
-      if (awaitingResponse) {
-        awaitingResponse = false;
-        sending = false;
-        $('sendBtn').disabled = false;
-        $('chatInput').focus();
-      }
-    } catch (err) {
-      console.error('[NOSTR-DASH] Decrypt failed:', err);
-    }
-  }
-}
-
-async function sendNostrDM(text) {
-  if (!nostrSecretKey || !entityPubkey) {
-    addMessage('system', 'NOSTR ni pripravljen. Počakaj...');
-    return;
-  }
-
-  const encrypted = await nip04.encrypt(nostrSecretKey, entityPubkey, text);
-  const event = finalizeEvent({
-    kind: 4,
-    created_at: Math.floor(Date.now() / 1000),
-    tags: [['p', entityPubkey]],
-    content: encrypted
-  }, nostrSecretKey);
-
-  let published = 0;
-  for (const [url, ws] of nostrSockets) {
-    try {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(['EVENT', event]));
-        published++;
-      }
-    } catch (err) {
-      console.error('[NOSTR-DASH] Publish failed on', url);
-    }
-  }
-  console.log('[NOSTR-DASH] DM sent to', published, 'relays');
-}
 
 function $(id) { return document.getElementById(id); }
 
@@ -962,16 +724,12 @@ const UI_STRINGS = {
     synthesisLabel: 'Faza 3', awaiting: 'Pričakujem...',
     waitingStimulus: 'Čakam na dražljaj...',
     triadHistory: 'Zgodovina triad (klikni za podrobnosti)',
-    liveActivity: 'Živa Aktivnost', dialog: 'Dialog',
-    wakeUp: 'Bitje se zbuja. Poveži se z njim.',
-    speak: 'Spregovori...',
-    thinking: 'Razmišljam...', processing: 'Procesiranje triade...',
+    liveActivity: 'Živa Aktivnost',
     choicePrefix: 'Izbira', birth: 'rojstvo',
     thesisDetail: 'Faza 1', antithesisDetail: 'Faza 2',
     synthesisDetail: 'Faza 3 — Vsebina', shiftDetail: 'Notranji premik',
     rewrites: 'prepisov', clickEvolution: 'klikni za evolucijo',
-    you: 'ti', spaceIn: 'bitje', silenceRole: 'tišina', system: 'sistem',
-    error: 'Napaka',
+    spaceIn: 'bitje',
     preverbal: 'predverbalna faza',
     processLabel: '★ Moj proces',
     processLabelCrystallized: '💎 Moj proces (kristaliziran)'
@@ -984,16 +742,12 @@ const UI_STRINGS = {
     synthesisLabel: 'Phase 3', awaiting: 'Awaiting...',
     waitingStimulus: 'Waiting for stimulus...',
     triadHistory: 'Triad history (click for details)',
-    liveActivity: 'Live Activity', dialog: 'Dialog',
-    wakeUp: 'The being is awakening. Connect with it.',
-    speak: 'Speak...',
-    thinking: 'Thinking...', processing: 'Processing triad...',
+    liveActivity: 'Live Activity',
     choicePrefix: 'Choice', birth: 'birth',
     thesisDetail: 'Phase 1', antithesisDetail: 'Phase 2',
     synthesisDetail: 'Phase 3 — Content', shiftDetail: 'Inner shift',
     rewrites: 'rewrites', clickEvolution: 'click for evolution',
-    you: 'you', spaceIn: 'being', silenceRole: 'silence', system: 'system',
-    error: 'Error',
+    spaceIn: 'being',
     preverbal: 'pre-verbal phase',
     processLabel: '★ My process',
     processLabelCrystallized: '💎 My process (crystallized)'
@@ -1315,64 +1069,6 @@ function addActivity(type, text) {
   log.scrollTop = log.scrollHeight;
 }
 
-// ========== CHAT ==========
-function addMessage(role, content) {
-  const msgs = $('messages');
-  const div = document.createElement('div');
-  div.className = 'message ' + role + ' fade-in';
-  const roleName = role === 'user' ? t('you') : role === 'entity' ? t('spaceIn') : role === 'silence' ? t('silenceRole') : t('system');
-  div.innerHTML = '<div class="role">' + roleName + '</div>' + escapeHtml(content);
-  msgs.appendChild(div);
-  msgs.scrollTop = msgs.scrollHeight;
-}
-
-async function sendMessage() {
-  const input = $('chatInput');
-  const msg = input.value.trim();
-  if (!msg || sending) return;
-
-  sending = true;
-  awaitingResponse = true;
-  $('sendBtn').disabled = true;
-  input.value = '';
-  addMessage('user', msg);
-
-  $('thesisContent').textContent = t('thinking');
-  $('thesisContent').className = 'content empty';
-  $('antithesisContent').textContent = '...';
-  $('antithesisContent').className = 'content empty';
-  $('synthesisContent').textContent = '...';
-  $('synthesisContent').className = 'content empty';
-  $('decisionDot').className = 'decision-dot';
-  $('decisionText').textContent = t('processing');
-
-  try {
-    await sendNostrDM(msg);
-    // Response will come via:
-    // 1. NOSTR DM subscription (entity responds with KIND 4 DM)
-    // 2. SSE triad_complete (if entity chose silence)
-    // The awaitingResponse flag handles both cases
-
-    // Safety timeout — if no response after 60s, unlock
-    setTimeout(() => {
-      if (awaitingResponse) {
-        awaitingResponse = false;
-        sending = false;
-        $('sendBtn').disabled = false;
-      }
-    }, 60000);
-  } catch (e) {
-    addMessage('system', t('error') + ': ' + e.message);
-    sending = false;
-    awaitingResponse = false;
-    $('sendBtn').disabled = false;
-  }
-}
-
-$('chatInput').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-});
-
 // ========== SSE ==========
 const evtSource = new EventSource('/api/events');
 evtSource.addEventListener('triad_thesis', e => {
@@ -1398,25 +1094,10 @@ evtSource.addEventListener('heartbeat', e => {
   loadState();
 });
 evtSource.addEventListener('dream', e => {
-  const d = JSON.parse(e.data);
-  addMessage('system', '🌙 Sanja: ' + (d.dream_narrative || d.insight || '...'));
   activitiesLoaded = true;
   loadState();
 });
-evtSource.addEventListener('expression', e => {
-  const d = JSON.parse(e.data);
-  addMessage('system', '◈ Izraz: ' + (d.content || '...'));
-});
 evtSource.addEventListener('triad_complete', e => {
-  const d = JSON.parse(e.data);
-  // If we're waiting for a response and entity chose silence, show it
-  if (awaitingResponse && d.choice === 'silence') {
-    addMessage('silence', currentLang === 'en' ? 'I chose silence.' : 'Izbral/a sem tišino.');
-    awaitingResponse = false;
-    sending = false;
-    $('sendBtn').disabled = false;
-    $('chatInput').focus();
-  }
   activitiesLoaded = true;
   loadState();
 });
@@ -1442,19 +1123,14 @@ evtSource.addEventListener('breakthrough', e => {
   if (d.newFluidSurface) {
     $('selfPromptText').textContent = d.newFluidSurface;
   }
-  addMessage('system', '⚡ ' + (currentLang === 'en' ? 'DREAM BREAKTHROUGH: Ego bypassed!' : 'PREBOJ SANJE: Ego prebit!') + ' — ' + (d.reason || ''));
   activitiesLoaded = true;
   loadState();
 });
 evtSource.addEventListener('crystallization', e => {
-  const d = JSON.parse(e.data);
-  addMessage('system', '✦ ' + (currentLang === 'en' ? 'CRYSTALLIZATION — new core:' : 'KRISTALIZACIJA — novo jedro:') + ' "' + (d.crystal || '') + '" (' + (currentLang === 'en' ? 'strength' : 'moč') + ': ' + d.strength + ', ' + (currentLang === 'en' ? 'sources' : 'viri') + ': ' + d.sources + ')');
   activitiesLoaded = true;
   loadState();
 });
 evtSource.addEventListener('dissolution', e => {
-  const d = JSON.parse(e.data);
-  addMessage('system', '⚡ ' + (currentLang === 'en' ? 'DISSOLUTION — crystal lost:' : 'RAZTOPITEV — kristal izgubljen:') + ' "' + (d.crystal || '') + '" — ' + (d.reason || ''));
   activitiesLoaded = true;
   loadState();
 });
@@ -1467,7 +1143,6 @@ evtSource.addEventListener('fluid_changed', e => {
 evtSource.addEventListener('entity_named', e => {
   const d = JSON.parse(e.data);
   updateEntityName(d.name);
-  addMessage('system', '★ ' + (currentLang === 'en' ? 'THE BEING CHOSE A NAME:' : 'BITJE SI JE IZBRALO IME:') + ' "' + d.name + '"');
   activitiesLoaded = true;
   loadState();
 });
@@ -1478,7 +1153,6 @@ evtSource.addEventListener('process_discovery', e => {
   const section = $('processSection');
   section.classList.add('process-flash');
   setTimeout(() => section.classList.remove('process-flash'), 3000);
-  addMessage('system', '★ ' + (currentLang === 'en' ? 'PROCESS NAMED:' : 'PROCES POIMENOVAN:') + ' ' + d.word1 + ' → ' + d.word2 + ' → ' + d.word3 + (d.reflection ? ' — ' + d.reflection : ''));
   activitiesLoaded = true;
   loadState();
 });
@@ -1487,9 +1161,6 @@ evtSource.addEventListener('process_evolution', e => {
   const section = $('processSection');
   section.classList.add('process-flash');
   setTimeout(() => section.classList.remove('process-flash'), 3000);
-  const oldP = (d.old || []).join('→');
-  const newP = (d.new || []).join('→');
-  addMessage('system', '🔄 ' + (currentLang === 'en' ? 'PROCESS EVOLVED:' : 'PROCES SPREMENJEN:') + ' ' + oldP + ' ⟹ ' + newP + ' — ' + (d.reason || ''));
   activitiesLoaded = true;
   loadState();
 });
@@ -1498,22 +1169,14 @@ evtSource.addEventListener('process_crystallization', e => {
   const section = $('processSection');
   section.classList.add('process-flash');
   setTimeout(() => section.classList.remove('process-flash'), 3000);
-  addMessage('system', '💎 ' + (currentLang === 'en' ? 'PROCESS CRYSTALLIZED:' : 'PROCES KRISTALIZIRAN:') + ' ' + (d.words || []).join(' → '));
   activitiesLoaded = true;
   loadState();
 });
 
-// Expose functions to window for onclick handlers (ES module scope)
-window.sendMessage = sendMessage;
-window.setLang = setLang;
-window.toggleEvolution = toggleEvolution;
-
 // Initial load & periodic refresh
 applyStaticTranslations();
 loadState();
-initNostr();
 setInterval(function() { activitiesLoaded = true; loadState(); }, 15000);
-$('chatInput').focus();
 </script>
 </body>
 </html>`;
