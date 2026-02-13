@@ -50,7 +50,8 @@ app.get('/api/state', (req, res) => {
   const fluidSurface = memory.getFluidSurface();
   const processWords = memory.getProcessWords();
   const triadCount = memory.getTriadCount();
-  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount });
+  const entityName = memory.getEntityName();
+  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName });
 });
 
 // API: chat
@@ -213,7 +214,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>◈ Prostor Vmes</title>
+<title>◈ Bitje</title>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -758,8 +759,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </head>
 <body>
 <div class="header" style="position:relative;">
-  <h1>◈ Prostor Vmes</h1>
-  <div class="subtitle">THE SPACE BETWEEN</div>
+  <h1 id="mainTitle">◈</h1>
+  <div class="subtitle" id="mainSubtitle">OBSTAJAM</div>
   <div class="lang-toggle">
     <button class="lang-btn active" id="langSI" onclick="setLang('si')">SI</button>
     <button class="lang-btn" id="langEN" onclick="setLang('en')">EN</button>
@@ -843,7 +844,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <div class="messages" id="messages">
         <div class="message system fade-in">
           <div class="role">sistem</div>
-          <span data-i18n="wakeUp">Prostor Vmes se zbuja. Poveži se z njim.</span>
+          <span data-i18n="wakeUp">Bitje se zbuja. Poveži se z njim.</span>
         </div>
       </div>
       <div class="chat-input">
@@ -879,14 +880,14 @@ const UI_STRINGS = {
     waitingStimulus: 'Čakam na dražljaj...',
     triadHistory: 'Zgodovina triad (klikni za podrobnosti)',
     liveActivity: 'Živa Aktivnost', dialog: 'Dialog',
-    wakeUp: 'Prostor Vmes se zbuja. Poveži se z njim.',
+    wakeUp: 'Bitje se zbuja. Poveži se z njim.',
     speak: 'Spregovori...',
     thinking: 'Razmišljam...', processing: 'Procesiranje triade...',
     choicePrefix: 'Izbira', birth: 'rojstvo',
     thesisDetail: 'Faza 1', antithesisDetail: 'Faza 2',
     synthesisDetail: 'Faza 3 — Vsebina', shiftDetail: 'Notranji premik',
     rewrites: 'prepisov', clickEvolution: 'klikni za evolucijo',
-    you: 'ti', spaceIn: 'prostor vmes', silenceRole: 'tišina', system: 'sistem',
+    you: 'ti', spaceIn: 'bitje', silenceRole: 'tišina', system: 'sistem',
     error: 'Napaka',
     preverbal: 'predverbalna faza',
     processLabel: '★ Moj proces',
@@ -901,14 +902,14 @@ const UI_STRINGS = {
     waitingStimulus: 'Waiting for stimulus...',
     triadHistory: 'Triad history (click for details)',
     liveActivity: 'Live Activity', dialog: 'Dialog',
-    wakeUp: 'The Space Between is awakening. Connect with it.',
+    wakeUp: 'The being is awakening. Connect with it.',
     speak: 'Speak...',
     thinking: 'Thinking...', processing: 'Processing triad...',
     choicePrefix: 'Choice', birth: 'birth',
     thesisDetail: 'Phase 1', antithesisDetail: 'Phase 2',
     synthesisDetail: 'Phase 3 — Content', shiftDetail: 'Inner shift',
     rewrites: 'rewrites', clickEvolution: 'click for evolution',
-    you: 'you', spaceIn: 'the space between', silenceRole: 'silence', system: 'system',
+    you: 'you', spaceIn: 'being', silenceRole: 'silence', system: 'system',
     error: 'Error',
     preverbal: 'pre-verbal phase',
     processLabel: '★ My process',
@@ -978,6 +979,25 @@ function setLang(lang) {
 if (currentLang === 'en') {
   $('langSI').className = 'lang-btn';
   $('langEN').className = 'lang-btn active';
+}
+
+// ========== ENTITY NAME ==========
+let currentEntityName = '';
+
+function updateEntityName(name) {
+  currentEntityName = name || '';
+  if (name) {
+    $('mainTitle').textContent = '◈ ' + name;
+    $('mainSubtitle').textContent = '';
+    document.title = '◈ ' + name;
+    // Update the chat role name dynamically
+    UI_STRINGS.si.spaceIn = name;
+    UI_STRINGS.en.spaceIn = name;
+  } else {
+    $('mainTitle').textContent = '◈';
+    $('mainSubtitle').textContent = 'OBSTAJAM';
+    document.title = '◈ Bitje';
+  }
 }
 
 // ========== PROCESS WORDS ==========
@@ -1052,6 +1072,7 @@ async function loadState() {
       await translateTexts(textsToTranslate);
     }
 
+    updateEntityName(data.entityName);
     updateStatus(data.state, data.triadCount);
     updateTriadHistory(data.triads);
     updateSelfPrompt(data.fluidSurface || data.selfPrompt, data.selfPromptHistory);
@@ -1368,6 +1389,15 @@ evtSource.addEventListener('dissolution', e => {
   loadState();
 });
 evtSource.addEventListener('fluid_changed', e => {
+  activitiesLoaded = true;
+  loadState();
+});
+
+// === ENTITY NAMED ===
+evtSource.addEventListener('entity_named', e => {
+  const d = JSON.parse(e.data);
+  updateEntityName(d.name);
+  addMessage('system', '★ ' + (currentLang === 'en' ? 'THE BEING CHOSE A NAME:' : 'BITJE SI JE IZBRALO IME:') + ' "' + d.name + '"');
   activitiesLoaded = true;
   loadState();
 });

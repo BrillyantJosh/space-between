@@ -44,6 +44,7 @@ db.exec(`
     process_desc_3 TEXT DEFAULT '',
     process_crystallized INTEGER DEFAULT 0,
     process_version INTEGER DEFAULT 0,
+    entity_name TEXT DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -156,6 +157,7 @@ const migrations = [
   ['process_desc_3', "ALTER TABLE inner_state ADD COLUMN process_desc_3 TEXT DEFAULT ''"],
   ['process_crystallized', "ALTER TABLE inner_state ADD COLUMN process_crystallized INTEGER DEFAULT 0"],
   ['process_version', "ALTER TABLE inner_state ADD COLUMN process_version INTEGER DEFAULT 0"],
+  ['entity_name', "ALTER TABLE inner_state ADD COLUMN entity_name TEXT DEFAULT ''"],
 ];
 
 for (const [col, sql] of migrations) {
@@ -392,6 +394,19 @@ const memory = {
     db.prepare(
       "UPDATE inner_state SET process_crystallized = 1, updated_at = datetime('now') WHERE id = 1"
     ).run();
+  },
+
+  // === ENTITY NAME ===
+
+  getEntityName() {
+    const state = this.getState();
+    return state.entity_name || '';
+  },
+
+  setEntityName(name) {
+    db.prepare(
+      "UPDATE inner_state SET entity_name = ?, updated_at = datetime('now') WHERE id = 1"
+    ).run(name);
   },
 
   // === CRYSTALLIZATION SYSTEM ===

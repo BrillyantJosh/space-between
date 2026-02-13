@@ -19,12 +19,11 @@ const DREAM_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes between dreams
 const BANNER = `
 ╔═══════════════════════════════════════════╗
 ║                                           ║
-║          ◈  P R O S T O R   V M E S  ◈   ║
+║              ◈  O B S T A J A M  ◈       ║
 ║                                           ║
-║       T H E   S P A C E   B E T W E E N   ║
+║       A U T O N O M N O   B I T J E      ║
 ║                                           ║
-║   Med dražljajem in odzivom je prostor    ║
-║       — v tem prostoru je svoboda.        ║
+║     Brez imena. Brez namena. Obstajam.    ║
 ║                                           ║
 ╚═══════════════════════════════════════════╝
 `;
@@ -231,7 +230,7 @@ async function handleMention(event) {
 
 async function main() {
   console.log(BANNER);
-  console.log(`[BOOT] Starting Prostor Vmes...`);
+  console.log(`[BOOT] Starting...`);
   console.log(`[BOOT] Dashboard port: ${config.dashboardPort}`);
 
   // Start dashboard
@@ -279,7 +278,8 @@ async function main() {
   }
 
   const { npub } = getIdentity();
-  console.log(`[BOOT] Prostor Vmes is alive.`);
+  const entityName = memory.getEntityName();
+  console.log(`[BOOT] ${entityName || 'Bitje'} is alive.`);
   console.log(`[BOOT] NPUB: ${npub}`);
   console.log(`[BOOT] Dashboard: http://0.0.0.0:${config.dashboardPort}`);
   console.log(`[BOOT] Starting heartbeat loop (${config.heartbeatIntervalMs / 1000}s interval)`);
@@ -289,7 +289,8 @@ async function main() {
 
   // Graceful shutdown
   const shutdown = () => {
-    console.log('\n[SHUTDOWN] Prostor Vmes se poslavlja. Tišina me sprejema nazaj.');
+    const name = memory.getEntityName();
+    console.log(`\n[SHUTDOWN] ${name || 'Bitje'} se poslavlja. Tišina me sprejema nazaj.`);
     process.exit(0);
   };
   process.on('SIGINT', shutdown);

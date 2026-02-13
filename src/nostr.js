@@ -80,6 +80,19 @@ export async function publishProfile() {
   console.log('[NOSTR] Profile published (KIND 0)');
 }
 
+export async function updateProfile(updates) {
+  const profile = { ...config.profile, ...updates };
+  const content = JSON.stringify(profile);
+  const event = signEvent({
+    kind: 0,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [],
+    content
+  });
+  await publishToAll(event);
+  console.log(`[NOSTR] Profile updated (KIND 0): name="${updates.name || ''}"`);
+}
+
 export async function publishNote(text) {
   const event = signEvent({
     kind: 1,
