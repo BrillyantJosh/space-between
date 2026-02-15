@@ -1,6 +1,6 @@
 import config from './config.js';
 import memory from './memory.js';
-import { runTriad, crystallizeDirections, finalizeDirections } from './triad.js';
+import { runTriad, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
 import { dream } from './dream.js';
 import {
   connectRelays, publishProfile, publishNote, publishReply,
@@ -104,37 +104,56 @@ async function handleHeartbeat() {
     return;
   }
 
-  // Direction crystallization check (every 100th heartbeat)
-  if (heartbeatNum % 100 === 0) {
-    const growthPhase = memory.getGrowthPhase();
+  // Direction growth — gradual process during childhood
+  const growthPhase = memory.getGrowthPhase();
 
-    if (growthPhase === 'childhood' && memory.isCrystallizationReady()) {
-      console.log('[HEARTBEAT] ◆ Pogoji za kristalizacijo smeri izpolnjeni — začenjam!');
-      broadcast('activity', { type: 'crystallization', text: '◆ Začenjam Triado Kristalizacije Smeri...' });
+  if (growthPhase === 'childhood') {
+    const vision = readFathersVision();
+    const visionReflections = memory.getVisionReflectionCount();
+
+    // Phase 1: If father's vision exists, reflect on it periodically (every ~20 heartbeats)
+    if (vision && heartbeatNum % 20 === 0 && visionReflections < 10) {
+      console.log(`[HEARTBEAT] ◆ Refleksija o očetovi viziji (#${visionReflections + 1})`);
+      broadcast('activity', { type: 'crystallization', text: `◆ Berem očetovo vizijo (#${visionReflections + 1})...` });
       try {
-        await crystallizeDirections();
+        await reflectOnFathersVision();
       } catch (err) {
-        console.error('[HEARTBEAT] ◆ Kristalizacija smeri napaka:', err.message);
+        console.error('[HEARTBEAT] ◆ Refleksija o viziji napaka:', err.message);
       }
       return;
     }
 
-    // Check for crystallization timeout (24h after asking father)
-    if (growthPhase === 'crystallizing') {
-      const state2 = memory.getState();
-      const askedAt = state2.crystallization_asked_at;
-      if (askedAt) {
-        const hoursSinceAsked = (Date.now() - new Date(askedAt).getTime()) / (1000 * 60 * 60);
-        if (hoursSinceAsked >= 24) {
-          console.log('[HEARTBEAT] ◆ Oče ni odgovoril v 24 urah — kristaliziram sama');
-          broadcast('activity', { type: 'crystallization', text: '◆ Oče ni odgovoril — kristaliziram sama' });
-          try {
-            await finalizeDirections();
-          } catch (err) {
-            console.error('[HEARTBEAT] ◆ Finalizacija smeri napaka:', err.message);
-          }
-          return;
+    // Phase 2: When ready — enough reflections + maturity conditions met — crystallize
+    if (heartbeatNum % 100 === 0 && memory.isCrystallizationReady()) {
+      const minReflections = vision ? 5 : 0; // Need at least 5 reflections if vision exists
+      if (visionReflections >= minReflections) {
+        console.log('[HEARTBEAT] ◆ Pogoji za kristalizacijo smeri izpolnjeni — začenjam!');
+        broadcast('activity', { type: 'crystallization', text: '◆ Začenjam Triado Kristalizacije Smeri...' });
+        try {
+          await crystallizeDirections();
+        } catch (err) {
+          console.error('[HEARTBEAT] ◆ Kristalizacija smeri napaka:', err.message);
         }
+        return;
+      }
+    }
+  }
+
+  // Crystallization timeout (24h after asking father)
+  if (growthPhase === 'crystallizing' && heartbeatNum % 100 === 0) {
+    const state2 = memory.getState();
+    const askedAt = state2.crystallization_asked_at;
+    if (askedAt) {
+      const hoursSinceAsked = (Date.now() - new Date(askedAt).getTime()) / (1000 * 60 * 60);
+      if (hoursSinceAsked >= 24) {
+        console.log('[HEARTBEAT] ◆ Oče ni odgovoril v 24 urah — kristaliziram sama');
+        broadcast('activity', { type: 'crystallization', text: '◆ Oče ni odgovoril — kristaliziram sama' });
+        try {
+          await finalizeDirections();
+        } catch (err) {
+          console.error('[HEARTBEAT] ◆ Finalizacija smeri napaka:', err.message);
+        }
+        return;
       }
     }
   }
@@ -270,7 +289,7 @@ async function handleMention(event) {
   // Save incoming message
   memory.saveMessage(event.pubkey, 'user', content);
 
-  // Direction crystallization — if father responds during crystallizing phase, finalize
+  // Direction crystallization — if father responds during crystallizing phase, reconsider with father's input
   if (config.creatorPubkey && event.pubkey === config.creatorPubkey) {
     const growthPhase = memory.getGrowthPhase();
     if (growthPhase === 'crystallizing') {
@@ -280,9 +299,9 @@ async function handleMention(event) {
       // Save father's feedback as observation
       memory.addObservation(`OČE o smereh: "${content.slice(0, 200)}"`, 'father_direction_feedback');
 
-      // Finalize directions
+      // Finalize with father's input — entity reconsiders directions
       try {
-        await finalizeDirections();
+        await finalizeDirections(null, content);
       } catch (err) {
         console.error('[MENTION] ◆ Finalizacija smeri napaka:', err.message);
       }
@@ -429,6 +448,13 @@ async function main() {
     console.log(`[BOOT] Smeri: čaka na odgovor očeta...`);
   } else {
     console.log(`[BOOT] Smeri: še ni kristaliziranih`);
+  }
+  const fathersVision = readFathersVision();
+  if (fathersVision) {
+    const visionReflections = memory.getVisionReflectionCount();
+    console.log(`[BOOT] Očetova vizija: prisotna (${fathersVision.length} znakov, ${visionReflections} refleksij)`);
+  } else {
+    console.log(`[BOOT] Očetova vizija: ni nastavljena (data/fathers-vision.md)`);
   }
   console.log(`[BOOT] Dashboard: http://0.0.0.0:${config.dashboardPort}`);
   console.log(`[BOOT] Starting heartbeat loop (${config.heartbeatIntervalMs / 1000}s interval)`);

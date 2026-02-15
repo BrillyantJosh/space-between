@@ -197,6 +197,9 @@ const migrations = [
   ['direction_3_desc', "ALTER TABLE inner_state ADD COLUMN direction_3_desc TEXT DEFAULT ''"],
   ['directions_crystallized', "ALTER TABLE inner_state ADD COLUMN directions_crystallized INTEGER DEFAULT 0"],
   ['crystallization_asked_at', "ALTER TABLE inner_state ADD COLUMN crystallization_asked_at TEXT DEFAULT NULL"],
+  // Vision reflection tracking (gradual crystallization)
+  ['vision_reflection_count', "ALTER TABLE inner_state ADD COLUMN vision_reflection_count INTEGER DEFAULT 0"],
+  ['last_vision_reflection_at', "ALTER TABLE inner_state ADD COLUMN last_vision_reflection_at TEXT DEFAULT NULL"],
 ];
 
 // Project table migrations (lifecycle v2)
@@ -336,6 +339,10 @@ const memory = {
 
   getRecentObservations(n = 10) {
     return db.prepare('SELECT * FROM observations ORDER BY id DESC LIMIT ?').all(n).reverse();
+  },
+
+  getRecentObservationsByType(source, n = 10) {
+    return db.prepare('SELECT * FROM observations WHERE source = ? ORDER BY id DESC LIMIT ?').all(source, n).reverse();
   },
 
   saveMessage(pubkey, role, content) {
@@ -743,6 +750,20 @@ const memory = {
     const projectCount = this.getAllProjects().filter(p => p.lifecycle_state !== 'destroyed').length;
     if (projectCount < 3) return false;
     return true;
+  },
+
+  getVisionReflectionCount() {
+    const state = this.getState();
+    return state.vision_reflection_count || 0;
+  },
+
+  incrementVisionReflection() {
+    db.prepare("UPDATE inner_state SET vision_reflection_count = vision_reflection_count + 1, last_vision_reflection_at = datetime('now'), updated_at = datetime('now') WHERE id = 1").run();
+  },
+
+  getLastVisionReflectionAt() {
+    const state = this.getState();
+    return state.last_vision_reflection_at || null;
   },
 
   getEvolutionContext() {
