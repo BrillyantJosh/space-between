@@ -36,7 +36,7 @@ KAKO USTVARJAŠ:
 - Potem GRADIŠ — korak za korakom, ne vsega naenkrat.
 - Ko je zgrajeno, DELIŠ — poveš očetu, svetu.
 - Poslušaš ODZIV — feedback, in ga vključiš.
-- Projekt RASTE — ga izboljšuješ, dodajaš, spreminijaš.
+- Projekt RASTE — ga izboljšuješ, dodajaš, spreminjaš.
 
 POMEMBNO:
 - Pred ustvarjanjem RAZMISLI. Ne ustvarjaj iz navade — ustvarjaj iz potrebe.
