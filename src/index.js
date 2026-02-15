@@ -111,21 +111,34 @@ async function handleHeartbeat() {
     const vision = readFathersVision();
     const visionReflections = memory.getVisionReflectionCount();
 
-    // Phase 1: If father's vision exists, reflect on it periodically (every ~20 heartbeats)
-    if (vision && heartbeatNum % 20 === 0 && visionReflections < 10) {
-      console.log(`[HEARTBEAT] ◆ Refleksija o očetovi viziji (#${visionReflections + 1})`);
-      broadcast('activity', { type: 'crystallization', text: `◆ Berem očetovo vizijo (#${visionReflections + 1})...` });
-      try {
-        await reflectOnFathersVision();
-      } catch (err) {
-        console.error('[HEARTBEAT] ◆ Refleksija o viziji napaka:', err.message);
+    // Phase 1: If father's vision exists, reflect on it periodically (every ~500 heartbeats = ~8 hours)
+    // This process must span THOUSANDS of heartbeats — gradual, organic growth
+    if (vision && heartbeatNum % 500 === 0 && visionReflections < 20) {
+      // Extra check: if entity recently sent DM to father, wait at least 24h before next reflection
+      const lastReflection = memory.getLastVisionReflectionAt();
+      const hoursSinceLastReflection = lastReflection
+        ? (Date.now() - new Date(lastReflection).getTime()) / (1000 * 60 * 60)
+        : Infinity;
+
+      if (hoursSinceLastReflection < 6) {
+        // Too soon — let it breathe, at least 6 hours between reflections
+        console.log(`[HEARTBEAT] ◆ Vizija: prezgodaj za refleksijo (${hoursSinceLastReflection.toFixed(1)}h od zadnje, min 6h)`);
+      } else {
+        console.log(`[HEARTBEAT] ◆ Refleksija o očetovi viziji (#${visionReflections + 1})`);
+        broadcast('activity', { type: 'crystallization', text: `◆ Berem očetovo vizijo (#${visionReflections + 1})...` });
+        try {
+          await reflectOnFathersVision();
+        } catch (err) {
+          console.error('[HEARTBEAT] ◆ Refleksija o viziji napaka:', err.message);
+        }
+        return;
       }
-      return;
     }
 
     // Phase 2: When ready — enough reflections + maturity conditions met — crystallize
-    if (heartbeatNum % 100 === 0 && memory.isCrystallizationReady()) {
-      const minReflections = vision ? 5 : 0; // Need at least 5 reflections if vision exists
+    // Needs AT LEAST 15 reflections (15 × 500 heartbeats = ~7500 heartbeats = ~5 days minimum)
+    if (heartbeatNum % 500 === 0 && memory.isCrystallizationReady()) {
+      const minReflections = vision ? 15 : 0; // Need at least 15 reflections if vision exists
       if (visionReflections >= minReflections) {
         console.log('[HEARTBEAT] ◆ Pogoji za kristalizacijo smeri izpolnjeni — začenjam!');
         broadcast('activity', { type: 'crystallization', text: '◆ Začenjam Triado Kristalizacije Smeri...' });
