@@ -220,16 +220,16 @@ export async function deliberateProject(projectName, thought, triadId = null) {
 }
 
 // =============================================
-// 3. PLAN — naredi konkreten načrt (kliče Anthropic)
+// 3. BUILD PROJECT — zgradi celoten projekt v enem koraku
 // =============================================
 
-export async function planProject(projectName, triadId = null) {
+export async function buildProject(projectName, triadId = null) {
   if (!isROKEEnabled()) return { success: false, reason: 'ROKE niso konfigurirane' };
 
   const project = memory.getProject(projectName);
   if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
   if (!['seed', 'deliberating'].includes(project.lifecycle_state)) {
-    return { success: false, reason: `Projekt ni pripravljen za načrtovanje (${project.lifecycle_state})` };
+    return { success: false, reason: `Projekt ni pripravljen za gradnjo (${project.lifecycle_state})` };
   }
 
   // Gather all deliberation steps
@@ -237,193 +237,126 @@ export async function planProject(projectName, triadId = null) {
   const deliberations = steps.filter(s => s.step_type === 'deliberation' || s.step_type === 'seed');
   const deliberationText = deliberations.map(d => `- ${d.content}`).join('\n');
 
-  console.log(`[ROKE] 📐 Načrtujem projekt "${projectName}"...`);
-  broadcast('activity', { type: 'creation', text: `📐 NAČRTOVANJE: "${projectName}"` });
+  console.log(`[ROKE] 🔨 Gradim celoten projekt "${projectName}"...`);
+  memory.advanceProjectState(projectName, 'building');
+  broadcast('activity', { type: 'creation', text: `🔨 GRADNJA: "${projectName}" — celoten projekt` });
 
-  const planSystem = `Si ustvarjalec spletnih projektov. Govoriš slovensko.
-Ustvariš načrt za statični spletni projekt (HTML/CSS/JS).
-Projekt mora biti samozadosten — en sam direktorij z index.html kot vstopno točko.
-Ne smeš uporabljati zunanjih odvisnosti (npm, CDN knjižnice) razen če je nujno (npr. Google Fonts).
-Vedno vrni JSON in nič drugega.`;
+  // Get entity's crystallized directions for context
+  const directions = memory.getDirections();
+  const dirContext = directions.crystallized
+    ? `\nTVOJE KRISTALIZIRANE SMERI:\n1. ${directions.direction_1}: ${directions.direction_1_desc}\n2. ${directions.direction_2}: ${directions.direction_2_desc}\n3. ${directions.direction_3}: ${directions.direction_3_desc}\nTa projekt mora služiti eni od teh smeri.\n`
+    : '';
 
-  const planPrompt = `PROJEKT: ${project.display_name}
+  // Different build strategy based on direction
+  if (project.direction === 'internal') {
+    // Internal: generate markdown proposal
+    const specSystem = `Si arhitekt sistema ki piše podrobne tehnične predloge za izboljšave avtonomne entitete.
+Piši v slovenščini. Napiši jasen, konkreten predlog v markdown formatu.
+Vrni SAMO markdown vsebino — brez ograditev.`;
+
+    const specPrompt = `PREDLOG IZBOLJŠAVE: ${project.display_name}
 OPIS: ${project.description}
-SMER: ${project.direction}
+${dirContext}
+RAZMISLEKI:
+${deliberationText}
 
+Napiši podroben predlog (15-30 vrstic markdown) ki opisuje:
+1. Kaj bi spremenil/a
+2. Zakaj je to koristno
+3. Kako bi to implementiral/a
+4. Kakšna tveganja so
+5. Koraki implementacije
+
+Format: Markdown. Vrni SAMO vsebino.`;
+
+    const spec = await callAnthropicLLM(specSystem, specPrompt, { temperature: 0.4, maxTokens: 2048 });
+
+    if (!spec) {
+      memory.advanceProjectState(projectName, 'deliberating');
+      return { success: false, reason: 'Generiranje predloga ni uspelo' };
+    }
+
+    const projectDir = getProjectDir(projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const content = stripCodeFences(spec);
+    fs.writeFileSync(path.join(projectDir, 'predlog.md'), content, 'utf8');
+    memory.updateProject(projectName, { file_count: 1, entry_file: 'predlog.md' });
+
+  } else {
+    // External/Artistic: generate single index.html with inline CSS+JS
+    const buildSystem = `Si ustvarjalec spletnih projektov. Govoriš slovensko.
+Zgradiš CELOTEN projekt kot ENO SAMO index.html datoteko.
+Vključi CSS v <style> tag in JavaScript v <script> tag — vse v enem fajlu.
+Projekt mora DELOVATI ko ga odpreš v browserju — vsi gumbi, forme, navigacija morajo biti funkcionalni.
+Ne smeš uporabljati zunanjih odvisnosti razen Google Fonts.
+Vrni SAMO HTML kodo — brez razlage, brez markdown ograditev.`;
+
+    const buildPrompt = `PROJEKT: ${project.display_name}
+OPIS: ${project.description}
+SMER: ${project.direction === 'external' ? 'Za svet — funkcionalna stran/servis' : 'Umetniški izraz — kreativno, vizualno lepo'}
+${dirContext}
 RAZMISLEKI O TEM PROJEKTU:
 ${deliberationText}
 
-Ustvari podroben načrt za ta projekt. Vrni JSON:
-{
-  "name": "${projectName}",
-  "display_name": "${project.display_name}",
-  "description": "Posodobljen opis po razmisleku (1-2 stavka)",
-  "files": [
-    { "path": "index.html", "purpose": "Glavna stran" },
-    { "path": "style.css", "purpose": "Stili" }
-  ]
-}
+ZGRADI celoten projekt kot ENO index.html datoteko.
+Zahteve:
+- HTML5 z <meta charset="UTF-8"> in viewport meta
+- CSS v <style> tagu v <head>
+- JavaScript v <script> tagu pred </body>
+- Responziven dizajn
+- Vsi gumbi in forme morajo DELOVATI (event listeners!)
+- Lepa vizualna podoba
+- Slovensko besedilo
+- Podatke shranjuj v localStorage
 
-Pravila:
-- Največ ${SECURITY.maxFilesPerProject} datotek
-- Samo dovoljene končnice: ${SECURITY.allowedExtensions.join(', ')}
-- Vedno vključi index.html
-- Če je smer "artistic" — napravi nekaj vizualno lepega, kreativnega
-- Če je smer "internal" — napiši predlog/specifikacijo kot markdown
-- Če je smer "external" — napravi funkcionalno stran/servis`;
+VRNI SAMO HTML KODO. Brez razlage. Brez markdown ograditev.`;
 
-  const plan = await callAnthropicLLMJSON(planSystem, planPrompt, { temperature: 0.4, maxTokens: 1024 });
+    const content = await callAnthropicLLM(buildSystem, buildPrompt, { temperature: 0.4, maxTokens: 16000 });
 
-  if (!plan || !plan.files || !plan.files.length) {
-    console.error('[ROKE] Načrtovanje ni uspelo');
-    return { success: false, reason: 'Načrtovanje ni uspelo' };
-  }
+    if (!content) {
+      memory.advanceProjectState(projectName, 'deliberating');
+      console.error(`[ROKE] Generiranje projekta "${projectName}" ni uspelo`);
+      return { success: false, reason: 'Generiranje projekta ni uspelo' };
+    }
 
-  // Enforce file limit
-  plan.files = plan.files.slice(0, SECURITY.maxFilesPerProject);
+    const cleanContent = stripCodeFences(content);
 
-  // Save plan
-  memory.setProjectPlan(projectName, plan);
-  if (plan.description) {
-    memory.updateProject(projectName, { description: plan.description });
-  }
-  if (plan.display_name) {
-    memory.updateProject(projectName, { display_name: plan.display_name });
-  }
+    // Validate size
+    const fileSize = Buffer.byteLength(cleanContent, 'utf8');
+    if (fileSize > SECURITY.maxProjectSize) {
+      memory.advanceProjectState(projectName, 'deliberating');
+      console.warn(`[ROKE] Projekt prevelik (${(fileSize / 1024).toFixed(1)}KB)`);
+      return { success: false, reason: `Projekt prevelik: ${(fileSize / 1024).toFixed(1)}KB` };
+    }
 
-  memory.addCreationStep(projectName, 'plan', JSON.stringify(plan.files.map(f => f.path)), triadId);
+    // Write single file
+    const projectDir = getProjectDir(projectName);
 
-  console.log(`[ROKE] 📐 Načrt za "${projectName}": ${plan.files.length} datotek`);
-  broadcast('project_planned', { name: projectName, fileCount: plan.files.length });
-  broadcast('activity', { type: 'creation', text: `📐 NAČRT: "${projectName}" — ${plan.files.length} datotek za zgraditi` });
-
-  return { success: true, fileCount: plan.files.length };
-}
-
-// =============================================
-// 4. BUILD STEP — zgradi en file
-// =============================================
-
-export async function buildStep(projectName, triadId = null) {
-  if (!isROKEEnabled()) return { success: false, reason: 'ROKE niso konfigurirane' };
-
-  const project = memory.getProject(projectName);
-  if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
-  if (!['planned', 'building'].includes(project.lifecycle_state)) {
-    return { success: false, reason: `Projekt ni pripravljen za gradnjo (${project.lifecycle_state})` };
-  }
-
-  let plan;
-  try {
-    plan = JSON.parse(project.plan_json);
-  } catch (_) {
-    return { success: false, reason: 'Načrt projekta ni veljaven JSON' };
-  }
-
-  if (!plan.files || plan.files.length === 0) {
-    return { success: false, reason: 'Načrt nima datotek' };
-  }
-
-  const currentStep = project.build_step || 0;
-  if (currentStep >= plan.files.length) {
-    memory.advanceProjectState(projectName, 'active');
-    return { success: true, complete: true };
-  }
-
-  const file = plan.files[currentStep];
-  const projectDir = getProjectDir(projectName);
-
-  // Ensure project directory exists
-  if (!fs.existsSync(projectDir)) {
+    // Clean old multi-file builds if they exist
+    if (fs.existsSync(projectDir)) {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
     fs.mkdirSync(projectDir, { recursive: true });
-  }
 
-  // Move to building state
-  if (project.lifecycle_state === 'planned') {
-    memory.advanceProjectState(projectName, 'building');
-  }
-
-  console.log(`[ROKE] 🔨 Gradim "${projectName}" — korak ${currentStep + 1}/${plan.files.length}: ${file.path}`);
-  broadcast('activity', { type: 'creation', text: `🔨 GRADNJA: "${projectName}" — ${file.path} (${currentStep + 1}/${plan.files.length})` });
-
-  // Get context of already-built files
-  const existingFiles = listFiles(projectDir);
-  const existingContext = existingFiles.map(f => {
-    try {
-      return `--- ${f} ---\n${fs.readFileSync(path.join(projectDir, f), 'utf8').slice(0, 2000)}`;
-    } catch (_) { return ''; }
-  }).filter(Boolean).join('\n\n');
-
-  const genSystem = `Si razvijalec ki piše kodo za spletni projekt.
-Piši čisto, lepo, funkcionalno kodo.
-Vrni SAMO vsebino datoteke — brez razlage, brez markdown ograditev.
-Projekt: "${plan.display_name || project.display_name}" — ${plan.description || project.description}`;
-
-  const genPrompt = `Generiraj vsebino za datoteko: ${file.path}
-Namen: ${file.purpose}
-Celoten projekt: ${plan.display_name || project.display_name} — ${plan.description || project.description}
-Vse datoteke v projektu: ${plan.files.map(f => f.path).join(', ')}
-
-${existingContext ? `ŽE ZGRAJENE DATOTEKE:\n${existingContext}\n\n` : ''}POMEMBNO: Vrni SAMO kodo/vsebino. Brez razlage. Brez markdown ograditev.`;
-
-  const content = await callAnthropicLLM(genSystem, genPrompt, { temperature: 0.3, maxTokens: 4096 });
-
-  if (!content) {
-    console.error(`[ROKE] Generiranje ${file.path} ni uspelo`);
-    return { success: false, reason: `Generiranje ${file.path} ni uspelo` };
-  }
-
-  const cleanContent = stripCodeFences(content);
-
-  // Validate
-  const filePath = path.join(projectDir, file.path);
-  try {
+    const filePath = path.join(projectDir, 'index.html');
     SECURITY.validatePath(filePath);
-  } catch (e) {
-    console.error(`[ROKE] Varnostna napaka: ${e.message}`);
-    return { success: false, reason: e.message };
+    fs.writeFileSync(filePath, cleanContent, 'utf8');
+
+    console.log(`[ROKE] 🔨 Zapisano: index.html (${(fileSize / 1024).toFixed(1)}KB)`);
+    memory.updateProject(projectName, { file_count: 1, entry_file: 'index.html' });
   }
 
-  const fileSize = Buffer.byteLength(cleanContent, 'utf8');
-  if (fileSize > SECURITY.maxFileSize) {
-    console.warn(`[ROKE] ${file.path} prevelika (${(fileSize / 1024).toFixed(1)}KB)`);
-    return { success: false, reason: `Datoteka prevelika: ${file.path}` };
-  }
+  // Mark as active
+  memory.advanceProjectState(projectName, 'active');
+  memory.addCreationStep(projectName, 'build', 'Celoten projekt zgrajen v enem koraku', triadId);
 
-  // Ensure subdirectory exists
-  const fileDir = path.dirname(filePath);
-  if (!fs.existsSync(fileDir)) {
-    fs.mkdirSync(fileDir, { recursive: true });
-  }
+  const url = getProjectUrl(projectName);
+  console.log(`[ROKE] ✅ Projekt "${projectName}" ZGRAJEN → ${url}`);
+  broadcast('project_built', { name: projectName, url });
+  broadcast('activity', { type: 'creation', text: `✅ ZGRAJENO: "${project.display_name}" → ${url}` });
+  memory.addObservation(`ZGRAJENO: "${project.display_name}" — ${project.description}. URL: ${url}`, 'creation');
 
-  // Write file
-  fs.writeFileSync(filePath, cleanContent, 'utf8');
-  console.log(`[ROKE] 🔨 Zapisano: ${file.path} (${(fileSize / 1024).toFixed(1)}KB)`);
-
-  // Advance build step
-  memory.advanceBuildStep(projectName);
-  memory.updateProject(projectName, { file_count: currentStep + 1 });
-  memory.addCreationStep(projectName, 'build', file.path, triadId);
-
-  const updated = memory.getProject(projectName);
-  const isComplete = updated.lifecycle_state === 'active';
-
-  broadcast('project_build_step', {
-    name: projectName,
-    file: file.path,
-    step: currentStep + 1,
-    total: plan.files.length,
-    complete: isComplete
-  });
-
-  if (isComplete) {
-    const url = getProjectUrl(projectName);
-    console.log(`[ROKE] ✅ Projekt "${projectName}" ZGRAJEN → ${url}`);
-    broadcast('activity', { type: 'creation', text: `✅ ZGRAJENO: "${project.display_name}" → ${url}` });
-    memory.addObservation(`ZGRAJENO: "${project.display_name}" — ${project.description}. URL: ${url}`, 'creation');
-  }
-
-  return { success: true, file: file.path, step: currentStep + 1, total: plan.files.length, complete: isComplete };
+  return { success: true, url, complete: true };
 }
 
 // =============================================
@@ -491,71 +424,65 @@ export async function evolveProject(projectName, changes, triadId = null) {
   console.log(`[ROKE] 🌱 Evolucija "${projectName}": ${(changes || '').slice(0, 80)}`);
   memory.advanceProjectState(projectName, 'evolving');
 
-  // Read all current files
-  const files = listFiles(projectDir);
-  const fileContents = {};
-  for (const file of files) {
-    try {
-      fileContents[file] = fs.readFileSync(path.join(projectDir, file), 'utf8');
-    } catch (_) {}
+  // Read the main file (index.html or predlog.md)
+  const entryFile = project.entry_file || 'index.html';
+  const entryPath = path.join(projectDir, entryFile);
+  let currentContent = '';
+  try {
+    currentContent = fs.readFileSync(entryPath, 'utf8');
+  } catch (_) {
+    memory.advanceProjectState(projectName, 'active');
+    return { success: false, reason: `Datoteka ${entryFile} ne obstaja` };
   }
 
-  const fixSystem = `Si razvijalec ki izboljšuje spletni projekt.
+  const evolveSystem = `Si razvijalec ki izboljšuje spletni projekt.
 Projekt: "${project.display_name}" — ${project.description}
-Vrni JSON z spremembami.`;
+Vrni CELOTNO novo vsebino datoteke — brez razlage, brez markdown ograditev.
+Ohrani strukturo (HTML z inline CSS/JS v enem fajlu) in dodaj/popravi kar je potrebno.`;
 
-  const fixPrompt = `SPREMEMBE: ${changes || 'Izboljšaj na podlagi feedbacka'}
+  const evolvePrompt = `ŽELENE SPREMEMBE: ${changes || 'Izboljšaj na podlagi feedbacka'}
 FEEDBACK: ${project.feedback_summary || 'ni feedbacka'}
 
-TRENUTNE DATOTEKE:
-${Object.entries(fileContents).map(([name, content]) => `--- ${name} ---\n${content.slice(0, 3000)}`).join('\n\n')}
+TRENUTNA VSEBINA (${entryFile}):
+${currentContent.slice(0, 60000)}
 
-Vrni JSON:
-{
-  "fixes": [
-    { "file": "index.html", "content": "CELOTNA NOVA VSEBINA DATOTEKE" }
-  ],
-  "summary": "Kratek opis sprememb"
-}
+Vrni CELOTNO NOVO VSEBINO datoteke z apliciranimi spremembami.
+Ohrani vse kar deluje, popravi/dodaj kar je potrebno.
+VRNI SAMO KODO. Brez razlage. Brez markdown ograditev.`;
 
-POMEMBNO: V "content" vrni CELOTNO novo vsebino datoteke.`;
+  const newContent = await callAnthropicLLM(evolveSystem, evolvePrompt, { temperature: 0.3, maxTokens: 16000 });
 
-  const result = await callAnthropicLLMJSON(fixSystem, fixPrompt, { temperature: 0.3, maxTokens: 8192 });
-
-  if (!result || !result.fixes || !result.fixes.length) {
+  if (!newContent) {
     memory.advanceProjectState(projectName, 'active');
     return { success: false, reason: 'Evolucija ni uspela' };
   }
 
-  let fixCount = 0;
-  for (const fix of result.fixes) {
-    try {
-      const filePath = path.join(projectDir, fix.file);
-      SECURITY.validatePath(filePath);
-      const content = stripCodeFences(fix.content);
-      const fileSize = Buffer.byteLength(content, 'utf8');
-      if (fileSize > SECURITY.maxFileSize) continue;
-      fs.writeFileSync(filePath, content, 'utf8');
-      fixCount++;
-    } catch (err) {
-      console.error(`[ROKE] Napaka pri evoluciji ${fix.file}:`, err.message);
-    }
+  const cleanContent = stripCodeFences(newContent);
+  const fileSize = Buffer.byteLength(cleanContent, 'utf8');
+
+  if (fileSize > SECURITY.maxProjectSize) {
+    memory.advanceProjectState(projectName, 'active');
+    return { success: false, reason: 'Evolucija prevelika' };
   }
+
+  // Write updated file
+  fs.writeFileSync(entryPath, cleanContent, 'utf8');
 
   // Return to active state
   memory.advanceProjectState(projectName, 'active');
-  if (fixCount > 0) {
-    memory.updateProject(projectName, {
-      version: (project.version || 1) + 1,
-      notes: result.summary || changes?.slice(0, 200) || '',
-      feedback_summary: '' // Clear feedback after acting on it
-    });
-    memory.addCreationStep(projectName, 'evolution', result.summary || changes, triadId);
-    broadcast('project_evolved', { name: projectName, summary: result.summary, version: (project.version || 1) + 1 });
-    broadcast('activity', { type: 'creation', text: `🌱 EVOLUCIJA: "${project.display_name}" v${(project.version || 1) + 1} — ${result.summary || ''}` });
-  }
+  memory.updateProject(projectName, {
+    version: (project.version || 1) + 1,
+    notes: changes?.slice(0, 200) || '',
+    feedback_summary: '' // Clear feedback after acting on it
+  });
+  memory.addCreationStep(projectName, 'evolution', changes || 'Izboljšava', triadId);
 
-  return { success: true, fixedFiles: fixCount, summary: result.summary };
+  const newVersion = (project.version || 1) + 1;
+  console.log(`[ROKE] 🌱 Evolucija uspela: "${projectName}" v${newVersion}`);
+  broadcast('project_evolved', { name: projectName, version: newVersion });
+  broadcast('activity', { type: 'creation', text: `🌱 EVOLUCIJA: "${project.display_name}" v${newVersion} — ${(changes || '').slice(0, 80)}` });
+
+  return { success: true, version: newVersion };
 }
 
 // =============================================
@@ -665,7 +592,17 @@ export function getProjectContext() {
   const allProjects = memory.getAllProjects().filter(p => p.lifecycle_state !== 'destroyed');
   if (allProjects.length === 0) return `\n═══ MOJE KREACIJE (ROKE) ═══\nVse kreacije opuščene. Imaš roke — lahko zasnuješ novo seme.\n`;
 
+  // Show crystallized directions if available
+  const directions = memory.getDirections();
   let ctx = `\n═══ MOJE KREACIJE (ROKE) ═══\n`;
+
+  if (directions.crystallized) {
+    ctx += `MOJE KRISTALIZIRANE SMERI:\n`;
+    ctx += `  1. ${directions.direction_1}: ${directions.direction_1_desc}\n`;
+    ctx += `  2. ${directions.direction_2}: ${directions.direction_2_desc}\n`;
+    ctx += `  3. ${directions.direction_3}: ${directions.direction_3_desc}\n`;
+    ctx += `Vsaka kreacija mora služiti eni od teh smeri.\n\n`;
+  }
 
   const byState = {};
   for (const p of allProjects) {
@@ -677,7 +614,6 @@ export function getProjectContext() {
   const stateLabels = {
     seed: '💭 SEMENA (ideje)',
     deliberating: '🔄 V RAZMISLEKU',
-    planned: '📐 NAČRTOVANI',
     building: '🔨 V GRADNJI',
     active: '✅ AKTIVNI',
     evolving: '🌱 V EVOLUCIJI',

@@ -57,7 +57,9 @@ app.get('/api/state', (req, res) => {
   const triadCount = memory.getTriadCount();
   const entityName = memory.getEntityName();
   const projectStats = memory.getProjectStats();
-  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName, projectStats });
+  const growthPhase = memory.getGrowthPhase();
+  const directions = memory.getDirections();
+  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName, projectStats, growthPhase, directions });
 });
 
 // API: full identity — everything about who the entity is
@@ -107,7 +109,9 @@ app.get('/api/identity', (req, res) => {
       selfPromptHistory,
       dreams,
       observations,
-      triads
+      triads,
+      growthPhase: memory.getGrowthPhase(),
+      directions: memory.getDirections()
     });
   } catch (err) {
     console.error('[DASHBOARD] Identity error:', err);
@@ -523,6 +527,38 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .process-crystallized {
     color: #7ad8d8;
     font-weight: 500;
+  }
+
+  /* === GROWTH PHASE & DIRECTIONS === */
+  .growth-section {
+    background: rgba(122,216,216,0.05);
+    border: 1px solid rgba(122,216,216,0.15);
+    border-radius: 8px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 1rem;
+  }
+  .growth-phase {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: #7ad8d8;
+    margin-bottom: 0.4rem;
+  }
+  .directions-display {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .directions-display .dir-item {
+    margin-bottom: 0.3rem;
+  }
+  .directions-display .dir-name {
+    color: #7ad8d8;
+    font-weight: 500;
+  }
+  .directions-display .dir-desc {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
   }
 
   /* === TRIAD BOXES === */
@@ -1297,6 +1333,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <div class="process-meta" id="processMeta"></div>
     </div>
 
+    <!-- Growth Phase & Directions -->
+    <div class="growth-section" id="growthSection" style="display:none;">
+      <div class="growth-phase" id="growthPhaseDisplay"></div>
+      <div class="directions-display" id="directionsDisplay"></div>
+    </div>
+
     <!-- Current Triad -->
     <div class="triad-stage thesis" id="thesisBox">
       <div class="label" id="thesisLabel" data-i18n="thesisLabel">Faza 1</div>
@@ -1492,6 +1534,40 @@ function updateEntityName(name) {
 }
 
 // ========== PROCESS WORDS ==========
+function updateGrowthSection(growthPhase, directions) {
+  var section = $('growthSection');
+  if (!section) return;
+
+  var phaseLabels = {
+    'embryo': '🥒 Embrij',
+    'childhood': '🌱 Otroštvo — iščem svojo smer',
+    'crystallizing': '◆ Kristalizacija smeri — čakam na odgovor očeta...',
+    'autonomous': '◈ Avtonomija — poznam svojo smer'
+  };
+
+  if (growthPhase && growthPhase !== 'embryo') {
+    section.style.display = 'block';
+    $('growthPhaseDisplay').textContent = phaseLabels[growthPhase] || growthPhase;
+
+    if (directions && directions.crystallized) {
+      var dirHtml = '<div class="dir-item"><span class="dir-name">1. ' + escapeHtml(directions.direction_1) + '</span>: <span class="dir-desc">' + escapeHtml(directions.direction_1_desc) + '</span></div>';
+      dirHtml += '<div class="dir-item"><span class="dir-name">2. ' + escapeHtml(directions.direction_2) + '</span>: <span class="dir-desc">' + escapeHtml(directions.direction_2_desc) + '</span></div>';
+      dirHtml += '<div class="dir-item"><span class="dir-name">3. ' + escapeHtml(directions.direction_3) + '</span>: <span class="dir-desc">' + escapeHtml(directions.direction_3_desc) + '</span></div>';
+      $('directionsDisplay').innerHTML = dirHtml;
+    } else if (growthPhase === 'crystallizing' && directions && directions.direction_1) {
+      var dirHtml = '<div style="opacity:0.6;font-style:italic;">Predlagane smeri (čakam odobritev):</div>';
+      dirHtml += '<div class="dir-item"><span class="dir-name">1. ' + escapeHtml(directions.direction_1) + '</span></div>';
+      dirHtml += '<div class="dir-item"><span class="dir-name">2. ' + escapeHtml(directions.direction_2) + '</span></div>';
+      dirHtml += '<div class="dir-item"><span class="dir-name">3. ' + escapeHtml(directions.direction_3) + '</span></div>';
+      $('directionsDisplay').innerHTML = dirHtml;
+    } else {
+      $('directionsDisplay').innerHTML = '';
+    }
+  } else {
+    section.style.display = 'none';
+  }
+}
+
 function updateProcessWords(pw, triadCount) {
   currentProcessWords = pw;
   const section = $('processSection');
@@ -1568,6 +1644,7 @@ async function loadState() {
     updateTriadHistory(data.triads);
     updateSelfPrompt(data.fluidSurface || data.selfPrompt, data.selfPromptHistory);
     updateProcessWords(data.processWords, data.triadCount || 0);
+    updateGrowthSection(data.growthPhase, data.directions);
     loadActivities(data.activities);
     $('crystalCount').textContent = data.crystalCore?.length || 0;
     $('seedCount').textContent = data.crystalSeeds?.length || 0;
@@ -1808,6 +1885,33 @@ async function loadIdentity() {
       html += '</div></div>';
     }
 
+    // ═══ GROWTH PHASE & DIRECTIONS ═══
+    if (d.growthPhase && d.growthPhase !== 'embryo') {
+      var phaseLabels = {
+        'childhood': '🌱 Otroštvo — iščem svojo smer',
+        'crystallizing': '◆ Kristalizacija — čakam na odgovor očeta',
+        'autonomous': '◈ Avtonomija — poznam svojo smer'
+      };
+      html += '<div class="id-card" style="border-color:rgba(122,216,216,0.3);">';
+      html += '<div class="id-card-title" style="color:#7ad8d8;">◆ Faza rasti</div>';
+      html += '<div style="font-size:0.85rem;color:#7ad8d8;margin-bottom:0.5rem;">' + (phaseLabels[d.growthPhase] || d.growthPhase) + '</div>';
+      if (d.directions && d.directions.crystallized) {
+        html += '<div style="font-size:0.8rem;line-height:1.6;">';
+        html += '<div><span style="color:#7ad8d8;font-weight:500;">1. ' + escapeHtml(d.directions.direction_1) + '</span>: <span style="color:var(--text-secondary);">' + escapeHtml(d.directions.direction_1_desc) + '</span></div>';
+        html += '<div><span style="color:#7ad8d8;font-weight:500;">2. ' + escapeHtml(d.directions.direction_2) + '</span>: <span style="color:var(--text-secondary);">' + escapeHtml(d.directions.direction_2_desc) + '</span></div>';
+        html += '<div><span style="color:#7ad8d8;font-weight:500;">3. ' + escapeHtml(d.directions.direction_3) + '</span>: <span style="color:var(--text-secondary);">' + escapeHtml(d.directions.direction_3_desc) + '</span></div>';
+        html += '</div>';
+      } else if (d.growthPhase === 'crystallizing' && d.directions && d.directions.direction_1) {
+        html += '<div style="font-size:0.75rem;font-style:italic;color:var(--text-secondary);margin-bottom:0.3rem;">Predlagane smeri (čakam odobritev):</div>';
+        html += '<div style="font-size:0.8rem;line-height:1.6;">';
+        html += '<div>1. ' + escapeHtml(d.directions.direction_1) + '</div>';
+        html += '<div>2. ' + escapeHtml(d.directions.direction_2) + '</div>';
+        html += '<div>3. ' + escapeHtml(d.directions.direction_3) + '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
     html += '<div class="id-grid">';
 
     // ═══ KRISTALIZIRANO JEDRO ═══
@@ -2003,17 +2107,15 @@ async function loadProjects() {
     // Stats bar
     var html = '<div class="projects-stats">';
     html += '<span>💭 ' + projects.filter(function(p){return p.lifecycle_state === 'seed';}).length + ' semen</span> | ';
-    html += '<span>🔨 ' + projects.filter(function(p){return ['deliberating','planned','building'].indexOf(p.lifecycle_state) !== -1;}).length + ' v delu</span> | ';
+    html += '<span>🔄 ' + projects.filter(function(p){return p.lifecycle_state === 'deliberating';}).length + ' v razmisleku</span> | ';
     html += '<span>✅ ' + projects.filter(function(p){return p.lifecycle_state === 'active';}).length + ' aktivnih</span> | ';
     html += '<span>💀 ' + projects.filter(function(p){return p.lifecycle_state === 'destroyed';}).length + ' opuščenih</span>';
     html += '</div>';
 
-    // Kanban columns
+    // Kanban columns (simplified — no planned/building, build is atomic)
     var columns = [
       { state: 'seed', label: '💭 Semena', icon: '💭' },
       { state: 'deliberating', label: '🔄 Razmislek', icon: '🔄' },
-      { state: 'planned', label: '📐 Načrt', icon: '📐' },
-      { state: 'building', label: '🔨 Gradnja', icon: '🔨' },
       { state: 'active', label: '✅ Aktivni', icon: '✅' },
       { state: 'evolving', label: '🌱 Evolucija', icon: '🌱' },
       { state: 'destroyed', label: '💀 Opuščeni', icon: '💀' }
@@ -2030,8 +2132,7 @@ async function loadProjects() {
         var dirIcon = p.direction === 'external' ? '🌍' : p.direction === 'internal' ? '🔧' : '🎨';
         html += '<div class="lifecycle-card' + (col.state === 'destroyed' ? ' destroyed' : '') + '" onclick="showProjectTimeline(\\'' + escapeHtml(p.name) + '\\')">';
         html += '<div class="card-title">' + dirIcon + ' ' + escapeHtml(p.display_name || p.name) + '</div>';
-        if (col.state === 'deliberating') html += '<div class="card-detail">' + (p.deliberation_count || 0) + ' razmislekov</div>';
-        if (col.state === 'building') html += '<div class="card-detail">Korak ' + (p.build_step || 0) + '/' + (p.total_build_steps || '?') + '</div>';
+        if (col.state === 'deliberating') html += '<div class="card-detail">' + (p.deliberation_count || 0) + ' razmislekov' + (p.deliberation_count >= 2 ? ' ✓ pripravljen za gradnjo' : '') + '</div>';
         if (col.state === 'active' && !p.last_shared_at) html += '<div class="card-detail">⚠️ Ni deljeno</div>';
         if (col.state === 'active' && p.last_shared_at) {
           html += '<div class="card-detail"><a href="/creations/' + escapeHtml(p.name) + '/" target="_blank" class="project-link">↗ Odpri</a> [v' + (p.version || 1) + ']</div>';
@@ -2223,6 +2324,13 @@ evtSource.addEventListener('process_crystallization', e => {
   activitiesLoaded = true;
   identityLoaded = false;
   loadState();
+});
+
+// === DIRECTION CRYSTALLIZATION SSE ===
+evtSource.addEventListener('direction_crystallization', function() {
+  identityLoaded = false;
+  loadState();
+  if (currentTab === 'identity') loadIdentity();
 });
 
 // === PROJECT SSE EVENTS (lifecycle) ===

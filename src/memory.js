@@ -187,6 +187,16 @@ const migrations = [
   ['process_crystallized', "ALTER TABLE inner_state ADD COLUMN process_crystallized INTEGER DEFAULT 0"],
   ['process_version', "ALTER TABLE inner_state ADD COLUMN process_version INTEGER DEFAULT 0"],
   ['entity_name', "ALTER TABLE inner_state ADD COLUMN entity_name TEXT DEFAULT ''"],
+  // Growth phase & direction crystallization
+  ['growth_phase', "ALTER TABLE inner_state ADD COLUMN growth_phase TEXT DEFAULT 'embryo'"],
+  ['direction_1', "ALTER TABLE inner_state ADD COLUMN direction_1 TEXT DEFAULT ''"],
+  ['direction_1_desc', "ALTER TABLE inner_state ADD COLUMN direction_1_desc TEXT DEFAULT ''"],
+  ['direction_2', "ALTER TABLE inner_state ADD COLUMN direction_2 TEXT DEFAULT ''"],
+  ['direction_2_desc', "ALTER TABLE inner_state ADD COLUMN direction_2_desc TEXT DEFAULT ''"],
+  ['direction_3', "ALTER TABLE inner_state ADD COLUMN direction_3 TEXT DEFAULT ''"],
+  ['direction_3_desc', "ALTER TABLE inner_state ADD COLUMN direction_3_desc TEXT DEFAULT ''"],
+  ['directions_crystallized', "ALTER TABLE inner_state ADD COLUMN directions_crystallized INTEGER DEFAULT 0"],
+  ['crystallization_asked_at', "ALTER TABLE inner_state ADD COLUMN crystallization_asked_at TEXT DEFAULT NULL"],
 ];
 
 // Project table migrations (lifecycle v2)
@@ -223,6 +233,24 @@ for (const [col, sql] of projectMigrations) {
 try {
   db.prepare("UPDATE projects SET lifecycle_state = 'active', direction = 'external' WHERE status = 'active' AND lifecycle_state = 'seed'").run();
   db.prepare("UPDATE projects SET lifecycle_state = 'destroyed' WHERE status = 'destroyed' AND lifecycle_state = 'seed'").run();
+} catch (_) {}
+
+// Auto-detect growth phase for existing entity
+try {
+  const s = db.prepare('SELECT process_word_1, directions_crystallized, growth_phase FROM inner_state WHERE id = 1').get();
+  if (s && s.growth_phase === 'embryo' && s.process_word_1) {
+    const newPhase = s.directions_crystallized ? 'autonomous' : 'childhood';
+    db.prepare("UPDATE inner_state SET growth_phase = ? WHERE id = 1").run(newPhase);
+    console.log(`[MEMORY] Growth phase auto-detected: ${newPhase}`);
+  }
+} catch (_) {}
+
+// Reset building/planned projects to deliberating (old multi-file builds are broken)
+try {
+  const reset = db.prepare("UPDATE projects SET lifecycle_state = 'deliberating', build_step = 0, total_build_steps = 0, plan_json = '' WHERE lifecycle_state IN ('building', 'planned')").run();
+  if (reset.changes > 0) {
+    console.log(`[MEMORY] Reset ${reset.changes} building/planned projects to deliberating`);
+  }
 } catch (_) {}
 
 const memory = {
@@ -639,14 +667,12 @@ const memory = {
   },
 
   getProjectsNeedingAttention() {
-    // Priority order: planned (ready to build), building (in progress), seed (needs deliberation), active+unshared, active+feedback
-    const planned = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'planned' LIMIT 1").all();
-    const building = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'building' LIMIT 1").all();
+    // Priority order: deliberating ready to build, seeds needing deliberation, active+unshared, active+feedback
+    const readyToBuild = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'deliberating' AND deliberation_count >= 2 LIMIT 1").all();
     const seeds = db.prepare("SELECT *, 'deliberate' as needed_action FROM projects WHERE lifecycle_state = 'seed' LIMIT 1").all();
-    const deliberating = db.prepare("SELECT *, 'plan' as needed_action FROM projects WHERE lifecycle_state = 'deliberating' AND deliberation_count >= 3 LIMIT 1").all();
     const unshared = db.prepare("SELECT *, 'share' as needed_action FROM projects WHERE lifecycle_state = 'active' AND last_shared_at IS NULL LIMIT 1").all();
     const withFeedback = db.prepare("SELECT *, 'evolve' as needed_action FROM projects WHERE lifecycle_state = 'active' AND feedback_summary != '' AND feedback_summary IS NOT NULL LIMIT 1").all();
-    return [...planned, ...building, ...deliberating, ...seeds, ...unshared, ...withFeedback];
+    return [...readyToBuild, ...seeds, ...unshared, ...withFeedback];
   },
 
   setProjectFeedback(name, summary) {
@@ -655,6 +681,68 @@ const memory = {
 
   markProjectShared(name) {
     db.prepare("UPDATE projects SET last_shared_at = datetime('now'), updated_at = datetime('now') WHERE name = ?").run(name);
+  },
+
+  // === GROWTH PHASE & DIRECTION CRYSTALLIZATION ===
+
+  getGrowthPhase() {
+    const state = this.getState();
+    return state.growth_phase || 'embryo';
+  },
+
+  setGrowthPhase(phase) {
+    db.prepare("UPDATE inner_state SET growth_phase = ?, updated_at = datetime('now') WHERE id = 1").run(phase);
+  },
+
+  getDirections() {
+    const state = this.getState();
+    return {
+      direction_1: state.direction_1 || '',
+      direction_1_desc: state.direction_1_desc || '',
+      direction_2: state.direction_2 || '',
+      direction_2_desc: state.direction_2_desc || '',
+      direction_3: state.direction_3 || '',
+      direction_3_desc: state.direction_3_desc || '',
+      crystallized: !!state.directions_crystallized,
+      asked_at: state.crystallization_asked_at || null,
+    };
+  },
+
+  setDirections(dirs) {
+    db.prepare(`
+      UPDATE inner_state SET
+        direction_1 = ?, direction_1_desc = ?,
+        direction_2 = ?, direction_2_desc = ?,
+        direction_3 = ?, direction_3_desc = ?,
+        updated_at = datetime('now')
+      WHERE id = 1
+    `).run(
+      dirs.direction_1, dirs.direction_1_desc,
+      dirs.direction_2, dirs.direction_2_desc,
+      dirs.direction_3, dirs.direction_3_desc
+    );
+  },
+
+  crystallizeDirections() {
+    db.prepare("UPDATE inner_state SET directions_crystallized = 1, growth_phase = 'autonomous', updated_at = datetime('now') WHERE id = 1").run();
+  },
+
+  setCrystallizationAskedAt() {
+    db.prepare("UPDATE inner_state SET crystallization_asked_at = datetime('now'), updated_at = datetime('now') WHERE id = 1").run();
+  },
+
+  isCrystallizationReady() {
+    const state = this.getState();
+    if (state.directions_crystallized) return false;
+    if (!state.process_crystallized) return false;
+    if (state.total_heartbeats < 500) return false;
+    if (state.total_interactions < 20) return false;
+    if (state.total_dreams < 30) return false;
+    const crystals = this.getCrystalCore();
+    if (crystals.length < 1) return false;
+    const projectCount = this.getAllProjects().filter(p => p.lifecycle_state !== 'destroyed').length;
+    if (projectCount < 3) return false;
+    return true;
   },
 
   getEvolutionContext() {

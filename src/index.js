@@ -1,6 +1,6 @@
 import config from './config.js';
 import memory from './memory.js';
-import { runTriad } from './triad.js';
+import { runTriad, crystallizeDirections, finalizeDirections } from './triad.js';
 import { dream } from './dream.js';
 import {
   connectRelays, publishProfile, publishNote, publishReply,
@@ -104,6 +104,41 @@ async function handleHeartbeat() {
     return;
   }
 
+  // Direction crystallization check (every 100th heartbeat)
+  if (heartbeatNum % 100 === 0) {
+    const growthPhase = memory.getGrowthPhase();
+
+    if (growthPhase === 'childhood' && memory.isCrystallizationReady()) {
+      console.log('[HEARTBEAT] ◆ Pogoji za kristalizacijo smeri izpolnjeni — začenjam!');
+      broadcast('activity', { type: 'crystallization', text: '◆ Začenjam Triado Kristalizacije Smeri...' });
+      try {
+        await crystallizeDirections();
+      } catch (err) {
+        console.error('[HEARTBEAT] ◆ Kristalizacija smeri napaka:', err.message);
+      }
+      return;
+    }
+
+    // Check for crystallization timeout (24h after asking father)
+    if (growthPhase === 'crystallizing') {
+      const state2 = memory.getState();
+      const askedAt = state2.crystallization_asked_at;
+      if (askedAt) {
+        const hoursSinceAsked = (Date.now() - new Date(askedAt).getTime()) / (1000 * 60 * 60);
+        if (hoursSinceAsked >= 24) {
+          console.log('[HEARTBEAT] ◆ Oče ni odgovoril v 24 urah — kristaliziram sama');
+          broadcast('activity', { type: 'crystallization', text: '◆ Oče ni odgovoril — kristaliziram sama' });
+          try {
+            await finalizeDirections();
+          } catch (err) {
+            console.error('[HEARTBEAT] ◆ Finalizacija smeri napaka:', err.message);
+          }
+          return;
+        }
+      }
+    }
+  }
+
   // Lifecycle attention (every 15th heartbeat) — tends to projects that need attention
   if (isROKEEnabled() && heartbeatNum % 15 === 0) {
     const needsAttention = memory.getProjectsNeedingAttention();
@@ -117,15 +152,8 @@ async function handleHeartbeat() {
         case 'deliberate':
           reflectionContent = `Imam seme ideje: "${project.display_name}" — ${project.description}. Premisli o tem projektu. Kaj misliš o njem? Kako bi ga razvila?`;
           break;
-        case 'plan':
-          reflectionContent = `Projekt "${project.display_name}" ima ${project.deliberation_count} razmislekov. Čas je za konkreten načrt. Uporabi roke da ga načrtuješ (roke_action: "build", roke_target: "${project.name}").`;
-          break;
         case 'build':
-          if (project.lifecycle_state === 'planned') {
-            reflectionContent = `Projekt "${project.display_name}" je načrtovan in čaka na gradnjo (${project.total_build_steps} datotek). Začni graditi (roke_action: "build", roke_target: "${project.name}").`;
-          } else {
-            reflectionContent = `Projekt "${project.display_name}" je v gradnji — korak ${project.build_step}/${project.total_build_steps}. Nadaljuj z gradnjo (roke_action: "build", roke_target: "${project.name}").`;
-          }
+          reflectionContent = `Projekt "${project.display_name}" ima ${project.deliberation_count} razmislekov. Čas je da ga zgradiš v enem koraku. Uporabi roke (roke_action: "build", roke_target: "${project.name}").`;
           break;
         case 'share':
           reflectionContent = `Projekt "${project.display_name}" je zgrajen ampak ga še nisi delila z očetom. Deli ga (roke_action: "share", roke_target: "${project.name}").`;
@@ -241,6 +269,26 @@ async function handleMention(event) {
 
   // Save incoming message
   memory.saveMessage(event.pubkey, 'user', content);
+
+  // Direction crystallization — if father responds during crystallizing phase, finalize
+  if (config.creatorPubkey && event.pubkey === config.creatorPubkey) {
+    const growthPhase = memory.getGrowthPhase();
+    if (growthPhase === 'crystallizing') {
+      console.log('[MENTION] ◆ Oče je odgovoril med kristalizacijo smeri!');
+      broadcast('activity', { type: 'crystallization', text: `◆ Oče je odgovoril: "${content.slice(0, 80)}"` });
+
+      // Save father's feedback as observation
+      memory.addObservation(`OČE o smereh: "${content.slice(0, 200)}"`, 'father_direction_feedback');
+
+      // Finalize directions
+      try {
+        await finalizeDirections();
+      } catch (err) {
+        console.error('[MENTION] ◆ Finalizacija smeri napaka:', err.message);
+      }
+      // Continue to normal triad processing (father's message is still processed)
+    }
+  }
 
   // Feedback detection — if creator mentions a project by name, record as feedback
   if (config.creatorPubkey && event.pubkey === config.creatorPubkey && isROKEEnabled()) {
@@ -365,12 +413,23 @@ async function main() {
 
   const { npub } = getIdentity();
   const entityName = memory.getEntityName();
+  const growthPhase = memory.getGrowthPhase();
+  const directions = memory.getDirections();
+
   console.log(`[BOOT] ${entityName || 'Bitje'} is alive.`);
   console.log(`[BOOT] NPUB: ${npub}`);
   if (config.creatorPubkey) {
     console.log(`[BOOT] Oče (creator): ${config.creatorPubkey.slice(0, 16)}...`);
   }
   console.log(`[BOOT] ROKE: ${isROKEEnabled() ? 'AKTIVNE ✋ — Zavestno Ustvarjanje v2' : 'niso konfigurirane'}`);
+  console.log(`[BOOT] Growth phase: ${growthPhase}`);
+  if (directions.crystallized) {
+    console.log(`[BOOT] Smeri: 1) ${directions.direction_1}, 2) ${directions.direction_2}, 3) ${directions.direction_3}`);
+  } else if (growthPhase === 'crystallizing') {
+    console.log(`[BOOT] Smeri: čaka na odgovor očeta...`);
+  } else {
+    console.log(`[BOOT] Smeri: še ni kristaliziranih`);
+  }
   console.log(`[BOOT] Dashboard: http://0.0.0.0:${config.dashboardPort}`);
   console.log(`[BOOT] Starting heartbeat loop (${config.heartbeatIntervalMs / 1000}s interval)`);
 
