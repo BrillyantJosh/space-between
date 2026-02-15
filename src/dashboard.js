@@ -1,7 +1,13 @@
 import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import config from './config.js';
 import memory from './memory.js';
 import { getIdentity, getRelayStatus, fetchProfiles } from './nostr.js';
+import fs from 'fs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CREATIONS_DIR = path.join(__dirname, '..', 'data', 'creations');
 
 const app = express();
 app.use(express.json());
@@ -50,7 +56,8 @@ app.get('/api/state', (req, res) => {
   const processWords = memory.getProcessWords();
   const triadCount = memory.getTriadCount();
   const entityName = memory.getEntityName();
-  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName });
+  const projectStats = memory.getProjectStats();
+  res.json({ state, triads, dreams, observations, relays, pubkey, npub, selfPrompt, selfPromptHistory, activities, crystalCore, crystalSeeds, fluidSurface, processWords, triadCount, entityName, projectStats });
 });
 
 // API: full identity — everything about who the entity is
@@ -150,6 +157,46 @@ app.get('/api/conversations/:pubkey', (req, res) => {
     const messages = memory.getConversation(pubkey, 100);
     const identity = memory.getIdentity(pubkey);
     res.json({ pubkey, identity, messages });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: projects
+app.get('/api/projects', (req, res) => {
+  try {
+    const projects = memory.getAllProjects();
+    for (const p of projects) {
+      p.timeline = memory.getCreationSteps(p.name);
+    }
+    const stats = memory.getProjectStats();
+    res.json({ projects, stats, rokeEnabled: !!config.anthropicApiKey });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/projects/:name/timeline', (req, res) => {
+  try {
+    const steps = memory.getCreationSteps(req.params.name);
+    res.json({ steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/projects/:name', (req, res) => {
+  try {
+    const project = memory.getProject(req.params.name);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // List files in project directory
+    const projectDir = path.join(CREATIONS_DIR, req.params.name);
+    let files = [];
+    if (fs.existsSync(projectDir)) {
+      files = fs.readdirSync(projectDir).filter(f => !f.startsWith('.'));
+    }
+    res.json({ ...project, files });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -657,6 +704,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .activity-entry.type-crystallization { color: #7ad8d8; font-weight: 600; }
   .activity-entry.type-dissolution { color: #ff6b6b; font-weight: 500; font-style: italic; }
   .activity-entry.type-fluid { color: #6ba8e8; }
+  .activity-entry.type-creation { color: #a4d87a; font-weight: 500; }
+  .activity-entry.type-destruction { color: #ff6b6b; font-weight: 500; font-style: italic; }
 
   /* === BREAKTHROUGH FLASH === */
   @keyframes breakthroughFlash {
@@ -1062,6 +1111,128 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .id-grid { grid-template-columns: 1fr; }
   }
 
+  /* === PROJECTS VIEW === */
+  .projects-view {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
+  .projects-stats {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1.2rem;
+    padding: 0.8rem 1rem;
+    background: var(--surface);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .project-stat {
+    text-align: center;
+  }
+  .project-stat-val {
+    font-size: 1.2rem;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .project-stat-label {
+    font-size: 0.55rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .project-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.8rem;
+    border-left: 3px solid var(--synthesis);
+    transition: all 0.2s;
+  }
+  .project-card:hover { background: var(--surface2); }
+  .project-card.destroyed {
+    opacity: 0.5;
+    border-left-color: #ff6b6b;
+  }
+  .project-name {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.2rem;
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .project-slug {
+    font-size: 0.6rem;
+    color: var(--text-secondary);
+    font-family: 'JetBrains Mono', monospace;
+    margin-left: 0.4rem;
+  }
+  .project-desc {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-top: 0.3rem;
+    line-height: 1.4;
+  }
+  .project-meta {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    font-size: 0.65rem;
+    color: rgba(184,178,192,0.5);
+    flex-wrap: wrap;
+  }
+  .project-link {
+    display: inline-block;
+    margin-top: 0.5rem;
+    color: var(--synthesis);
+    font-size: 0.75rem;
+    text-decoration: none;
+    border: 1px solid rgba(164,216,122,0.3);
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+  .project-link:hover {
+    background: rgba(164,216,122,0.1);
+    border-color: var(--synthesis);
+  }
+  .project-destroyed-reason {
+    font-size: 0.7rem;
+    color: #ff6b6b;
+    font-style: italic;
+    margin-top: 0.3rem;
+  }
+  .project-notes {
+    font-size: 0.7rem;
+    color: var(--silence);
+    font-style: italic;
+    margin-top: 0.2rem;
+  }
+  .roke-disabled {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-secondary);
+    font-style: italic;
+    font-size: 0.85rem;
+  }
+
+  .lifecycle-kanban { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0; min-height: 200px; }
+  .lifecycle-column { flex: 0 0 180px; min-height: 150px; }
+  .lifecycle-column-header { font-size: 0.8em; color: var(--silence); padding: 4px 8px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .lifecycle-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin-bottom: 6px; cursor: pointer; transition: border-color 0.2s; font-size: 0.8em; }
+  .lifecycle-card:hover { border-color: var(--silence); }
+  .lifecycle-card .card-title { font-weight: bold; margin-bottom: 4px; }
+  .lifecycle-card .card-dir { font-size: 0.75em; opacity: 0.7; }
+  .lifecycle-card .card-detail { font-size: 0.75em; color: var(--text-secondary); margin-top: 4px; }
+  .lifecycle-card.destroyed { opacity: 0.4; }
+  .project-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+  .project-modal-content { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 20px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; }
+  .project-modal-content h3 { margin: 0 0 10px 0; color: var(--silence); }
+  .timeline-entry { padding: 6px 0; border-left: 2px solid var(--border); padding-left: 12px; margin-left: 8px; font-size: 0.85em; }
+  .timeline-entry .timeline-time { color: var(--text-secondary); font-size: 0.75em; }
+  .timeline-entry .timeline-content { margin-top: 2px; }
+  .close-modal { float: right; cursor: pointer; font-size: 1.2em; color: var(--text-secondary); }
+  .close-modal:hover { color: var(--silence); }
+
   .loading { opacity: 0.5; }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(5px); }
@@ -1093,6 +1264,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="status-item"><span data-i18n="age">Starost</span>: <span id="statusAge">0</span>h</div>
   <div class="status-item" style="color:#7ad8d8">💎 <span id="crystalCount">0</span></div>
   <div class="status-item" style="color:#7ad8d8;opacity:0.6">🌱 <span id="seedCount">0</span></div>
+  <div class="status-item" style="color:#a4d87a">🤲 <span id="projectCount">0</span></div>
   <div class="process-badge" id="processBadge" style="display:none"></div>
 </div>
 
@@ -1100,6 +1272,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <button class="tab-btn active" onclick="switchTab('observe')" id="tabObserve">◈ Opazovanje</button>
   <button class="tab-btn" onclick="switchTab('identity')" id="tabIdentity">🪞 Kdo sem</button>
   <button class="tab-btn" onclick="switchTab('conversations')" id="tabConversations">💬 Pogovori</button>
+  <button class="tab-btn" onclick="switchTab('projects')" id="tabProjects">🤲 Projekti</button>
 </div>
 
 <div class="tab-content active" id="viewObserve">
@@ -1173,6 +1346,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
 <div class="tab-content" id="viewIdentity">
   <div class="identity-view" id="identityView">
+    <div class="conv-empty">Nalagam...</div>
+  </div>
+</div>
+
+<div class="tab-content" id="viewProjects">
+  <div class="projects-view" id="projectsView">
     <div class="conv-empty">Nalagam...</div>
   </div>
 </div>
@@ -1392,6 +1571,7 @@ async function loadState() {
     loadActivities(data.activities);
     $('crystalCount').textContent = data.crystalCore?.length || 0;
     $('seedCount').textContent = data.crystalSeeds?.length || 0;
+    $('projectCount').textContent = data.projectStats?.active || 0;
     applyStaticTranslations();
 
     // Populate triad boxes with latest triad
@@ -1550,6 +1730,7 @@ function addActivity(type, text) {
 let currentTab = 'observe';
 let conversationsLoaded = false;
 let identityLoaded = false;
+let projectsLoaded = false;
 let selectedConvPubkey = null;
 
 function switchTab(tab) {
@@ -1568,6 +1749,10 @@ function switchTab(tab) {
     $('tabConversations').classList.add('active');
     $('viewConversations').classList.add('active');
     if (!conversationsLoaded) loadConversations();
+  } else if (tab === 'projects') {
+    $('tabProjects').classList.add('active');
+    $('viewProjects').classList.add('active');
+    loadProjects();
   }
 }
 
@@ -1800,6 +1985,122 @@ function timeAgo(dateStr) {
   return Math.floor(diff / 86400) + 'd';
 }
 
+// ========== PROJECTS ==========
+async function loadProjects() {
+  try {
+    const resp = await fetch('/api/projects');
+    const data = await resp.json();
+    const container = $('projectsView');
+
+    if (!data.rokeEnabled) {
+      container.innerHTML = '<div class="roke-disabled">' + t('🤲 Roke niso konfigurirane') + '</div>';
+      return;
+    }
+
+    const stats = data.stats;
+    const projects = data.projects || [];
+
+    // Stats bar
+    var html = '<div class="projects-stats">';
+    html += '<span>💭 ' + projects.filter(function(p){return p.lifecycle_state === 'seed';}).length + ' semen</span> | ';
+    html += '<span>🔨 ' + projects.filter(function(p){return ['deliberating','planned','building'].indexOf(p.lifecycle_state) !== -1;}).length + ' v delu</span> | ';
+    html += '<span>✅ ' + projects.filter(function(p){return p.lifecycle_state === 'active';}).length + ' aktivnih</span> | ';
+    html += '<span>💀 ' + projects.filter(function(p){return p.lifecycle_state === 'destroyed';}).length + ' opuščenih</span>';
+    html += '</div>';
+
+    // Kanban columns
+    var columns = [
+      { state: 'seed', label: '💭 Semena', icon: '💭' },
+      { state: 'deliberating', label: '🔄 Razmislek', icon: '🔄' },
+      { state: 'planned', label: '📐 Načrt', icon: '📐' },
+      { state: 'building', label: '🔨 Gradnja', icon: '🔨' },
+      { state: 'active', label: '✅ Aktivni', icon: '✅' },
+      { state: 'evolving', label: '🌱 Evolucija', icon: '🌱' },
+      { state: 'destroyed', label: '💀 Opuščeni', icon: '💀' }
+    ];
+
+    html += '<div class="lifecycle-kanban">';
+    for (var ci = 0; ci < columns.length; ci++) {
+      var col = columns[ci];
+      var colProjects = projects.filter(function(p){ return (p.lifecycle_state || 'active') === col.state; });
+      html += '<div class="lifecycle-column">';
+      html += '<div class="lifecycle-column-header">' + col.label + ' (' + colProjects.length + ')</div>';
+      for (var pi = 0; pi < colProjects.length; pi++) {
+        var p = colProjects[pi];
+        var dirIcon = p.direction === 'external' ? '🌍' : p.direction === 'internal' ? '🔧' : '🎨';
+        html += '<div class="lifecycle-card' + (col.state === 'destroyed' ? ' destroyed' : '') + '" onclick="showProjectTimeline(\\'' + escapeHtml(p.name) + '\\')">';
+        html += '<div class="card-title">' + dirIcon + ' ' + escapeHtml(p.display_name || p.name) + '</div>';
+        if (col.state === 'deliberating') html += '<div class="card-detail">' + (p.deliberation_count || 0) + ' razmislekov</div>';
+        if (col.state === 'building') html += '<div class="card-detail">Korak ' + (p.build_step || 0) + '/' + (p.total_build_steps || '?') + '</div>';
+        if (col.state === 'active' && !p.last_shared_at) html += '<div class="card-detail">⚠️ Ni deljeno</div>';
+        if (col.state === 'active' && p.last_shared_at) {
+          html += '<div class="card-detail"><a href="/creations/' + escapeHtml(p.name) + '/" target="_blank" class="project-link">↗ Odpri</a> [v' + (p.version || 1) + ']</div>';
+        }
+        if (p.feedback_summary) html += '<div class="card-detail">📝 ' + escapeHtml(p.feedback_summary.slice(0, 40)) + '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+
+    container.innerHTML = html;
+  } catch (e) { console.error('Projects load error:', e); }
+}
+
+async function showProjectTimeline(projectName) {
+  try {
+    var resp = await fetch('/api/projects/' + projectName + '/timeline');
+    var data = await resp.json();
+    var projResp = await fetch('/api/projects');
+    var projData = await projResp.json();
+    var project = (projData.projects || []).find(function(p){ return p.name === projectName; });
+
+    var stepIcons = {
+      seed: '💭', deliberation: '🔄', plan: '📐', build: '🔨',
+      share: '📤', feedback: '📝', evolution: '🌱', prune: '💀'
+    };
+
+    var html = '<div class="project-modal" onclick="if(event.target===this)this.remove()">';
+    html += '<div class="project-modal-content">';
+    html += '<span class="close-modal" onclick="this.closest(\\'.project-modal\\').remove()">✕</span>';
+    html += '<h3>' + escapeHtml(project ? project.display_name || projectName : projectName) + '</h3>';
+    if (project) {
+      html += '<p style="color:var(--text-secondary);font-size:0.85em;">' + escapeHtml(project.description || '') + '</p>';
+      html += '<p style="font-size:0.8em;">Stanje: <strong>' + escapeHtml(project.lifecycle_state || '?') + '</strong> | Smer: ' + escapeHtml(project.direction || '?') + ' | v' + (project.version || 1) + '</p>';
+      if (project.lifecycle_state === 'active') {
+        html += '<p><a href="/creations/' + escapeHtml(project.name) + '/" target="_blank" class="project-link">↗ Odpri projekt</a></p>';
+      }
+    }
+    html += '<h4 style="margin-top:16px;">📅 Časovnica</h4>';
+
+    var steps = data.steps || [];
+    if (steps.length === 0) {
+      html += '<p style="color:var(--text-secondary);">Ni korakov.</p>';
+    } else {
+      for (var si = 0; si < steps.length; si++) {
+        var step = steps[si];
+        var icon = stepIcons[step.step_type] || '•';
+        var time = step.created_at ? new Date(step.created_at + 'Z').toLocaleString('sl-SI', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        html += '<div class="timeline-entry">';
+        html += '<div class="timeline-time">' + escapeHtml(time) + '</div>';
+        html += '<div class="timeline-content">' + icon + ' ' + escapeHtml(step.step_type) + ': ' + escapeHtml((step.content || '').slice(0, 200)) + '</div>';
+        html += '</div>';
+      }
+    }
+
+    html += '</div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch (e) { console.error('Timeline error:', e); }
+}
+
+function updateProjectCount() {
+  fetch('/api/projects').then(function(r){return r.json();}).then(function(data) {
+    var active = (data.projects || []).filter(function(p){ return p.lifecycle_state !== 'destroyed'; }).length;
+    var el = $('projectCount');
+    if (el) el.textContent = active;
+  }).catch(function(){});
+}
+
 // ========== SSE ==========
 const evtSource = new EventSource('/api/events');
 evtSource.addEventListener('triad_thesis', e => {
@@ -1924,18 +2225,39 @@ evtSource.addEventListener('process_crystallization', e => {
   loadState();
 });
 
+// === PROJECT SSE EVENTS (lifecycle) ===
+['project_created', 'project_fixed', 'project_destroyed', 'project_seeded', 'project_deliberated', 'project_planned', 'project_build_step', 'project_shared', 'project_feedback', 'project_evolved', 'project_pruned'].forEach(function(evt) {
+  evtSource.addEventListener(evt, function() {
+    projectsLoaded = false;
+    identityLoaded = false;
+    if (currentTab === 'projects') loadProjects();
+    updateProjectCount();
+    loadState();
+  });
+});
+
 // Initial load & periodic refresh
 applyStaticTranslations();
 loadState();
 setInterval(function() {
   activitiesLoaded = true;
   loadState();
-  // Auto-refresh identity tab if it's active and data changed
+  // Auto-refresh tabs if active and data changed
   if (currentTab === 'identity' && !identityLoaded) loadIdentity();
+  if (currentTab === 'projects' && !projectsLoaded) loadProjects();
 }, 15000);
 </script>
 </body>
 </html>`;
+
+// Serve entity-created projects
+if (!fs.existsSync(CREATIONS_DIR)) {
+  fs.mkdirSync(CREATIONS_DIR, { recursive: true });
+}
+app.use('/creations', (req, res, next) => {
+  if (decodeURIComponent(req.path).includes('..')) return res.status(403).send('Forbidden');
+  next();
+}, express.static(CREATIONS_DIR, { index: ['index.html'], dotfiles: 'deny' }));
 
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html');

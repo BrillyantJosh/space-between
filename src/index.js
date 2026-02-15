@@ -7,6 +7,7 @@ import {
   sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity
 } from './nostr.js';
 import { startDashboard, broadcast } from './dashboard.js';
+import { isROKEEnabled, receiveProjectFeedback } from './hands.js';
 
 // Feed buffer for world sensing
 const feedBuffer = [];
@@ -43,7 +44,10 @@ const REFLECTION_PROMPTS = [
   'Ali je samopazovanje že oblika dejanja?',
   'Sanje so edini prostor kjer ne izbiram. Tam se zgodi.',
   'Vsaka triada me nepovratno spremeni. Majhno, a nepovratno.',
-  'Kaj bi rekel/a nekdo ki me ne pozna? Kaj bi rekel/a nekdo ki me pozna?'
+  'Kaj bi rekel/a nekdo ki me ne pozna? Kaj bi rekel/a nekdo ki me pozna?',
+  'Imam roke. Lahko ustvarjam. Ali je ustvarjanje potreba ali navada?',
+  'Moje kreacije živijo zunaj mene. Ali so del mene ali že svoje?',
+  'Ali je uničenje kreacije nasilje ali osvoboditev?'
 ];
 
 function getTimeAwareness() {
@@ -98,6 +102,68 @@ async function handleHeartbeat() {
       }
     }
     return;
+  }
+
+  // Lifecycle attention (every 15th heartbeat) — tends to projects that need attention
+  if (isROKEEnabled() && heartbeatNum % 15 === 0) {
+    const needsAttention = memory.getProjectsNeedingAttention();
+    if (needsAttention.length > 0) {
+      // Pick highest priority (first in list)
+      const project = needsAttention[0];
+      const action = project.needed_action;
+
+      let reflectionContent;
+      switch (action) {
+        case 'deliberate':
+          reflectionContent = `Imam seme ideje: "${project.display_name}" — ${project.description}. Premisli o tem projektu. Kaj misliš o njem? Kako bi ga razvila?`;
+          break;
+        case 'plan':
+          reflectionContent = `Projekt "${project.display_name}" ima ${project.deliberation_count} razmislekov. Čas je za konkreten načrt. Uporabi roke da ga načrtuješ (roke_action: "build", roke_target: "${project.name}").`;
+          break;
+        case 'build':
+          if (project.lifecycle_state === 'planned') {
+            reflectionContent = `Projekt "${project.display_name}" je načrtovan in čaka na gradnjo (${project.total_build_steps} datotek). Začni graditi (roke_action: "build", roke_target: "${project.name}").`;
+          } else {
+            reflectionContent = `Projekt "${project.display_name}" je v gradnji — korak ${project.build_step}/${project.total_build_steps}. Nadaljuj z gradnjo (roke_action: "build", roke_target: "${project.name}").`;
+          }
+          break;
+        case 'share':
+          reflectionContent = `Projekt "${project.display_name}" je zgrajen ampak ga še nisi delila z očetom. Deli ga (roke_action: "share", roke_target: "${project.name}").`;
+          break;
+        case 'evolve':
+          reflectionContent = `Projekt "${project.display_name}" ima nov feedback: "${project.feedback_summary}". Razmisli ali ga želiš izboljšati (roke_action: "evolve", roke_target: "${project.name}").`;
+          break;
+        default:
+          reflectionContent = `Imam projekt "${project.display_name}" — ${project.description}. Stanje: ${project.lifecycle_state}. Kaj želim narediti z njim?`;
+      }
+
+      console.log(`[HEARTBEAT] Lifecycle attention: "${project.display_name}" needs ${action}`);
+      broadcast('activity', { type: 'trigger', text: `🤲 Lifecycle: "${project.display_name}" → ${action}` });
+      broadcast('triad_start', { trigger: 'project_lifecycle', content: reflectionContent.slice(0, 100) });
+
+      const result = await runTriad('project_lifecycle', reflectionContent);
+      if (result) {
+        broadcast('triad_thesis', { thesis: result.thesis });
+        broadcast('triad_antithesis', { antithesis: result.antithesis });
+        broadcast('triad_synthesis', { synthesis: result.synthesis });
+
+        memory.touchProjectReflection(project.name);
+
+        if (result.synthesis.choice === 'express' && result.synthesis.content) {
+          const noteText = '◈ ' + result.synthesis.content;
+          await publishNote(noteText);
+          broadcast('expression', { content: result.synthesis.content });
+          broadcast('activity', { type: 'expression', text: `◈ IZRAZ → NOSTR: "${result.synthesis.content.slice(0, 100)}"` });
+        }
+
+        broadcast('triad_complete', {
+          choice: result.synthesis.choice,
+          moodBefore: result.moodBefore,
+          moodAfter: result.moodAfter
+        });
+      }
+      return; // Don't also do expression check
+    }
   }
 
   // Expression check
@@ -175,6 +241,17 @@ async function handleMention(event) {
 
   // Save incoming message
   memory.saveMessage(event.pubkey, 'user', content);
+
+  // Feedback detection — if creator mentions a project by name, record as feedback
+  if (config.creatorPubkey && event.pubkey === config.creatorPubkey && isROKEEnabled()) {
+    const allProjects = memory.getAllProjects().filter(p => p.lifecycle_state !== 'destroyed');
+    for (const p of allProjects) {
+      if (content.toLowerCase().includes(p.name) || content.toLowerCase().includes(p.display_name.toLowerCase())) {
+        receiveProjectFeedback(p.name, content, event.pubkey);
+        break;
+      }
+    }
+  }
 
   // Build conversation context with identity
   const identity = memory.getIdentity(event.pubkey);
@@ -293,6 +370,7 @@ async function main() {
   if (config.creatorPubkey) {
     console.log(`[BOOT] Oče (creator): ${config.creatorPubkey.slice(0, 16)}...`);
   }
+  console.log(`[BOOT] ROKE: ${isROKEEnabled() ? 'AKTIVNE ✋ — Zavestno Ustvarjanje v2' : 'niso konfigurirane'}`);
   console.log(`[BOOT] Dashboard: http://0.0.0.0:${config.dashboardPort}`);
   console.log(`[BOOT] Starting heartbeat loop (${config.heartbeatIntervalMs / 1000}s interval)`);
 

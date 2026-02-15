@@ -141,6 +141,35 @@ db.exec(`
     dissolved_at TEXT DEFAULT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    display_name TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    status TEXT DEFAULT 'active',
+    path TEXT NOT NULL,
+    entry_file TEXT DEFAULT 'index.html',
+    file_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    last_reflected_at TEXT DEFAULT NULL,
+    creation_reason TEXT DEFAULT '',
+    destruction_reason TEXT DEFAULT '',
+    destroyed_at TEXT DEFAULT NULL,
+    triad_id INTEGER DEFAULT NULL,
+    version INTEGER DEFAULT 1,
+    notes TEXT DEFAULT ''
+  );
+
+  CREATE TABLE IF NOT EXISTS creation_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_name TEXT NOT NULL,
+    step_type TEXT NOT NULL,
+    content TEXT DEFAULT '',
+    triad_id INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   INSERT OR IGNORE INTO inner_state (id) VALUES (1);
 `);
 
@@ -160,6 +189,18 @@ const migrations = [
   ['entity_name', "ALTER TABLE inner_state ADD COLUMN entity_name TEXT DEFAULT ''"],
 ];
 
+// Project table migrations (lifecycle v2)
+const projectMigrations = [
+  ['direction', "ALTER TABLE projects ADD COLUMN direction TEXT DEFAULT 'artistic'"],
+  ['lifecycle_state', "ALTER TABLE projects ADD COLUMN lifecycle_state TEXT DEFAULT 'seed'"],
+  ['deliberation_count', "ALTER TABLE projects ADD COLUMN deliberation_count INTEGER DEFAULT 0"],
+  ['build_step', "ALTER TABLE projects ADD COLUMN build_step INTEGER DEFAULT 0"],
+  ['total_build_steps', "ALTER TABLE projects ADD COLUMN total_build_steps INTEGER DEFAULT 0"],
+  ['last_shared_at', "ALTER TABLE projects ADD COLUMN last_shared_at TEXT DEFAULT NULL"],
+  ['feedback_summary', "ALTER TABLE projects ADD COLUMN feedback_summary TEXT DEFAULT ''"],
+  ['plan_json', "ALTER TABLE projects ADD COLUMN plan_json TEXT DEFAULT ''"],
+];
+
 for (const [col, sql] of migrations) {
   try {
     db.prepare(`SELECT ${col} FROM inner_state LIMIT 1`).get();
@@ -168,6 +209,21 @@ for (const [col, sql] of migrations) {
     console.log(`[MEMORY] Migrated: added ${col} column`);
   }
 }
+
+for (const [col, sql] of projectMigrations) {
+  try {
+    db.prepare(`SELECT ${col} FROM projects LIMIT 1`).get();
+  } catch (_) {
+    db.exec(sql);
+    console.log(`[MEMORY] Migrated projects: added ${col} column`);
+  }
+}
+
+// Migrate existing active projects to lifecycle_state='active'
+try {
+  db.prepare("UPDATE projects SET lifecycle_state = 'active', direction = 'external' WHERE status = 'active' AND lifecycle_state = 'seed'").run();
+  db.prepare("UPDATE projects SET lifecycle_state = 'destroyed' WHERE status = 'destroyed' AND lifecycle_state = 'seed'").run();
+} catch (_) {}
 
 const memory = {
   getState() {
@@ -481,6 +537,124 @@ const memory = {
     db.prepare(
       "UPDATE crystallized_core SET dissolved_at = datetime('now') WHERE id = ?"
     ).run(id);
+  },
+
+  // === PROJECTS (ROKE) ===
+
+  saveProject(data) {
+    db.prepare(`
+      INSERT INTO projects (name, display_name, description, status, path, entry_file, file_count, creation_reason, triad_id, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.name, data.display_name || '', data.description || '', data.status || 'active',
+      data.path, data.entry_file || 'index.html', data.file_count || 0,
+      data.creation_reason || '', data.triad_id || null, data.notes || ''
+    );
+    return db.prepare('SELECT last_insert_rowid() as id').get().id;
+  },
+
+  updateProject(name, updates) {
+    const allowed = ['display_name', 'description', 'status', 'entry_file', 'file_count', 'notes', 'version', 'destruction_reason', 'destroyed_at', 'last_reflected_at', 'direction', 'lifecycle_state', 'deliberation_count', 'build_step', 'total_build_steps', 'last_shared_at', 'feedback_summary', 'plan_json'];
+    const keys = Object.keys(updates).filter(k => allowed.includes(k));
+    if (keys.length === 0) return;
+    const sets = keys.map(k => `${k} = ?`).join(', ');
+    const vals = keys.map(k => updates[k]);
+    db.prepare(`UPDATE projects SET ${sets}, updated_at = datetime('now') WHERE name = ?`).run(...vals, name);
+  },
+
+  getProject(name) {
+    return db.prepare('SELECT * FROM projects WHERE name = ?').get(name) || null;
+  },
+
+  getActiveProjects() {
+    return db.prepare("SELECT * FROM projects WHERE status = 'active' ORDER BY updated_at DESC").all();
+  },
+
+  getAllProjects() {
+    return db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
+  },
+
+  destroyProject(name, reason) {
+    db.prepare(`
+      UPDATE projects SET status = 'destroyed', destruction_reason = ?, destroyed_at = datetime('now'), updated_at = datetime('now')
+      WHERE name = ?
+    `).run(reason || '', name);
+  },
+
+  getProjectStats() {
+    const total = db.prepare('SELECT COUNT(*) as c FROM projects').get().c;
+    const active = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'active'").get().c;
+    const destroyed = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'destroyed'").get().c;
+    const last = db.prepare('SELECT * FROM projects ORDER BY created_at DESC LIMIT 1').get() || null;
+    return { total, active, destroyed, lastCreated: last };
+  },
+
+  touchProjectReflection(name) {
+    db.prepare("UPDATE projects SET last_reflected_at = datetime('now') WHERE name = ?").run(name);
+  },
+
+  // === PROJECT LIFECYCLE (ROKE v2) ===
+
+  advanceProjectState(name, newState) {
+    db.prepare("UPDATE projects SET lifecycle_state = ?, updated_at = datetime('now') WHERE name = ?").run(newState, name);
+  },
+
+  incrementDeliberation(name) {
+    db.prepare("UPDATE projects SET deliberation_count = deliberation_count + 1, updated_at = datetime('now') WHERE name = ?").run(name);
+  },
+
+  setProjectPlan(name, planJson) {
+    const planStr = typeof planJson === 'string' ? planJson : JSON.stringify(planJson);
+    const plan = typeof planJson === 'string' ? JSON.parse(planJson) : planJson;
+    const totalSteps = plan.files ? plan.files.length : 0;
+    db.prepare("UPDATE projects SET plan_json = ?, lifecycle_state = 'planned', total_build_steps = ?, updated_at = datetime('now') WHERE name = ?").run(planStr, totalSteps, name);
+  },
+
+  advanceBuildStep(name) {
+    const project = this.getProject(name);
+    if (!project) return;
+    const newStep = (project.build_step || 0) + 1;
+    const isComplete = newStep >= (project.total_build_steps || 0);
+    db.prepare(`UPDATE projects SET build_step = ?, lifecycle_state = ?, updated_at = datetime('now') WHERE name = ?`).run(
+      newStep, isComplete ? 'active' : 'building', name
+    );
+  },
+
+  addCreationStep(projectName, stepType, content, triadId) {
+    db.prepare('INSERT INTO creation_steps (project_name, step_type, content, triad_id) VALUES (?, ?, ?, ?)').run(
+      projectName, stepType, content || '', triadId || null
+    );
+  },
+
+  getCreationSteps(projectName, n = 30) {
+    return db.prepare('SELECT * FROM creation_steps WHERE project_name = ? ORDER BY id DESC LIMIT ?').all(projectName, n).reverse();
+  },
+
+  getProjectsByState(state) {
+    return db.prepare('SELECT * FROM projects WHERE lifecycle_state = ? ORDER BY updated_at DESC').all(state);
+  },
+
+  getSeedsAndDeliberating() {
+    return db.prepare("SELECT * FROM projects WHERE lifecycle_state IN ('seed', 'deliberating') ORDER BY updated_at ASC").all();
+  },
+
+  getProjectsNeedingAttention() {
+    // Priority order: planned (ready to build), building (in progress), seed (needs deliberation), active+unshared, active+feedback
+    const planned = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'planned' LIMIT 1").all();
+    const building = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'building' LIMIT 1").all();
+    const seeds = db.prepare("SELECT *, 'deliberate' as needed_action FROM projects WHERE lifecycle_state = 'seed' LIMIT 1").all();
+    const deliberating = db.prepare("SELECT *, 'plan' as needed_action FROM projects WHERE lifecycle_state = 'deliberating' AND deliberation_count >= 3 LIMIT 1").all();
+    const unshared = db.prepare("SELECT *, 'share' as needed_action FROM projects WHERE lifecycle_state = 'active' AND last_shared_at IS NULL LIMIT 1").all();
+    const withFeedback = db.prepare("SELECT *, 'evolve' as needed_action FROM projects WHERE lifecycle_state = 'active' AND feedback_summary != '' AND feedback_summary IS NOT NULL LIMIT 1").all();
+    return [...planned, ...building, ...deliberating, ...seeds, ...unshared, ...withFeedback];
+  },
+
+  setProjectFeedback(name, summary) {
+    db.prepare("UPDATE projects SET feedback_summary = ?, updated_at = datetime('now') WHERE name = ?").run(summary, name);
+  },
+
+  markProjectShared(name) {
+    db.prepare("UPDATE projects SET last_shared_at = datetime('now'), updated_at = datetime('now') WHERE name = ?").run(name);
   },
 
   getEvolutionContext() {

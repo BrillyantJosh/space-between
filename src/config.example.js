@@ -6,6 +6,8 @@ export default {
   ],
   geminiApiKey: "YOUR_GEMINI_API_KEY_HERE",
   geminiModel: "gemini-2.0-flash",
+  anthropicApiKey: "YOUR_ANTHROPIC_API_KEY_HERE",
+  anthropicModel: "claude-sonnet-4-20250514",
   heartbeatIntervalMs: 60_000,
   dreamAfterIdleMinutes: 30,
   dreamDurationCycles: 3,
