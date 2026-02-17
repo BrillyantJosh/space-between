@@ -2566,7 +2566,7 @@ async function loadActiveCore() {
         });
       }
       container.innerHTML = '<div style="margin-bottom:8px; font-size:0.85em; color:#b478ff;">⬇ AKTIVNI GEN (bitje ga je preoblikovalo):</div>'
-        + '<div class="dna-block" style="border-color:#b478ff; background:rgba(180,120,255,0.08);">' + data.active_core.replace(/\\n/g, '<br>').replace(/\n/g, '<br>') + '</div>'
+        + '<div class="dna-block" style="border-color:#b478ff; background:rgba(180,120,255,0.08);">' + data.active_core.split(String.fromCharCode(10)).join('<br>') + '</div>'
         + historyHtml;
     }
   } catch (e) {
