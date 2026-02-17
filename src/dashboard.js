@@ -2500,7 +2500,7 @@ const UI_STRINGS = {
     statusLabel: 'Status:', directionLabel: 'Direction:', timeline: '📅 Timeline', noSteps: 'No steps.',
     // Growth phases
     embryo: '🥒 Embryo', childhood: '🌱 Childhood — searching for my direction',
-    crystallizing: '◆ Crystallizing direction — awaiting father\'s response...',
+    crystallizing: "◆ Crystallizing direction — awaiting father's response...",
     autonomous: '◈ Autonomy — I know my direction',
     // Valence labels
     veryPositive: '🟢 Very positive influence', positive: '🟢 Positive influence',
@@ -2508,7 +2508,7 @@ const UI_STRINGS = {
     veryNegative: '🔴 Very negative influence',
     // Seed tab
     seedIntro: 'The vision the father placed in the seed of this being. This is the origin of everything — the first word, the first breath.',
-    fathersVision: '🌱 Father\'s vision',
+    fathersVision: "🌱 Father's vision",
     reflectedTimes: 'The being has read and reflected on this vision',
     notReflected: 'The being has not yet reflected on this vision. First reflection comes after 500 heartbeats.',
     outOf: 'out of', possibleReflections: 'possible reflections.',
