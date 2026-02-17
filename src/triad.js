@@ -151,7 +151,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
 
 
 // ═══ LIVING MEMORY — SYNAPSE EXTRACTION ═══
-async function extractSynapsesFromTriad(triadResult, triadId) {
+async function extractSynapsesFromTriad(triadResult, triadId, options = {}) {
   try {
     const { thesis, antithesis, synthesis, moodBefore, moodAfter } = triadResult;
     const content = synthesis.content || synthesis.reason || '';
@@ -194,6 +194,12 @@ async function extractSynapsesFromTriad(triadResult, triadId) {
     if (synthesis.choice === 'silence') baseEnergy = 60;
     if (synthesis.crystal_seed && synthesis.crystal_seed !== 'null') baseEnergy = 140;
 
+    // Build tags with person info if available
+    const synapseTags = [];
+    if (options.pubkey) {
+      synapseTags.push('person:' + options.pubkey);
+    }
+
     const createdIds = [];
     for (const pattern of patterns) {
       // Check for similar existing synapses — if found, fire them instead
@@ -218,9 +224,9 @@ async function extractSynapsesFromTriad(triadResult, triadId) {
           baseEnergy + Math.random() * 20,
           0.4 + Math.random() * 0.2,
           valence,
-          'triad',
+          options.pubkey ? 'conversation' : 'triad',
           triadId,
-          []
+          synapseTags
         );
         createdIds.push(id);
 
@@ -383,7 +389,7 @@ ${(() => {
 ${isROKEEnabled() ? getProjectContext() : ''}`;
 }
 
-export async function runTriad(triggerType, triggerContent, conversationContext = '') {
+export async function runTriad(triggerType, triggerContent, conversationContext = '', options = {}) {
   const state = memory.getState();
   const process = memory.getProcessWords();
   const moodBefore = state.mood || '';
@@ -724,7 +730,8 @@ Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.`;
   try {
     await extractSynapsesFromTriad(
       { thesis, antithesis, synthesis, moodBefore, moodAfter: synthesis.new_mood || moodBefore },
-      triadId
+      triadId,
+      options
     );
   } catch (e) {
     console.error('[SYNAPSE] Post-triad extraction failed:', e.message);

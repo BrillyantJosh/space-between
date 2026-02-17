@@ -366,7 +366,7 @@ async function handleMention(event) {
 
   broadcast('triad_start', { trigger: 'conversation', content: content.slice(0, 100) });
 
-  const result = await runTriad('conversation', content, conversationContext);
+  const result = await runTriad('conversation', content, conversationContext, { pubkey: event.pubkey });
 
   if (!result) {
     console.log('[MENTION] Triad failed');

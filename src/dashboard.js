@@ -230,6 +230,19 @@ app.get('/api/synapses', (req, res) => {
     const top = memory.getTopSynapses(20);
     const stats = memory.getSynapseStats();
     const recent = memory.getActiveSynapses(10).slice(0, 10);
+    // Enrich synapses with person info
+    for (const s of [...top, ...recent]) {
+      try {
+        const tags = JSON.parse(s.tags || '[]');
+        const personTag = tags.find(t => t.startsWith('person:'));
+        if (personTag) {
+          const pk = personTag.slice(7);
+          const identity = memory.getIdentity(pk);
+          s.person_name = identity?.name || pk.slice(0, 8) + '...';
+          s.person_pubkey = pk;
+        }
+      } catch (_) {}
+    }
     res.json({ top, stats, recent });
   } catch (e) {
     res.json({ top: [], stats: { total: 0, avgEnergy: 0, avgStrength: 0, connections: 0, archived: 0, strongest: null, newest: null, totalEnergy: 0 }, recent: [] });
@@ -254,6 +267,28 @@ app.get('/api/synapses/graph', (req, res) => {
     res.json({ nodes, edges });
   } catch (e) {
     res.json({ nodes: [], edges: [] });
+  }
+});
+
+
+// === PERSON-SYNAPSE API ===
+app.get('/api/synapses/people', (req, res) => {
+  try {
+    const people = memory.getPersonSynapseStats();
+    res.json({ people });
+  } catch (e) {
+    res.json({ people: [] });
+  }
+});
+
+app.get('/api/synapses/person/:pubkey', (req, res) => {
+  try {
+    const pubkey = req.params.pubkey;
+    const synapses = memory.getSynapsesByPerson(pubkey);
+    const identity = memory.getIdentity(pubkey);
+    res.json({ pubkey, identity, synapses });
+  } catch (e) {
+    res.json({ pubkey: req.params.pubkey, identity: null, synapses: [] });
   }
 });
 
@@ -1519,6 +1554,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     color: #d4a856;
     font-weight: bold;
   }
+
+  /* === PERSON SYNAPSE BADGE === */
+  .synapse-person { background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 1px 6px; border-radius: 8px; font-size: 0.75em; margin-right: 4px; white-space: nowrap; }
 
   /* === LIVING MEMORY TAB === */
   .memory-view { max-width: 900px; margin: 0 auto; padding: 20px; }
@@ -2818,8 +2856,9 @@ async function loadLivingMemory() {
           var valClass = s.emotional_valence > 0.1 ? 'valence-pos' : (s.emotional_valence < -0.1 ? 'valence-neg' : 'valence-neutral');
           var valSign = s.emotional_valence > 0 ? '+' : '';
           var gradColor = 'linear-gradient(90deg, #7c3aed ' + (energyPct * 0.7) + '%, #a78bfa)';
+          var personBadge = s.person_name ? '<span class="synapse-person">' + '\u{1F464} ' + escapeHtml(s.person_name) + '</span> ' : '';
           return '<li class="synapse-item">'
-            + '<div class="synapse-pattern">' + escapeHtml(s.pattern.slice(0, 80)) + '</div>'
+            + '<div class="synapse-pattern">' + personBadge + escapeHtml(s.pattern.slice(0, 80)) + '</div>'
             + '<div class="synapse-energy-bar"><div class="synapse-energy-fill" style="width:' + energyPct.toFixed(0) + '%; background:' + gradColor + ';"></div></div>'
             + '<div class="synapse-meta">E:' + s.energy.toFixed(0) + ' M:' + s.strength.toFixed(2) + ' <span class="' + valClass + '">V:' + valSign + s.emotional_valence.toFixed(1) + '</span> \u{1F525}' + s.fire_count + '</div>'
             + '</li>';

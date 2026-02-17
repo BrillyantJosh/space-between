@@ -1005,6 +1005,59 @@ const memory = {
     console.log(`[SYNAPSE] 🔄 Migration complete: ${triadSynapses} from triads, ${dreamSynapses} from dreams, ${connections} connections`);
   },
 
+
+  // === LIVING MEMORY — PERSON QUERIES ===
+
+  getSynapsesByPerson(pubkey, limit = 20) {
+    const tag = 'person:' + pubkey;
+    return db.prepare(
+      "SELECT * FROM synapses WHERE tags LIKE ? ORDER BY (energy * strength) DESC LIMIT ?"
+    ).all('%' + tag + '%', limit);
+  },
+
+  getPersonSynapseStats() {
+    const all = db.prepare(
+      "SELECT * FROM synapses WHERE tags LIKE '%person:%'"
+    ).all();
+
+    const byPerson = {};
+    for (const s of all) {
+      try {
+        const tags = JSON.parse(s.tags || '[]');
+        for (const tag of tags) {
+          if (tag.startsWith('person:')) {
+            const pk = tag.slice(7);
+            if (!byPerson[pk]) byPerson[pk] = { count: 0, totalEnergy: 0, totalValence: 0, synapses: [] };
+            byPerson[pk].count++;
+            byPerson[pk].totalEnergy += s.energy;
+            byPerson[pk].totalValence += s.emotional_valence;
+            byPerson[pk].synapses.push(s);
+          }
+        }
+      } catch (_) {}
+    }
+
+    const result = [];
+    for (const [pk, data] of Object.entries(byPerson)) {
+      const identity = db.prepare('SELECT * FROM known_identities WHERE pubkey = ?').get(pk);
+      const avgValence = data.count > 0 ? data.totalValence / data.count : 0;
+      result.push({
+        pubkey: pk,
+        name: identity?.name || 'neznanec',
+        notes: identity?.notes || '',
+        interaction_count: identity?.interaction_count || 0,
+        synapse_count: data.count,
+        total_energy: data.totalEnergy,
+        avg_valence: avgValence,
+        top_synapses: data.synapses
+          .sort((a, b) => (b.energy * b.strength) - (a.energy * a.strength))
+          .slice(0, 5)
+      });
+    }
+
+    return result.sort((a, b) => b.total_energy - a.total_energy);
+  },
+
   getEvolutionContext() {
     const history = this.getSelfPromptHistory(50);
     if (!history || history.length === 0) return '';
