@@ -223,6 +223,40 @@ app.get('/api/core', (req, res) => {
 });
 
 // API: seed (father's vision reflections)
+
+// === LIVING MEMORY API ===
+app.get('/api/synapses', (req, res) => {
+  try {
+    const top = memory.getTopSynapses(20);
+    const stats = memory.getSynapseStats();
+    const recent = memory.getActiveSynapses(10).slice(0, 10);
+    res.json({ top, stats, recent });
+  } catch (e) {
+    res.json({ top: [], stats: { total: 0, avgEnergy: 0, avgStrength: 0, connections: 0, archived: 0, strongest: null, newest: null, totalEnergy: 0 }, recent: [] });
+  }
+});
+
+app.get('/api/synapses/graph', (req, res) => {
+  try {
+    const top = memory.getTopSynapses(15);
+    const nodes = top.map(s => ({ id: s.id, pattern: s.pattern.slice(0, 60), energy: s.energy, strength: s.strength, valence: s.emotional_valence }));
+    // Get connections between these top synapses
+    const topIds = new Set(top.map(s => s.id));
+    const edges = [];
+    for (const s of top) {
+      const connected = memory.getConnectedSynapses(s.id, 1);
+      for (const c of connected) {
+        if (topIds.has(c.id)) {
+          edges.push({ from: s.id, to: c.id, weight: c.connection_weight });
+        }
+      }
+    }
+    res.json({ nodes, edges });
+  } catch (e) {
+    res.json({ nodes: [], edges: [] });
+  }
+});
+
 app.get('/api/seed', (req, res) => {
   try {
     const count = memory.getVisionReflectionCount();
@@ -1485,6 +1519,29 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     color: #d4a856;
     font-weight: bold;
   }
+
+  /* === LIVING MEMORY TAB === */
+  .memory-view { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .memory-section { border: 1px solid rgba(138, 92, 246, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 16px; background: rgba(138, 92, 246, 0.05); }
+  .memory-section h3 { color: #a78bfa; margin: 0 0 12px 0; font-size: 1em; }
+  .memory-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .memory-stat { background: rgba(138, 92, 246, 0.1); border-radius: 8px; padding: 10px; text-align: center; }
+  .memory-stat .value { font-size: 1.4em; color: #a78bfa; font-weight: bold; }
+  .memory-stat .label { font-size: 0.75em; color: #888; margin-top: 4px; }
+  .synapse-list { list-style: none; padding: 0; margin: 0; }
+  .synapse-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(138,92,246,0.1); }
+  .synapse-item:last-child { border-bottom: none; }
+  .synapse-pattern { flex: 1; font-size: 0.85em; color: #ccc; }
+  .synapse-energy-bar { width: 80px; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; }
+  .synapse-energy-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .synapse-meta { font-size: 0.7em; color: #888; white-space: nowrap; }
+  .valence-pos { color: #4ade80; }
+  .valence-neg { color: #f87171; }
+  .valence-neutral { color: #888; }
+  .energy-gauge { width: 100%; height: 20px; background: rgba(255,255,255,0.05); border-radius: 10px; overflow: hidden; margin-bottom: 8px; }
+  .energy-gauge-fill { height: 100%; border-radius: 10px; background: linear-gradient(90deg, #7c3aed, #a78bfa, #c4b5fd); transition: width 0.5s; }
+  .energy-gauge-label { font-size: 0.75em; color: #888; text-align: center; }
+
 </style>
 </head>
 <body>
@@ -1522,6 +1579,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <button class="tab-btn" onclick="switchTab('docs')" id="tabDocs" data-i18n="howIWork">📖 Kako delujem</button>
   <button class="tab-btn" onclick="switchTab('dna')" id="tabDna">🧬 DNA</button>
   <button class="tab-btn" onclick="switchTab('seed')" id="tabSeed">🌱 Seme</button>
+  <button class="tab-btn" onclick="switchTab('memory')" id="tabMemory">🧠 Spomin</button>
 </div>
 
 <div class="tab-content active" id="viewObserve">
@@ -2190,6 +2248,43 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
 </div>
 </div>
 
+<div class="tab-content" id="viewMemory">
+<div class="memory-view">
+  <div class="memory-section">
+    <h3>🧠 Živi Spomin</h3>
+    <div id="memory-gauge-container">
+      <div class="energy-gauge"><div class="energy-gauge-fill" id="memoryGaugeFill" style="width:0%"></div></div>
+      <div class="energy-gauge-label" id="memoryGaugeLabel">Skupna energija: ...</div>
+    </div>
+  </div>
+
+  <div class="memory-section">
+    <h3>📊 Statistika</h3>
+    <div class="memory-stats" id="memoryStats">
+      <div class="memory-stat"><div class="value" id="statTotal">-</div><div class="label">Sinapse</div></div>
+      <div class="memory-stat"><div class="value" id="statAvgEnergy">-</div><div class="label">Povp. energija</div></div>
+      <div class="memory-stat"><div class="value" id="statConnections">-</div><div class="label">Povezave</div></div>
+      <div class="memory-stat"><div class="value" id="statArchived">-</div><div class="label">Arhivirano</div></div>
+    </div>
+  </div>
+
+  <div class="memory-section">
+    <h3>⚡ Najmočnejše sinapse</h3>
+    <ul class="synapse-list" id="topSynapsesList">
+      <li style="color:#888; padding:10px;">Nalagam...</li>
+    </ul>
+  </div>
+
+  <div class="memory-section">
+    <h3>🕒 Zadnje aktivacije</h3>
+    <ul class="synapse-list" id="recentSynapsesList">
+      <li style="color:#888; padding:10px;">Nalagam...</li>
+    </ul>
+  </div>
+</div>
+</div>
+
+
 <script>
 let currentProcessWords = null;
 
@@ -2640,6 +2735,10 @@ function switchTab(tab) {
     $('tabSeed').classList.add('active');
     $('viewSeed').classList.add('active');
     loadSeedInfo();
+  } else if (tab === 'memory') {
+    $('tabMemory').classList.add('active');
+    $('viewMemory').classList.add('active');
+    loadLivingMemory();
   }
 }
 
@@ -2684,6 +2783,67 @@ async function loadActiveCore() {
     }
   } catch (e) {
     container.innerHTML = '<div style="color:#f88;">Napaka pri nalaganju aktivnega gena</div>';
+  }
+}
+
+
+async function loadLivingMemory() {
+  try {
+    const res = await fetch('/api/synapses');
+    const data = await res.json();
+    const stats = data.stats;
+
+    // Update gauge
+    var maxEnergy = stats.total * 200; // theoretical max
+    var pct = maxEnergy > 0 ? Math.min(100, (stats.totalEnergy / maxEnergy) * 100) : 0;
+    var gaugeFill = $('memoryGaugeFill');
+    if (gaugeFill) gaugeFill.style.width = pct.toFixed(1) + '%';
+    var gaugeLabel = $('memoryGaugeLabel');
+    if (gaugeLabel) gaugeLabel.textContent = 'Skupna energija: ' + stats.totalEnergy.toFixed(0) + ' / ' + maxEnergy.toFixed(0) + ' (' + pct.toFixed(1) + '%)';
+
+    // Update stats
+    var st = $('statTotal'); if (st) st.textContent = stats.total;
+    var se = $('statAvgEnergy'); if (se) se.textContent = stats.avgEnergy ? stats.avgEnergy.toFixed(1) : '0';
+    var sc = $('statConnections'); if (sc) sc.textContent = stats.connections;
+    var sa = $('statArchived'); if (sa) sa.textContent = stats.archived;
+
+    // Top synapses
+    var topList = $('topSynapsesList');
+    if (topList && data.top) {
+      if (data.top.length === 0) {
+        topList.innerHTML = '<li style="color:#888; padding:10px;">Ni sinaps.</li>';
+      } else {
+        topList.innerHTML = data.top.slice(0, 10).map(function(s) {
+          var energyPct = Math.min(100, (s.energy / 200) * 100);
+          var valClass = s.emotional_valence > 0.1 ? 'valence-pos' : (s.emotional_valence < -0.1 ? 'valence-neg' : 'valence-neutral');
+          var valSign = s.emotional_valence > 0 ? '+' : '';
+          var gradColor = 'linear-gradient(90deg, #7c3aed ' + (energyPct * 0.7) + '%, #a78bfa)';
+          return '<li class="synapse-item">'
+            + '<div class="synapse-pattern">' + escapeHtml(s.pattern.slice(0, 80)) + '</div>'
+            + '<div class="synapse-energy-bar"><div class="synapse-energy-fill" style="width:' + energyPct.toFixed(0) + '%; background:' + gradColor + ';"></div></div>'
+            + '<div class="synapse-meta">E:' + s.energy.toFixed(0) + ' M:' + s.strength.toFixed(2) + ' <span class="' + valClass + '">V:' + valSign + s.emotional_valence.toFixed(1) + '</span> \u{1F525}' + s.fire_count + '</div>'
+            + '</li>';
+        }).join('');
+      }
+    }
+
+    // Recent synapses
+    var recentList = $('recentSynapsesList');
+    if (recentList && data.recent) {
+      if (data.recent.length === 0) {
+        recentList.innerHTML = '<li style="color:#888; padding:10px;">Ni nedavnih aktivacij.</li>';
+      } else {
+        recentList.innerHTML = data.recent.map(function(s) {
+          var timeStr = s.last_fired_at ? new Date(s.last_fired_at).toLocaleString() : '?';
+          return '<li class="synapse-item">'
+            + '<div class="synapse-pattern" style="font-size:0.8em;">' + escapeHtml(s.pattern.slice(0, 60)) + '</div>'
+            + '<div class="synapse-meta">' + timeStr + ' | E:' + s.energy.toFixed(0) + '</div>'
+            + '</li>';
+        }).join('');
+      }
+    }
+  } catch (e) {
+    console.error('loadLivingMemory error:', e);
   }
 }
 

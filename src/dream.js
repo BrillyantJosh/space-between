@@ -1,6 +1,76 @@
 import { callLLMJSON } from './llm.js';
 import memory from './memory.js';
 import { broadcast } from './dashboard.js';
+import { publishMemoryArchive } from './nostr.js';
+
+
+// ═══ DREAM CONSOLIDATION — prune weak, strengthen strong, create connections ═══
+async function consolidateMemories(dreamResult) {
+  console.log('[DREAM] \u{1F9F9} Starting memory consolidation...');
+
+  // 1. Decay all synapses (accelerated during dreams)
+  const decayResult = memory.decaySynapses();
+
+  // 2. Strengthen top 5 synapses — dreams reinforce what matters
+  const topSynapses = memory.getTopSynapses(5);
+  for (const s of topSynapses) {
+    memory.fireSynapse(s.id);
+  }
+
+  // 3. Extract synapse from dream insight
+  const insight = dreamResult.insight || dreamResult.dream_narrative || '';
+  let newSynapseId = null;
+  if (insight.length > 15) {
+    const valence = 0.1 + Math.random() * 0.5; // Dreams tend to be emotionally rich
+    newSynapseId = memory.createSynapse(
+      insight.slice(0, 150),
+      90 + Math.random() * 30,
+      0.3 + Math.random() * 0.2,
+      valence,
+      'dream',
+      null,
+      []
+    );
+
+    // Connect dream synapse to top active synapses
+    for (const s of topSynapses.slice(0, 3)) {
+      memory.createConnection(newSynapseId, s.id, 0.4);
+      memory.createConnection(s.id, newSynapseId, 0.3);
+    }
+  }
+
+  // 4. Prune weak synapses (extra pruning during dreams)
+  const weak = memory.getWeakSynapses(10);
+  // These will be caught by next decay cycle
+
+  const stats = memory.getSynapseStats();
+  console.log(`[DREAM] \u{1F9F9} Consolidation: ${decayResult.pruned} pruned, ${topSynapses.length} strengthened, ${newSynapseId ? '1 new dream synapse' : 'no new synapse'}. Total: ${stats.total} synapses, ${stats.connections} connections`);
+
+  // 5. Archive strong memories to NOSTR
+  try {
+    const strongMemories = memory.getStrongSynapses(0.7, 150);
+    for (const s of strongMemories.slice(0, 3)) {
+      const eventId = await publishMemoryArchive(s);
+      if (eventId) {
+        memory.markArchivedToNostr(s.id, eventId);
+        broadcast('memory_archived', { pattern: s.pattern, energy: s.energy });
+      }
+    }
+    if (strongMemories.length > 0) {
+      console.log(`[DREAM] \u{1F4BE} Archived ${Math.min(3, strongMemories.length)} strong memories to NOSTR`);
+    }
+  } catch (e) {
+    console.error('[DREAM] Archival error:', e.message);
+  }
+
+  broadcast('memory_consolidated', {
+    pruned: decayResult.pruned,
+    strengthened: topSynapses.length,
+    newSynapse: newSynapseId ? true : false,
+    total: stats.total,
+    connections: stats.connections
+  });
+}
 
 export async function dream() {
   const triads = memory.getRecentTriads(20);
@@ -172,6 +242,13 @@ V sanjah ego ne more filtrirati. Kaj vidiš ko obramba pade?`;
 
   console.log(`[DREAM] Dream complete. Insight: ${result.insight}`);
   console.log(`[DREAM] Residue: ${result.emotional_residue}, New mood: ${result.mood_shift}`);
+
+  // ═══ LIVING MEMORY — DREAM CONSOLIDATION ═══
+  try {
+    await consolidateMemories(result);
+  } catch (e) {
+    console.error('[DREAM] Consolidation error:', e.message);
+  }
 
   return result;
 }

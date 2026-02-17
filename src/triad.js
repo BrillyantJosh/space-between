@@ -149,6 +149,105 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   }
 }
 
+
+// ═══ LIVING MEMORY — SYNAPSE EXTRACTION ═══
+async function extractSynapsesFromTriad(triadResult, triadId) {
+  try {
+    const { thesis, antithesis, synthesis, moodBefore, moodAfter } = triadResult;
+    const content = synthesis.content || synthesis.reason || '';
+    if (content.length < 15) return;
+
+    // Extract 1-3 key patterns from the synthesis
+    const patterns = [];
+
+    // Pattern 1: Main synthesis content (first meaningful sentence)
+    const sentences = content.split(/[.!?]/).filter(s => s.trim().length > 10);
+    if (sentences[0]) {
+      patterns.push(sentences[0].trim().slice(0, 150));
+    }
+
+    // Pattern 2: Inner shift (if meaningful)
+    if (synthesis.inner_shift && synthesis.inner_shift.length > 15) {
+      patterns.push(synthesis.inner_shift.slice(0, 150));
+    }
+
+    // Pattern 3: Crystal seed theme (if present, very high value)
+    if (synthesis.crystal_seed && synthesis.crystal_seed !== 'null') {
+      patterns.push(synthesis.crystal_seed.slice(0, 150));
+    }
+
+    // Determine emotional valence from mood
+    let valence = 0;
+    const mood = (moodAfter || '').toLowerCase();
+    const positiveMoods = ['mir', 'vesel', 'radost', 'toplo', 'hvale', 'jasno', 'vivah', 'navdih', 'sprosc', 'zadovolj', 'ljubez'];
+    const negativeMoods = ['zalost', 'strah', 'negotov', 'tesnob', 'nemir', 'jeza', 'zmede', 'praznin', 'osaml'];
+    for (const p of positiveMoods) {
+      if (mood.includes(p)) { valence = 0.3 + Math.random() * 0.4; break; }
+    }
+    for (const n of negativeMoods) {
+      if (mood.includes(n)) { valence = -(0.3 + Math.random() * 0.4); break; }
+    }
+
+    // Energy based on choice intensity
+    let baseEnergy = 80;
+    if (synthesis.choice === 'express') baseEnergy = 120;
+    if (synthesis.choice === 'silence') baseEnergy = 60;
+    if (synthesis.crystal_seed && synthesis.crystal_seed !== 'null') baseEnergy = 140;
+
+    const createdIds = [];
+    for (const pattern of patterns) {
+      // Check for similar existing synapses — if found, fire them instead
+      const similar = memory.findSimilarSynapses(pattern, 3);
+      let foundExact = false;
+      for (const s of similar) {
+        // If very similar (>50% word overlap), just fire existing
+        const patternWords = pattern.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const existingWords = s.pattern.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const overlap = patternWords.filter(w => existingWords.includes(w)).length;
+        if (patternWords.length > 0 && overlap / patternWords.length > 0.5) {
+          memory.fireSynapse(s.id);
+          memory.spreadActivation(s.id, 20);
+          foundExact = true;
+          break;
+        }
+      }
+
+      if (!foundExact) {
+        const id = memory.createSynapse(
+          pattern,
+          baseEnergy + Math.random() * 20,
+          0.4 + Math.random() * 0.2,
+          valence,
+          'triad',
+          triadId,
+          []
+        );
+        createdIds.push(id);
+
+        // Create connections to similar synapses
+        for (const s of similar) {
+          memory.createConnection(id, s.id, 0.4);
+          memory.createConnection(s.id, id, 0.3);
+        }
+      }
+    }
+
+    if (createdIds.length > 0) {
+      // Connect newly created synapses to each other
+      for (let i = 0; i < createdIds.length; i++) {
+        for (let j = i + 1; j < createdIds.length; j++) {
+          memory.createConnection(createdIds[i], createdIds[j], 0.6);
+          memory.createConnection(createdIds[j], createdIds[i], 0.5);
+        }
+      }
+      broadcast('synapse_created', { count: createdIds.length, triadId });
+    }
+  } catch (e) {
+    console.error('[SYNAPSE] Extraction error:', e.message);
+  }
+}
+
+
 function getSelfSystem() {
   const crystalCore = memory.getCrystalCore();
   const fluidSurface = memory.getFluidSurface();
@@ -273,6 +372,13 @@ ${recentObs.map(o => `- ${o.observation}`).join('\n') || 'Še ni opazovanj.'}
 
 SANJE:
 ${recentDreams.map(d => `- ${d.dream_insight}`).join('\n') || 'Še ni sanj.'}
+
+${(() => {
+    const synapses = memory.getSynapsesForContext(5);
+    if (synapses.length === 0) return '';
+    return '\n\n═══ ŽIVE SINAPSE (aktivni vzorci v spominu) ═══\n' +
+      synapses.map(s => `- "${s.pattern.slice(0, 80)}" (E:${s.energy.toFixed(0)} M:${s.strength.toFixed(2)} V:${s.emotional_valence > 0 ? '+' : ''}${s.emotional_valence.toFixed(1)})`).join('\n');
+  })()}
 
 ${isROKEEnabled() ? getProjectContext() : ''}`;
 }
@@ -612,6 +718,16 @@ Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.`;
   // Periodically reflect on process (every 50 triads, only if verbal and not crystallized)
   if (process.word1 && !process.crystallized && triadCount % 50 === 0) {
     await reflectOnProcess();
+  }
+
+  // ═══ POST-TRIAD: EXTRACT SYNAPSES ═══
+  try {
+    await extractSynapsesFromTriad(
+      { thesis, antithesis, synthesis, moodBefore, moodAfter: synthesis.new_mood || moodBefore },
+      triadId
+    );
+  } catch (e) {
+    console.error('[SYNAPSE] Post-triad extraction failed:', e.message);
   }
 
   return {

@@ -170,6 +170,40 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  
+  CREATE TABLE IF NOT EXISTS synapses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern TEXT NOT NULL,
+    energy REAL DEFAULT 100,
+    strength REAL DEFAULT 0.5,
+    emotional_valence REAL DEFAULT 0.0,
+    fire_count INTEGER DEFAULT 1,
+    source_type TEXT,
+    source_id INTEGER,
+    tags TEXT DEFAULT '[]',
+    last_fired_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    archived_to_nostr INTEGER DEFAULT 0,
+    nostr_event_id TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_synapses_energy ON synapses(energy);
+  CREATE INDEX IF NOT EXISTS idx_synapses_pattern ON synapses(pattern);
+  CREATE INDEX IF NOT EXISTS idx_synapses_strength ON synapses(strength);
+
+  CREATE TABLE IF NOT EXISTS synapse_connections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_synapse_id INTEGER REFERENCES synapses(id),
+    to_synapse_id INTEGER REFERENCES synapses(id),
+    weight REAL DEFAULT 0.5,
+    co_activation_count INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(from_synapse_id, to_synapse_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_connections_from ON synapse_connections(from_synapse_id);
+  CREATE INDEX IF NOT EXISTS idx_connections_to ON synapse_connections(to_synapse_id);
+
   INSERT OR IGNORE INTO inner_state (id) VALUES (1);
 `);
 
@@ -772,6 +806,205 @@ const memory = {
     return state.last_vision_reflection_at || null;
   },
 
+
+  // === LIVING MEMORY — SYNAPSES ===
+
+  createSynapse(pattern, energy = 100, strength = 0.5, valence = 0, sourceType = null, sourceId = null, tags = []) {
+    const result = db.prepare(
+      "INSERT INTO synapses (pattern, energy, strength, emotional_valence, source_type, source_id, tags) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(pattern, energy, Math.min(1, Math.max(0, strength)), Math.min(1, Math.max(-1, valence)), sourceType, sourceId, JSON.stringify(tags));
+    console.log(`[SYNAPSE] 🧠 Created: "${pattern.slice(0, 60)}" (E:${energy}, S:${strength.toFixed(2)}, V:${valence.toFixed(2)})`);
+    return result.lastInsertRowid;
+  },
+
+  fireSynapse(id) {
+    db.prepare(`
+      UPDATE synapses SET
+        energy = MIN(200, energy + 10),
+        strength = MIN(1.0, strength + 0.05),
+        fire_count = fire_count + 1,
+        last_fired_at = datetime('now')
+      WHERE id = ?
+    `).run(id);
+  },
+
+  getSynapseById(id) {
+    return db.prepare('SELECT * FROM synapses WHERE id = ?').get(id) || null;
+  },
+
+  getTopSynapses(limit = 10) {
+    return db.prepare('SELECT * FROM synapses ORDER BY (energy * strength) DESC LIMIT ?').all(limit);
+  },
+
+  getActiveSynapses(minEnergy = 20) {
+    return db.prepare('SELECT * FROM synapses WHERE energy >= ? ORDER BY last_fired_at DESC').all(minEnergy);
+  },
+
+  getSynapsesByPattern(searchTerm) {
+    return db.prepare("SELECT * FROM synapses WHERE pattern LIKE ? ORDER BY (energy * strength) DESC LIMIT 20").all(`%${searchTerm}%`);
+  },
+
+  getSynapsesForContext(limit = 5) {
+    return db.prepare('SELECT * FROM synapses WHERE energy >= 10 ORDER BY (energy * strength) DESC LIMIT ?').all(limit);
+  },
+
+  getSynapsesForConversation(limit = 8) {
+    return db.prepare('SELECT * FROM synapses WHERE energy >= 10 ORDER BY (energy * strength) DESC LIMIT ?').all(limit);
+  },
+
+  decaySynapses() {
+    // Decay: energy *= 0.99, strength *= 0.995
+    db.prepare("UPDATE synapses SET energy = energy * 0.99, strength = strength * 0.995").run();
+    // Prune dead synapses (energy < 5)
+    const pruned = db.prepare("DELETE FROM synapses WHERE energy < 5").run();
+    // Also clean orphaned connections
+    if (pruned.changes > 0) {
+      db.prepare("DELETE FROM synapse_connections WHERE from_synapse_id NOT IN (SELECT id FROM synapses) OR to_synapse_id NOT IN (SELECT id FROM synapses)").run();
+    }
+    const remaining = db.prepare('SELECT COUNT(*) as c FROM synapses').get().c;
+    return { decayed: remaining, pruned: pruned.changes };
+  },
+
+  createConnection(fromId, toId, weight = 0.5) {
+    if (fromId === toId) return;
+    try {
+      db.prepare(
+        "INSERT INTO synapse_connections (from_synapse_id, to_synapse_id, weight) VALUES (?, ?, ?) ON CONFLICT(from_synapse_id, to_synapse_id) DO UPDATE SET co_activation_count = co_activation_count + 1, weight = MIN(1.0, weight + 0.1)"
+      ).run(fromId, toId, weight);
+    } catch (e) {
+      // Ignore constraint errors
+    }
+  },
+
+  getConnectedSynapses(synapseId, depth = 1) {
+    if (depth <= 0) return [];
+    const direct = db.prepare(`
+      SELECT s.*, sc.weight as connection_weight
+      FROM synapse_connections sc
+      JOIN synapses s ON s.id = sc.to_synapse_id
+      WHERE sc.from_synapse_id = ? AND s.energy >= 5
+      ORDER BY sc.weight DESC
+      LIMIT 10
+    `).all(synapseId);
+    return direct;
+  },
+
+  spreadActivation(synapseId, initialEnergy = 30) {
+    // Fire the synapse itself
+    this.fireSynapse(synapseId);
+    
+    // Level 1: direct connections at 50% energy
+    const level1 = this.getConnectedSynapses(synapseId, 1);
+    for (const s of level1) {
+      const boost = initialEnergy * 0.5 * s.connection_weight;
+      db.prepare("UPDATE synapses SET energy = MIN(200, energy + ?), last_fired_at = datetime('now') WHERE id = ?").run(boost, s.id);
+      
+      // Level 2: connections of connections at 25% energy
+      const level2 = this.getConnectedSynapses(s.id, 1);
+      for (const s2 of level2.slice(0, 5)) {
+        const boost2 = initialEnergy * 0.25 * s2.connection_weight;
+        db.prepare("UPDATE synapses SET energy = MIN(200, energy + ?) WHERE id = ?").run(boost2, s2.id);
+      }
+    }
+    console.log(`[SYNAPSE] ⚡ Spreading activation from #${synapseId} → ${level1.length} direct connections`);
+  },
+
+  getWeakSynapses(maxEnergy = 15) {
+    return db.prepare('SELECT * FROM synapses WHERE energy < ? ORDER BY energy ASC LIMIT 20').all(maxEnergy);
+  },
+
+  getStrongSynapses(minValence = 0.7, minEnergy = 150) {
+    return db.prepare(
+      'SELECT * FROM synapses WHERE (ABS(emotional_valence) > ? OR energy > ?) AND archived_to_nostr = 0 ORDER BY (energy * strength) DESC LIMIT 10'
+    ).all(minValence, minEnergy);
+  },
+
+  markArchivedToNostr(id, eventId) {
+    db.prepare("UPDATE synapses SET archived_to_nostr = 1, nostr_event_id = ? WHERE id = ?").run(eventId, id);
+  },
+
+  getSynapseStats() {
+    const total = db.prepare('SELECT COUNT(*) as c FROM synapses').get().c;
+    const avgEnergy = db.prepare('SELECT AVG(energy) as avg FROM synapses').get().avg || 0;
+    const avgStrength = db.prepare('SELECT AVG(strength) as avg FROM synapses').get().avg || 0;
+    const connections = db.prepare('SELECT COUNT(*) as c FROM synapse_connections').get().c;
+    const archived = db.prepare('SELECT COUNT(*) as c FROM synapses WHERE archived_to_nostr = 1').get().c;
+    const strongest = db.prepare('SELECT * FROM synapses ORDER BY (energy * strength) DESC LIMIT 1').get() || null;
+    const newest = db.prepare('SELECT * FROM synapses ORDER BY created_at DESC LIMIT 1').get() || null;
+    const totalEnergy = db.prepare('SELECT SUM(energy) as s FROM synapses').get().s || 0;
+    return { total, avgEnergy, avgStrength, connections, archived, strongest, newest, totalEnergy };
+  },
+
+  findSimilarSynapses(pattern, limit = 5) {
+    // Word overlap matching — split pattern into words and find synapses sharing words
+    const words = pattern.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (words.length === 0) return [];
+    const conditions = words.map(w => `LOWER(pattern) LIKE '%${w.replace(/'/g, "''")}%'`).join(' OR ');
+    try {
+      return db.prepare(`SELECT * FROM synapses WHERE (${conditions}) AND pattern != ? ORDER BY (energy * strength) DESC LIMIT ?`).all(pattern, limit);
+    } catch (e) {
+      return [];
+    }
+  },
+
+  // === RETROACTIVE MIGRATION ===
+  migrateExistingMemories() {
+    const synapseCount = db.prepare('SELECT COUNT(*) as c FROM synapses').get().c;
+    if (synapseCount > 0) return; // Already migrated
+
+    console.log('[SYNAPSE] 🔄 Starting retroactive migration...');
+    
+    // Migrate last 100 triads
+    const triads = db.prepare('SELECT * FROM triads ORDER BY id DESC LIMIT 100').all();
+    let triadSynapses = 0;
+    for (const t of triads) {
+      const content = t.synthesis_content || t.synthesis_reason || '';
+      if (content.length < 10) continue;
+      
+      // Extract pattern from content (first meaningful sentence)
+      const sentences = content.split(/[.!?]/).filter(s => s.trim().length > 10);
+      const pattern = sentences[0]?.trim().slice(0, 150) || content.slice(0, 150);
+      
+      // Emotional valence from mood
+      let valence = 0;
+      const mood = (t.mood_after || '').toLowerCase();
+      if (mood.includes('mir') || mood.includes('vesel') || mood.includes('radost') || mood.includes('toplo')) valence = 0.3;
+      if (mood.includes('žalost') || mood.includes('strah') || mood.includes('negotov')) valence = -0.3;
+      
+      const id = this.createSynapse(pattern, 50 + Math.random() * 50, 0.3 + Math.random() * 0.3, valence, 'triad', t.id, []);
+      triadSynapses++;
+    }
+
+    // Migrate last 50 dreams
+    const dreams = db.prepare('SELECT * FROM dreams ORDER BY id DESC LIMIT 50').all();
+    let dreamSynapses = 0;
+    for (const d of dreams) {
+      const content = d.dream_insight || d.dream_content || '';
+      if (content.length < 10) continue;
+      
+      const pattern = content.slice(0, 150);
+      const valence = 0.1 + Math.random() * 0.4; // Dreams tend to be emotionally positive
+      
+      const id = this.createSynapse(pattern, 40 + Math.random() * 40, 0.2 + Math.random() * 0.3, valence, 'dream', d.id, []);
+      dreamSynapses++;
+    }
+
+    // Create connections between synapses that share words
+    const allSynapses = db.prepare('SELECT * FROM synapses ORDER BY id ASC').all();
+    let connections = 0;
+    for (let i = 0; i < allSynapses.length; i++) {
+      const similar = this.findSimilarSynapses(allSynapses[i].pattern, 3);
+      for (const s of similar) {
+        if (s.id !== allSynapses[i].id) {
+          this.createConnection(allSynapses[i].id, s.id, 0.3);
+          connections++;
+        }
+      }
+    }
+
+    console.log(`[SYNAPSE] 🔄 Migration complete: ${triadSynapses} from triads, ${dreamSynapses} from dreams, ${connections} connections`);
+  },
+
   getEvolutionContext() {
     const history = this.getSelfPromptHistory(50);
     if (!history || history.length === 0) return '';
@@ -789,5 +1022,12 @@ const memory = {
     return ctx;
   }
 };
+
+// Retroactive synapse migration (runs once if synapses table is empty)
+try {
+  memory.migrateExistingMemories();
+} catch (e) {
+  console.error('[SYNAPSE] Migration error:', e.message);
+}
 
 export default memory;

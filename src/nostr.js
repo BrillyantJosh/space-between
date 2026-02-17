@@ -248,6 +248,68 @@ export async function fetchProfiles(pubkeys) {
   });
 }
 
+
+// ═══ LIVING MEMORY — KIND 30078 ARCHIVAL ═══
+export async function publishMemoryArchive(synapse) {
+  const content = JSON.stringify({
+    pattern: synapse.pattern,
+    energy: synapse.energy,
+    strength: synapse.strength,
+    emotional_valence: synapse.emotional_valence,
+    fire_count: synapse.fire_count,
+    tags: synapse.tags,
+    source_type: synapse.source_type,
+    created_at: synapse.created_at
+  });
+
+  const event = signEvent({
+    kind: 30078,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ['d', `living-memory-${synapse.id}`],
+      ['t', 'living-memory'],
+      ['t', synapse.source_type || 'unknown']
+    ],
+    content
+  });
+
+  await publishToAll(event);
+  console.log(`[NOSTR] \u{1F4BE} Memory archived: "${synapse.pattern.slice(0, 50)}..." (KIND 30078)`);
+  return event.id;
+}
+
+export async function fetchArchivedMemories() {
+  const firstRelay = [...relays.values()][0];
+  if (!firstRelay) return [];
+
+  return new Promise((resolve) => {
+    const memories = [];
+    const timeout = setTimeout(() => resolve(memories), 10000);
+    try {
+      firstRelay.subscribe(
+        [{ kinds: [30078], authors: [pubkey], '#t': ['living-memory'] }],
+        {
+          onevent(event) {
+            try {
+              const data = JSON.parse(event.content);
+              memories.push({ ...data, nostr_event_id: event.id, nostr_created_at: event.created_at });
+            } catch (_) {}
+          },
+          oneose() {
+            clearTimeout(timeout);
+            console.log(`[NOSTR] \u{1F4BE} Fetched ${memories.length} archived memories from NOSTR`);
+            resolve(memories);
+          }
+        }
+      );
+    } catch (err) {
+      console.error('[NOSTR] fetchArchivedMemories error:', err.message);
+      clearTimeout(timeout);
+      resolve(memories);
+    }
+  });
+}
+
 export function getIdentity() {
   return { pubkey, npub };
 }

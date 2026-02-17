@@ -83,6 +83,17 @@ async function handleHeartbeat() {
     memory.updateState({ energy: Math.min(1, state.energy + 0.02) });
   }
 
+  // ═══ LIVING MEMORY — HOURLY DECAY ═══
+  if (heartbeatNum % 60 === 0) {
+    try {
+      const decayResult = memory.decaySynapses();
+      console.log(`[DECAY] \u{1F551} Hourly decay: ${decayResult.decayed} synapses remaining, ${decayResult.pruned} pruned`);
+      broadcast('activity', { type: 'decay', text: `\u{1F551} Razpad: ${decayResult.pruned} sinaps odstranjenih, ${decayResult.decayed} preostalih` });
+    } catch (e) {
+      console.error('[DECAY] Error:', e.message);
+    }
+  }
+
   // Dream cooldown check
   const timeSinceLastDream = Date.now() - lastDreamTime;
   const canDream = timeSinceLastDream >= DREAM_COOLDOWN_MS;
