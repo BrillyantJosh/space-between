@@ -495,6 +495,12 @@ const memory = {
   },
 
   setEntityName(name) {
+    // Name is permanent — once chosen, it cannot be changed
+    const current = this.getEntityName();
+    if (current) {
+      console.log(`[MEMORY] ⚠ Entity name already set to "${current}" — name is permanent, ignoring "${name}"`);
+      return;
+    }
     db.prepare(
       "UPDATE inner_state SET entity_name = ?, updated_at = datetime('now') WHERE id = 1"
     ).run(name);

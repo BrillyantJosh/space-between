@@ -1256,10 +1256,10 @@ In izberi si IME — kako želiš da te kličejo:
       'process_discovery'
     );
 
-    // Self-naming
-    if (result.chosen_name) {
+    // Self-naming (permanent — once chosen, never changes)
+    if (result.chosen_name && !memory.getEntityName()) {
       memory.setEntityName(result.chosen_name);
-      memory.addObservation(`POIMENOVANJE SEBE: Izbralo sem si ime "${result.chosen_name}".`, 'self_naming');
+      memory.addObservation(`POIMENOVANJE SEBE: Izbralo sem si ime "${result.chosen_name}". To ime je trajno.`, 'self_naming');
       console.log(`  ★ IME: "${result.chosen_name}"`);
 
       // Update NOSTR profile with chosen name
