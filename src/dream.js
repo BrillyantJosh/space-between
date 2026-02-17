@@ -1,7 +1,7 @@
 import { callLLMJSON } from './llm.js';
 import memory from './memory.js';
 import { broadcast } from './dashboard.js';
-import { publishMemoryArchive } from './nostr.js';
+import { publishMemoryArchive, publishMemorySnapshot } from './nostr.js';
 
 
 // ═══ DREAM CONSOLIDATION — prune weak, strengthen strong, create connections ═══
@@ -46,7 +46,7 @@ async function consolidateMemories(dreamResult) {
   const stats = memory.getSynapseStats();
   console.log(`[DREAM] \u{1F9F9} Consolidation: ${decayResult.pruned} pruned, ${topSynapses.length} strengthened, ${newSynapseId ? '1 new dream synapse' : 'no new synapse'}. Total: ${stats.total} synapses, ${stats.connections} connections`);
 
-  // 5. Archive strong memories to NOSTR
+  // 5. Archive strong core memories to NOSTR (KIND 1078 — permanent)
   try {
     const strongMemories = memory.getStrongSynapses(0.7, 150);
     for (const s of strongMemories.slice(0, 3)) {
@@ -57,10 +57,20 @@ async function consolidateMemories(dreamResult) {
       }
     }
     if (strongMemories.length > 0) {
-      console.log(`[DREAM] \u{1F4BE} Archived ${Math.min(3, strongMemories.length)} strong memories to NOSTR`);
+      console.log(`[DREAM] \u{1F4BE} Archived ${Math.min(3, strongMemories.length)} core memories to NOSTR (KIND 1078)`);
     }
   } catch (e) {
     console.error('[DREAM] Archival error:', e.message);
+  }
+
+  // 6. Daily memory snapshot to NOSTR (KIND 30078 — replaceable, 1 per day)
+  try {
+    const snapshotStats = memory.getSynapseStats();
+    const snapshotSynapses = memory.getTopSynapses(20);
+    await publishMemorySnapshot(snapshotStats, snapshotSynapses);
+    console.log(`[DREAM] \u{1F4F8} Daily memory snapshot published (KIND 30078)`);
+  } catch (e) {
+    console.error('[DREAM] Snapshot error:', e.message);
   }
 
   broadcast('memory_consolidated', {

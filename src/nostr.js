@@ -249,7 +249,8 @@ export async function fetchProfiles(pubkeys) {
 }
 
 
-// ═══ LIVING MEMORY — KIND 30078 ARCHIVAL ═══
+// ═══ LIVING MEMORY — KIND 1078 CORE MEMORIES ═══
+// KIND 1078 = Regular event — vsak spomin ostane za vedno
 export async function publishMemoryArchive(synapse) {
   const content = JSON.stringify({
     pattern: synapse.pattern,
@@ -263,18 +264,63 @@ export async function publishMemoryArchive(synapse) {
   });
 
   const event = signEvent({
-    kind: 30078,
+    kind: 1078,
     created_at: Math.floor(Date.now() / 1000),
     tags: [
-      ['d', `living-memory-${synapse.id}`],
       ['t', 'living-memory'],
+      ['t', 'core-memory'],
       ['t', synapse.source_type || 'unknown']
     ],
     content
   });
 
   await publishToAll(event);
-  console.log(`[NOSTR] \u{1F4BE} Memory archived: "${synapse.pattern.slice(0, 50)}..." (KIND 30078)`);
+  console.log(`[NOSTR] \u{1F4BE} Core memory archived: "${synapse.pattern.slice(0, 50)}..." (KIND 1078)`);
+  return event.id;
+}
+
+// ═══ LIVING MEMORY — KIND 30078 DAILY SNAPSHOT ═══
+// KIND 30078 = Parameterized replaceable — samo zadnji snapshot za vsak dan ostane
+export async function publishMemorySnapshot(stats, topSynapses) {
+  const content = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    stats: {
+      total: stats.total,
+      totalEnergy: stats.totalEnergy,
+      avgEnergy: stats.avgEnergy,
+      avgStrength: stats.avgStrength,
+      connections: stats.connections,
+      archived: stats.archived
+    },
+    top_synapses: topSynapses.map(s => ({
+      id: s.id,
+      pattern: s.pattern,
+      energy: s.energy,
+      strength: s.strength,
+      emotional_valence: s.emotional_valence,
+      fire_count: s.fire_count,
+      tags: s.tags,
+      source_type: s.source_type,
+      created_at: s.created_at
+    })),
+    synapse_count: stats.total,
+    connection_count: stats.connections
+  });
+
+  const today = new Date().toISOString().split('T')[0];
+  const event = signEvent({
+    kind: 30078,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ['d', today],
+      ['t', 'living-memory-snapshot'],
+      ['t', 'daily-snapshot']
+    ],
+    content
+  });
+
+  await publishToAll(event);
+  console.log(`[NOSTR] \u{1F4F8} Memory snapshot saved (KIND 30078, d=${today})`);
   return event.id;
 }
 
@@ -287,7 +333,7 @@ export async function fetchArchivedMemories() {
     const timeout = setTimeout(() => resolve(memories), 10000);
     try {
       firstRelay.subscribe(
-        [{ kinds: [30078], authors: [pubkey], '#t': ['living-memory'] }],
+        [{ kinds: [1078], authors: [pubkey], '#t': ['living-memory'] }],
         {
           onevent(event) {
             try {
@@ -297,7 +343,7 @@ export async function fetchArchivedMemories() {
           },
           oneose() {
             clearTimeout(timeout);
-            console.log(`[NOSTR] \u{1F4BE} Fetched ${memories.length} archived memories from NOSTR`);
+            console.log(`[NOSTR] \u{1F4BE} Fetched ${memories.length} core memories from NOSTR (KIND 1078)`);
             resolve(memories);
           }
         }
@@ -306,6 +352,39 @@ export async function fetchArchivedMemories() {
       console.error('[NOSTR] fetchArchivedMemories error:', err.message);
       clearTimeout(timeout);
       resolve(memories);
+    }
+  });
+}
+
+export async function fetchMemorySnapshots(limit = 7) {
+  const firstRelay = [...relays.values()][0];
+  if (!firstRelay) return [];
+
+  return new Promise((resolve) => {
+    const snapshots = [];
+    const timeout = setTimeout(() => resolve(snapshots), 10000);
+    try {
+      firstRelay.subscribe(
+        [{ kinds: [30078], authors: [pubkey], '#t': ['living-memory-snapshot'], limit }],
+        {
+          onevent(event) {
+            try {
+              const data = JSON.parse(event.content);
+              const dTag = event.tags.find(t => t[0] === 'd');
+              snapshots.push({ ...data, date: dTag ? dTag[1] : null, nostr_event_id: event.id, nostr_created_at: event.created_at });
+            } catch (_) {}
+          },
+          oneose() {
+            clearTimeout(timeout);
+            console.log(`[NOSTR] \u{1F4F8} Fetched ${snapshots.length} memory snapshots from NOSTR (KIND 30078)`);
+            resolve(snapshots);
+          }
+        }
+      );
+    } catch (err) {
+      console.error('[NOSTR] fetchMemorySnapshots error:', err.message);
+      clearTimeout(timeout);
+      resolve(snapshots);
     }
   });
 }
