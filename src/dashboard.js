@@ -1555,6 +1555,32 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     font-weight: bold;
   }
 
+
+  /* === PERSON OVERVIEW IN MEMORY TAB === */
+  .person-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 700px) { .person-grid { grid-template-columns: 1fr 1fr; } }
+  .person-card { border: 1px solid rgba(138,92,246,0.25); border-radius: 12px; padding: 14px 16px; background: rgba(138,92,246,0.04); position: relative; overflow: hidden; }
+  .person-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 12px 0 0 12px; }
+  .person-card.valence-positive::before { background: #4ade80; }
+  .person-card.valence-negative::before { background: #f87171; }
+  .person-card.valence-neutral::before { background: #888; }
+  .person-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .person-name { font-size: 1.05em; color: #f0ede8; font-weight: 600; }
+  .person-role { font-size: 0.7em; color: #a78bfa; margin-left: 6px; }
+  .person-stats-mini { text-align: right; font-size: 0.75em; color: #888; }
+  .person-stats-mini span { color: #a78bfa; font-weight: bold; }
+  .person-notes { font-size: 0.75em; color: #999; margin-bottom: 10px; font-style: italic; line-height: 1.4; }
+  .person-valence-container { margin: 10px 0; }
+  .person-valence-track { position: relative; width: 100%; height: 10px; background: linear-gradient(90deg, #f87171 0%, #888 50%, #4ade80 100%); border-radius: 5px; opacity: 0.3; }
+  .person-valence-indicator { position: absolute; top: -3px; width: 16px; height: 16px; background: #fff; border-radius: 50%; border: 2px solid #a78bfa; transform: translateX(-50%); transition: left 0.3s; box-shadow: 0 0 6px rgba(167,139,250,0.5); }
+  .person-valence-label { font-size: 0.72em; margin-top: 4px; text-align: center; }
+  .person-memories-title { font-size: 0.78em; color: #a78bfa; margin: 10px 0 6px 0; }
+  .person-memory-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.8em; }
+  .person-memory-pattern { flex: 1; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .person-memory-energy { width: 50px; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; flex-shrink: 0; }
+  .person-memory-energy-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #7c3aed, #a78bfa); }
+  .person-memory-val { font-size: 0.7em; color: #888; white-space: nowrap; flex-shrink: 0; }
+
   /* === PERSON SYNAPSE BADGE === */
   .synapse-person { background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 1px 6px; border-radius: 8px; font-size: 0.75em; margin-right: 4px; white-space: nowrap; }
 
@@ -2307,6 +2333,13 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
   </div>
 
   <div class="memory-section">
+    <h3>👥 Osebe in njihov vpliv</h3>
+    <div class="person-grid" id="personGrid">
+      <div style="color:#888; padding:10px;">Nalagam...</div>
+    </div>
+  </div>
+
+  <div class="memory-section">
     <h3>⚡ Najmočnejše sinapse</h3>
     <ul class="synapse-list" id="topSynapsesList">
       <li style="color:#888; padding:10px;">Nalagam...</li>
@@ -2881,8 +2914,76 @@ async function loadLivingMemory() {
         }).join('');
       }
     }
+    // Load person overview
+    loadPersonOverview();
   } catch (e) {
     console.error('loadLivingMemory error:', e);
+  }
+}
+
+
+async function loadPersonOverview() {
+  var grid = $('personGrid');
+  if (!grid) return;
+  try {
+    var res = await fetch('/api/synapses/people');
+    var data = await res.json();
+    var people = data.people || [];
+
+    if (people.length === 0) {
+      grid.innerHTML = '<div style="color:#888; padding:10px; font-size:0.85em;">Ni \u{0161}e pogovorov s person oznakami. Sinapse iz prihodnjih pogovorov bodo povezane z osebami.</div>';
+      return;
+    }
+
+    grid.innerHTML = people.map(function(p) {
+      // Valence class
+      var valClass = p.avg_valence > 0.1 ? 'valence-positive' : (p.avg_valence < -0.1 ? 'valence-negative' : 'valence-neutral');
+
+      // Valence label
+      var valLabel, valColor;
+      if (p.avg_valence > 0.5) { valLabel = '\u{1F7E2} Zelo pozitiven vpliv'; valColor = '#4ade80'; }
+      else if (p.avg_valence > 0.2) { valLabel = '\u{1F7E2} Pozitiven vpliv'; valColor = '#4ade80'; }
+      else if (p.avg_valence > -0.2) { valLabel = '\u{26AA} Nevtralen vpliv'; valColor = '#888'; }
+      else if (p.avg_valence > -0.5) { valLabel = '\u{1F534} Negativen vpliv'; valColor = '#f87171'; }
+      else { valLabel = '\u{1F534} Zelo negativen vpliv'; valColor = '#f87171'; }
+
+      // Valence indicator position (map -1..+1 to 0..100%)
+      var valPct = ((p.avg_valence + 1) / 2 * 100).toFixed(1);
+
+      // Notes (truncated)
+      var notesHtml = p.notes ? '<div class="person-notes">' + escapeHtml(p.notes.slice(0, 150)) + (p.notes.length > 150 ? '...' : '') + '</div>' : '';
+
+      // Top memories (up to 3)
+      var memoriesHtml = '';
+      if (p.top_synapses && p.top_synapses.length > 0) {
+        memoriesHtml = '<div class="person-memories-title">\u{1F4AD} Najmo\u{010D}nej\u{0161}i spomini</div>';
+        memoriesHtml += p.top_synapses.slice(0, 3).map(function(s) {
+          var ePct = Math.min(100, (s.energy / 200) * 100);
+          var valSign = s.emotional_valence > 0 ? '+' : '';
+          return '<div class="person-memory-item">'
+            + '<div class="person-memory-pattern">' + escapeHtml(s.pattern.slice(0, 70)) + '</div>'
+            + '<div class="person-memory-energy"><div class="person-memory-energy-fill" style="width:' + ePct.toFixed(0) + '%"></div></div>'
+            + '<div class="person-memory-val">E:' + s.energy.toFixed(0) + '</div>'
+            + '</div>';
+        }).join('');
+      }
+
+      return '<div class="person-card ' + valClass + '">'
+        + '<div class="person-header">'
+        +   '<div><span class="person-name">\u{1F464} ' + escapeHtml(p.name) + '</span></div>'
+        +   '<div class="person-stats-mini"><span>' + p.synapse_count + '</span> sinaps \u{00B7} <span>' + p.interaction_count + '</span> pogovorov<br>\u{26A1} ' + p.total_energy.toFixed(0) + ' skupne energije</div>'
+        + '</div>'
+        + notesHtml
+        + '<div class="person-valence-container">'
+        +   '<div class="person-valence-track"><div class="person-valence-indicator" style="left:' + valPct + '%"></div></div>'
+        +   '<div class="person-valence-label" style="color:' + valColor + '">' + valLabel + ' (V: ' + (p.avg_valence > 0 ? '+' : '') + p.avg_valence.toFixed(2) + ')</div>'
+        + '</div>'
+        + memoriesHtml
+        + '</div>';
+    }).join('');
+  } catch (e) {
+    grid.innerHTML = '<div style="color:#f88;">Napaka pri nalaganju oseb</div>';
+    console.error('loadPersonOverview error:', e);
   }
 }
 
