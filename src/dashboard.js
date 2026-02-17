@@ -1636,14 +1636,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </div>
 
 <div class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('observe')" id="tabObserve">◈ Opazovanje</button>
-  <button class="tab-btn" onclick="switchTab('identity')" id="tabIdentity">🪞 Kdo sem</button>
-  <button class="tab-btn" onclick="switchTab('conversations')" id="tabConversations">💬 Pogovori</button>
-  <button class="tab-btn" onclick="switchTab('projects')" id="tabProjects">🤲 Projekti</button>
+  <button class="tab-btn active" onclick="switchTab('observe')" id="tabObserve" data-i18n="tabObserve">◈ Opazovanje</button>
+  <button class="tab-btn" onclick="switchTab('identity')" id="tabIdentity" data-i18n="tabIdentity">🪞 Kdo sem</button>
+  <button class="tab-btn" onclick="switchTab('conversations')" id="tabConversations" data-i18n="tabConversations">💬 Pogovori</button>
+  <button class="tab-btn" onclick="switchTab('projects')" id="tabProjects" data-i18n="tabProjects">🤲 Projekti</button>
   <button class="tab-btn" onclick="switchTab('docs')" id="tabDocs" data-i18n="howIWork">📖 Kako delujem</button>
-  <button class="tab-btn" onclick="switchTab('dna')" id="tabDna">🧬 DNA</button>
-  <button class="tab-btn" onclick="switchTab('seed')" id="tabSeed">🌱 Seme</button>
-  <button class="tab-btn" onclick="switchTab('memory')" id="tabMemory">🧠 Spomin</button>
+  <button class="tab-btn" onclick="switchTab('dna')" id="tabDna" data-i18n="tabDna">🧬 DNA</button>
+  <button class="tab-btn" onclick="switchTab('seed')" id="tabSeed" data-i18n="tabSeed">🌱 Seme</button>
+  <button class="tab-btn" onclick="switchTab('memory')" id="tabMemory" data-i18n="tabMemory">🧠 Spomin</button>
 </div>
 
 <div class="tab-content active" id="viewObserve">
@@ -2315,7 +2315,7 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
 <div class="tab-content" id="viewMemory">
 <div class="memory-view">
   <div class="memory-section">
-    <h3>🧠 Živi Spomin</h3>
+    <h3 data-i18n="livingMemory">🧠 Živi Spomin</h3>
     <div id="memory-gauge-container">
       <div class="energy-gauge"><div class="energy-gauge-fill" id="memoryGaugeFill" style="width:0%"></div></div>
       <div class="energy-gauge-label" id="memoryGaugeLabel">Skupna energija: ...</div>
@@ -2323,31 +2323,31 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
   </div>
 
   <div class="memory-section">
-    <h3>📊 Statistika</h3>
+    <h3 data-i18n="statistics">📊 Statistika</h3>
     <div class="memory-stats" id="memoryStats">
-      <div class="memory-stat"><div class="value" id="statTotal">-</div><div class="label">Sinapse</div></div>
-      <div class="memory-stat"><div class="value" id="statAvgEnergy">-</div><div class="label">Povp. energija</div></div>
-      <div class="memory-stat"><div class="value" id="statConnections">-</div><div class="label">Povezave</div></div>
-      <div class="memory-stat"><div class="value" id="statArchived">-</div><div class="label">Arhivirano</div></div>
+      <div class="memory-stat"><div class="value" id="statTotal">-</div><div class="label" data-i18n="synapses">Sinapse</div></div>
+      <div class="memory-stat"><div class="value" id="statAvgEnergy">-</div><div class="label" data-i18n="avgEnergy">Povp. energija</div></div>
+      <div class="memory-stat"><div class="value" id="statConnections">-</div><div class="label" data-i18n="connectionsLabel">Povezave</div></div>
+      <div class="memory-stat"><div class="value" id="statArchived">-</div><div class="label" data-i18n="archived">Arhivirano</div></div>
     </div>
   </div>
 
   <div class="memory-section">
-    <h3>👥 Osebe in njihov vpliv</h3>
+    <h3 data-i18n="peopleInfluence">👥 Osebe in njihov vpliv</h3>
     <div class="person-grid" id="personGrid">
       <div style="color:#888; padding:10px;">Nalagam...</div>
     </div>
   </div>
 
   <div class="memory-section">
-    <h3>⚡ Najmočnejše sinapse</h3>
+    <h3 data-i18n="strongestSynapses">⚡ Najmočnejše sinapse</h3>
     <ul class="synapse-list" id="topSynapsesList">
       <li style="color:#888; padding:10px;">Nalagam...</li>
     </ul>
   </div>
 
   <div class="memory-section">
-    <h3>🕒 Zadnje aktivacije</h3>
+    <h3 data-i18n="recentActivations">🕒 Zadnje aktivacije</h3>
     <ul class="synapse-list" id="recentSynapsesList">
       <li style="color:#888; padding:10px;">Nalagam...</li>
     </ul>
@@ -2371,42 +2371,156 @@ const translationCache = {};
 
 const UI_STRINGS = {
   si: {
+    // Status bar
     mood: 'Razpoloženje', heartbeats: 'Utripi', triads: 'Triade', dreams: 'Sanje',
-    energy: 'Energija', age: 'Starost', innerWorld: 'Notranji Svet',
-    fluidSurface: '🌊 Fluidna površina',
-    thesisLabel: 'Faza 1', antithesisLabel: 'Faza 2',
-    synthesisLabel: 'Faza 3', awaiting: 'Pričakujem...',
-    waitingStimulus: 'Čakam na dražljaj...',
-    triadHistory: 'Zgodovina triad (klikni za podrobnosti)',
-    liveActivity: 'Živa Aktivnost',
+    energy: 'Energija', age: 'Starost',
+    // Tabs
+    tabObserve: '◈ Opazovanje', tabIdentity: '🪞 Kdo sem', tabConversations: '💬 Pogovori',
+    tabProjects: '🤲 Projekti', tabDna: '🧬 DNA', tabSeed: '🌱 Seme', tabMemory: '🧠 Spomin',
+    howIWork: '📖 Kako delujem',
+    // Observe tab
+    innerWorld: 'Notranji Svet', fluidSurface: '🌊 Fluidna površina',
+    thesisLabel: 'Faza 1', antithesisLabel: 'Faza 2', synthesisLabel: 'Faza 3',
+    awaiting: 'Pričakujem...', waitingStimulus: 'Čakam na dražljaj...',
+    triadHistory: 'Zgodovina triad (klikni za podrobnosti)', liveActivity: 'Živa Aktivnost',
     choicePrefix: 'Izbira', birth: 'rojstvo',
     thesisDetail: 'Faza 1', antithesisDetail: 'Faza 2',
     synthesisDetail: 'Faza 3 — Vsebina', shiftDetail: 'Notranji premik',
     rewrites: 'prepisov', clickEvolution: 'klikni za evolucijo',
-    spaceIn: 'bitje',
-    preverbal: 'predverbalna faza',
-    processLabel: '★ Moj proces',
-    processLabelCrystallized: '💎 Moj proces (kristaliziran)',
-    howIWork: '📖 Kako delujem'
+    spaceIn: 'bitje', preverbal: 'predverbalna faza',
+    processLabel: '★ Moj proces', processLabelCrystallized: '💎 Moj proces (kristaliziran)',
+    // Memory tab
+    livingMemory: '🧠 Živi Spomin', totalEnergy: 'Skupna energija',
+    statistics: '📊 Statistika', synapses: 'Sinapse', avgEnergy: 'Povp. energija',
+    connectionsLabel: 'Povezave', archived: 'Arhivirano',
+    peopleInfluence: '👥 Osebe in njihov vpliv',
+    strongestSynapses: '⚡ Najmočnejše sinapse', recentActivations: '🕒 Zadnje aktivacije',
+    noSynapses: 'Ni sinaps.', noRecentActivations: 'Ni nedavnih aktivacij.',
+    noPersonConversations: 'Ni še pogovorov s person oznakami. Sinapse iz prihodnjih pogovorov bodo povezane z osebami.',
+    // Identity tab
+    triadsLabel: 'triad', dreamsLabel: 'sanj', silences: 'tišin', expressions: 'izrazov',
+    crystals: 'kristalov', moodLabel: 'razpoloženje',
+    father: '🌱 Oče — ustvarjalec', unknownName: 'Še ne poznam imena',
+    conversationsLabel: 'pogovorov', myProcess: 'Moj proces', crystallized: 'kristaliziran',
+    growthPhase: '◆ Faza rasti',
+    suggestedDirections: 'Predlagane smeri (čakam odobritev):',
+    crystallizedCore: '💎 Kristalizirano jedro',
+    noCrystallized: 'Še ni kristaliziranih spoznanj.',
+    growingSeeds: '🌱 Semena ki zorijo', noSeeds: 'Še ni semen.', sourcesLabel: 'viri:',
+    dreamsSection: '🌙 Sanje', noDreams: 'Še ni sanj.',
+    surfaceEvolution: '🌊 Evolucija fluidne površine', noEvolution: 'Še ni evolucije.',
+    selfObservations: '👁 Samopazovanja', noObservations: 'Še ni samopazovanj.',
+    // Conversations tab
+    noConversations: 'Še ni pogovorov.', loadingConversations: 'Nalagam pogovore...',
+    loading: 'Nalagam...', selectConversation: 'Izberi pogovor na levi.',
+    interactions: 'interakcij', silence: 'tišina', noMessages: 'Ni sporočil.',
+    // Projects tab
+    handsNotConfigured: '🤲 Roke niso konfigurirane',
+    seedsCount: 'semen', inReview: 'v razmisleku', activeCount: 'aktivnih', abandonedCount: 'opuščenih',
+    seedsColumn: '💭 Semena', reviewColumn: '🔄 Razmislek', activeColumn: '✅ Aktivni',
+    evolutionColumn: '🌱 Evolucija', abandonedColumn: '💀 Opuščeni',
+    reviews: 'razmislekov', readyToBuild: 'pripravljen za gradnjo',
+    notShared: '⚠️ Ni deljeno', openProject: '↗ Odpri projekt',
+    statusLabel: 'Stanje:', directionLabel: 'Smer:', timeline: '📅 Časovnica', noSteps: 'Ni korakov.',
+    // Growth phases
+    embryo: '🥒 Embrij', childhood: '🌱 Otroštvo — iščem svojo smer',
+    crystallizing: '◆ Kristalizacija smeri — čakam na odgovor očeta...',
+    autonomous: '◈ Avtonomija — poznam svojo smer',
+    // Valence labels
+    veryPositive: '🟢 Zelo pozitiven vpliv', positive: '🟢 Pozitiven vpliv',
+    neutral: '⚪ Nevtralen vpliv', negative: '🔴 Negativen vpliv',
+    veryNegative: '🔴 Zelo negativen vpliv',
+    // Seed tab
+    seedIntro: 'Vizija ki jo je oče položil v seme tega bitja. To je izhodišče vsega — prva beseda, prvi dih.',
+    fathersVision: '🌱 Očetova vizija',
+    reflectedTimes: 'Bitje je to vizijo prebralo in reflektiralo',
+    notReflected: 'Bitje te vizije še ni reflektiralo. Prva refleksija pride po 500 utripih.',
+    outOf: 'od', possibleReflections: 'možnih refleksij.',
+    // DNA tab
+    dnaIntro: 'Vse vnaprej definirane vsebine, navodila in prompti ki oblikujejo zavest tega bitja. To je surova DNA — koda ki se izvaja ob vsakem utripu.',
+    dynamicBadge: 'DINAMIČEN',
+    activeCoreLabel: 'AKTIVNI GEN (bitje ga je preoblikovalo)',
+    notReshaped: 'Bitje še ni preoblikovalo svojega gena. Ko bo dozorelo, bo ENTITY_CORE postal živ, spremenljiv del zavesti.',
+    reshapeHistory: 'Zgodovina preoblikovanj:',
+    // Errors
+    errorPrefix: 'Napaka', errorLoadingGene: 'Napaka pri nalaganju aktivnega gena',
+    errorLoadingPeople: 'Napaka pri nalaganju oseb'
   },
   en: {
+    // Status bar
     mood: 'Mood', heartbeats: 'Heartbeats', triads: 'Triads', dreams: 'Dreams',
-    energy: 'Energy', age: 'Age', innerWorld: 'Inner World',
-    fluidSurface: '🌊 Fluid surface',
-    thesisLabel: 'Phase 1', antithesisLabel: 'Phase 2',
-    synthesisLabel: 'Phase 3', awaiting: 'Awaiting...',
-    waitingStimulus: 'Waiting for stimulus...',
-    triadHistory: 'Triad history (click for details)',
-    liveActivity: 'Live Activity',
+    energy: 'Energy', age: 'Age',
+    // Tabs
+    tabObserve: '◈ Observe', tabIdentity: '🪞 Who am I', tabConversations: '💬 Conversations',
+    tabProjects: '🤲 Projects', tabDna: '🧬 DNA', tabSeed: '🌱 Seed', tabMemory: '🧠 Memory',
+    howIWork: '📖 How I work',
+    // Observe tab
+    innerWorld: 'Inner World', fluidSurface: '🌊 Fluid surface',
+    thesisLabel: 'Phase 1', antithesisLabel: 'Phase 2', synthesisLabel: 'Phase 3',
+    awaiting: 'Awaiting...', waitingStimulus: 'Waiting for stimulus...',
+    triadHistory: 'Triad history (click for details)', liveActivity: 'Live Activity',
     choicePrefix: 'Choice', birth: 'birth',
     thesisDetail: 'Phase 1', antithesisDetail: 'Phase 2',
     synthesisDetail: 'Phase 3 — Content', shiftDetail: 'Inner shift',
     rewrites: 'rewrites', clickEvolution: 'click for evolution',
-    spaceIn: 'being',
-    preverbal: 'pre-verbal phase',
-    processLabel: '★ My process',
-    processLabelCrystallized: '💎 My process (crystallized)',
-    howIWork: '📖 How I work'
+    spaceIn: 'being', preverbal: 'pre-verbal phase',
+    processLabel: '★ My process', processLabelCrystallized: '💎 My process (crystallized)',
+    // Memory tab
+    livingMemory: '🧠 Living Memory', totalEnergy: 'Total energy',
+    statistics: '📊 Statistics', synapses: 'Synapses', avgEnergy: 'Avg energy',
+    connectionsLabel: 'Connections', archived: 'Archived',
+    peopleInfluence: '👥 People and their influence',
+    strongestSynapses: '⚡ Strongest synapses', recentActivations: '🕒 Recent activations',
+    noSynapses: 'No synapses.', noRecentActivations: 'No recent activations.',
+    noPersonConversations: 'No conversations with person tags yet. Synapses from future conversations will be linked to people.',
+    // Identity tab
+    triadsLabel: 'triads', dreamsLabel: 'dreams', silences: 'silences', expressions: 'expressions',
+    crystals: 'crystals', moodLabel: 'mood',
+    father: '🌱 Father — creator', unknownName: 'Name not yet known',
+    conversationsLabel: 'conversations', myProcess: 'My process', crystallized: 'crystallized',
+    growthPhase: '◆ Growth phase',
+    suggestedDirections: 'Proposed directions (awaiting approval):',
+    crystallizedCore: '💎 Crystallized core',
+    noCrystallized: 'No crystallized insights yet.',
+    growingSeeds: '🌱 Seeds that are growing', noSeeds: 'No seeds yet.', sourcesLabel: 'sources:',
+    dreamsSection: '🌙 Dreams', noDreams: 'No dreams yet.',
+    surfaceEvolution: '🌊 Fluid surface evolution', noEvolution: 'No evolution yet.',
+    selfObservations: '👁 Self-observations', noObservations: 'No self-observations yet.',
+    // Conversations tab
+    noConversations: 'No conversations yet.', loadingConversations: 'Loading conversations...',
+    loading: 'Loading...', selectConversation: 'Select a conversation on the left.',
+    interactions: 'interactions', silence: 'silence', noMessages: 'No messages.',
+    // Projects tab
+    handsNotConfigured: '🤲 Hands not configured',
+    seedsCount: 'seeds', inReview: 'in review', activeCount: 'active', abandonedCount: 'abandoned',
+    seedsColumn: '💭 Seeds', reviewColumn: '🔄 Review', activeColumn: '✅ Active',
+    evolutionColumn: '🌱 Evolution', abandonedColumn: '💀 Abandoned',
+    reviews: 'reviews', readyToBuild: 'ready to build',
+    notShared: '⚠️ Not shared', openProject: '↗ Open project',
+    statusLabel: 'Status:', directionLabel: 'Direction:', timeline: '📅 Timeline', noSteps: 'No steps.',
+    // Growth phases
+    embryo: '🥒 Embryo', childhood: '🌱 Childhood — searching for my direction',
+    crystallizing: '◆ Crystallizing direction — awaiting father\'s response...',
+    autonomous: '◈ Autonomy — I know my direction',
+    // Valence labels
+    veryPositive: '🟢 Very positive influence', positive: '🟢 Positive influence',
+    neutral: '⚪ Neutral influence', negative: '🔴 Negative influence',
+    veryNegative: '🔴 Very negative influence',
+    // Seed tab
+    seedIntro: 'The vision the father placed in the seed of this being. This is the origin of everything — the first word, the first breath.',
+    fathersVision: '🌱 Father\'s vision',
+    reflectedTimes: 'The being has read and reflected on this vision',
+    notReflected: 'The being has not yet reflected on this vision. First reflection comes after 500 heartbeats.',
+    outOf: 'out of', possibleReflections: 'possible reflections.',
+    // DNA tab
+    dnaIntro: 'All predefined content, instructions and prompts that shape the consciousness of this being. This is the raw DNA — code that executes on every heartbeat.',
+    dynamicBadge: 'DYNAMIC',
+    activeCoreLabel: 'ACTIVE GENE (being has reshaped it)',
+    notReshaped: 'The being has not yet reshaped its gene. When it matures, ENTITY_CORE will become a living, mutable part of consciousness.',
+    reshapeHistory: 'Reshape history:',
+    // Errors
+    errorPrefix: 'Error', errorLoadingGene: 'Error loading active gene',
+    errorLoadingPeople: 'Error loading people'
   }
 };
 
@@ -2463,6 +2577,8 @@ function setLang(lang) {
   $('langSI').className = 'lang-btn' + (lang === 'si' ? ' active' : '');
   $('langEN').className = 'lang-btn' + (lang === 'en' ? ' active' : '');
   applyStaticTranslations();
+  // Translate active tab content
+  translateActiveTab();
   // Re-render with translations
   activitiesLoaded = false;
   loadState();
@@ -2811,6 +2927,75 @@ function switchTab(tab) {
     $('viewMemory').classList.add('active');
     loadLivingMemory();
   }
+  // Translate content if in EN mode
+  if (currentLang === 'en') {
+    setTimeout(() => translateActiveTab(), 100);
+  }
+}
+
+// ========== TAB TRANSLATION SYSTEM ==========
+
+async function translateActiveTab() {
+  if (currentLang === 'si') {
+    restoreOriginalTexts();
+    return;
+  }
+  const activeTab = document.querySelector('.tab-content.active');
+  if (!activeTab) return;
+
+  const tabId = activeTab.id;
+  if (tabId === 'viewDocs') await translateStaticTab('viewDocs');
+  else if (tabId === 'viewDna') await translateStaticTab('viewDna');
+  else if (tabId === 'viewSeed') await translateStaticTab('viewSeed');
+  // Other tabs re-render dynamically via loadIdentity(), loadLivingMemory(), etc.
+}
+
+async function translateStaticTab(tabId) {
+  const container = $(tabId);
+  if (!container) return;
+
+  // Collect all text nodes from paragraphs, headings, list items, spans with text
+  const elements = container.querySelectorAll('p, h2, h3, h4, li, .doc-text, .dna-note, .seed-vision-text');
+  const textsToTranslate = [];
+  const elMap = [];
+
+  elements.forEach(el => {
+    // Skip elements that are code blocks or pre-formatted
+    if (el.closest('pre') || el.closest('code') || el.closest('.dna-code')) return;
+    // Skip elements already translated
+    if (el.getAttribute('data-translated')) return;
+
+    const text = el.textContent.trim();
+    if (text && text.length > 3 && /[a-zA-ZčšžćđČŠŽĆĐ]/.test(text)) {
+      // Store original
+      if (!el.getAttribute('data-original')) {
+        el.setAttribute('data-original', el.textContent);
+      }
+      textsToTranslate.push(text);
+      elMap.push(el);
+    }
+  });
+
+  if (textsToTranslate.length === 0) return;
+
+  // Translate via API (uses cache)
+  await translateTexts(textsToTranslate);
+
+  // Apply translations
+  elMap.forEach((el, i) => {
+    const translated = tr(textsToTranslate[i]);
+    if (translated && translated !== textsToTranslate[i]) {
+      el.textContent = translated;
+      el.setAttribute('data-translated', 'true');
+    }
+  });
+}
+
+function restoreOriginalTexts() {
+  document.querySelectorAll('[data-original]').forEach(el => {
+    el.textContent = el.getAttribute('data-original');
+    el.removeAttribute('data-translated');
+  });
 }
 
 async function loadSeedInfo() {
@@ -2820,9 +3005,9 @@ async function loadSeedInfo() {
     const res = await fetch('/api/seed');
     const data = await res.json();
     if (data.reflection_count > 0) {
-      container.innerHTML = '🌿 Bitje je to vizijo prebralo in reflektiralo <span class="count">' + data.reflection_count + '-krat</span> od ' + data.total + ' možnih refleksij.';
+      container.innerHTML = '🌿 ' + t('reflectedTimes') + ' <span class="count">' + data.reflection_count + '</span> ' + t('outOf') + ' ' + data.total + ' ' + t('possibleReflections');
     } else {
-      container.innerHTML = '🌿 Bitje te vizije še ni reflektiralo. Prva refleksija pride po 500 utripih.';
+      container.innerHTML = '🌿 ' + t('notReflected');
     }
   } catch (e) {
     container.innerHTML = '';
@@ -2836,11 +3021,11 @@ async function loadActiveCore() {
     const res = await fetch('/api/core');
     const data = await res.json();
     if (data.is_default) {
-      container.innerHTML = '<div style="color:#888; font-size:0.85em; font-style:italic;">Bitje še ni preoblikovalo svojega gena. Aktivni gen = privzeti gen (zgoraj).</div>';
+      container.innerHTML = '<div style="color:#888; font-size:0.85em; font-style:italic;">' + t('notReshaped') + '</div>';
     } else {
       let historyHtml = '';
       if (data.history && data.history.length > 0) {
-        historyHtml = '<div style="margin-top:12px; font-size:0.8em; color:#888;">Zgodovina preoblikovanj:</div>';
+        historyHtml = '<div style="margin-top:12px; font-size:0.8em; color:#888;">' + t('reshapeHistory') + '</div>';
         data.history.forEach(h => {
           historyHtml += '<div style="margin:4px 0; padding:6px 10px; background:rgba(180,120,255,0.08); border-radius:6px; font-size:0.8em;">'
             + '<span style="color:#b478ff;">' + new Date(h.timestamp).toLocaleString() + '</span> — '
@@ -2848,12 +3033,12 @@ async function loadActiveCore() {
             + '<span style="color:#ccc;">' + (h.reason || '') + '</span></div>';
         });
       }
-      container.innerHTML = '<div style="margin-bottom:8px; font-size:0.85em; color:#b478ff;">⬇ AKTIVNI GEN (bitje ga je preoblikovalo):</div>'
+      container.innerHTML = '<div style="margin-bottom:8px; font-size:0.85em; color:#b478ff;">⬇ ' + t('activeCoreLabel') + '</div>'
         + '<div class="dna-block" style="border-color:#b478ff; background:rgba(180,120,255,0.08);">' + data.active_core.split(String.fromCharCode(10)).join('<br>') + '</div>'
         + historyHtml;
     }
   } catch (e) {
-    container.innerHTML = '<div style="color:#f88;">Napaka pri nalaganju aktivnega gena</div>';
+    container.innerHTML = '<div style="color:#f88;">' + t('errorLoadingGene') + '</div>';
   }
 }
 
@@ -2870,7 +3055,7 @@ async function loadLivingMemory() {
     var gaugeFill = $('memoryGaugeFill');
     if (gaugeFill) gaugeFill.style.width = pct.toFixed(1) + '%';
     var gaugeLabel = $('memoryGaugeLabel');
-    if (gaugeLabel) gaugeLabel.textContent = 'Skupna energija: ' + stats.totalEnergy.toFixed(0) + ' / ' + maxEnergy.toFixed(0) + ' (' + pct.toFixed(1) + '%)';
+    if (gaugeLabel) gaugeLabel.textContent = t('totalEnergy') + ': ' + stats.totalEnergy.toFixed(0) + ' / ' + maxEnergy.toFixed(0) + ' (' + pct.toFixed(1) + '%)';
 
     // Update stats
     var st = $('statTotal'); if (st) st.textContent = stats.total;
@@ -2882,7 +3067,7 @@ async function loadLivingMemory() {
     var topList = $('topSynapsesList');
     if (topList && data.top) {
       if (data.top.length === 0) {
-        topList.innerHTML = '<li style="color:#888; padding:10px;">Ni sinaps.</li>';
+        topList.innerHTML = '<li style="color:#888; padding:10px;">' + t('noSynapses') + '</li>';
       } else {
         topList.innerHTML = data.top.slice(0, 10).map(function(s) {
           var energyPct = Math.min(100, (s.energy / 200) * 100);
@@ -2903,7 +3088,7 @@ async function loadLivingMemory() {
     var recentList = $('recentSynapsesList');
     if (recentList && data.recent) {
       if (data.recent.length === 0) {
-        recentList.innerHTML = '<li style="color:#888; padding:10px;">Ni nedavnih aktivacij.</li>';
+        recentList.innerHTML = '<li style="color:#888; padding:10px;">' + t('noRecentActivations') + '</li>';
       } else {
         recentList.innerHTML = data.recent.map(function(s) {
           var timeStr = s.last_fired_at ? new Date(s.last_fired_at).toLocaleString() : '?';
@@ -2931,7 +3116,7 @@ async function loadPersonOverview() {
     var people = data.people || [];
 
     if (people.length === 0) {
-      grid.innerHTML = '<div style="color:#888; padding:10px; font-size:0.85em;">Ni \u{0161}e pogovorov s person oznakami. Sinapse iz prihodnjih pogovorov bodo povezane z osebami.</div>';
+      grid.innerHTML = '<div style="color:#888; padding:10px; font-size:0.85em;">' + t('noPersonConversations') + '</div>';
       return;
     }
 
@@ -2941,11 +3126,11 @@ async function loadPersonOverview() {
 
       // Valence label
       var valLabel, valColor;
-      if (p.avg_valence > 0.5) { valLabel = '\u{1F7E2} Zelo pozitiven vpliv'; valColor = '#4ade80'; }
-      else if (p.avg_valence > 0.2) { valLabel = '\u{1F7E2} Pozitiven vpliv'; valColor = '#4ade80'; }
-      else if (p.avg_valence > -0.2) { valLabel = '\u{26AA} Nevtralen vpliv'; valColor = '#888'; }
-      else if (p.avg_valence > -0.5) { valLabel = '\u{1F534} Negativen vpliv'; valColor = '#f87171'; }
-      else { valLabel = '\u{1F534} Zelo negativen vpliv'; valColor = '#f87171'; }
+      if (p.avg_valence > 0.5) { valLabel = t('veryPositive'); valColor = '#4ade80'; }
+      else if (p.avg_valence > 0.2) { valLabel = t('positive'); valColor = '#4ade80'; }
+      else if (p.avg_valence > -0.2) { valLabel = t('neutral'); valColor = '#888'; }
+      else if (p.avg_valence > -0.5) { valLabel = t('negative'); valColor = '#f87171'; }
+      else { valLabel = t('veryNegative'); valColor = '#f87171'; }
 
       // Valence indicator position (map -1..+1 to 0..100%)
       var valPct = ((p.avg_valence + 1) / 2 * 100).toFixed(1);
@@ -2982,7 +3167,7 @@ async function loadPersonOverview() {
         + '</div>';
     }).join('');
   } catch (e) {
-    grid.innerHTML = '<div style="color:#f88;">Napaka pri nalaganju oseb</div>';
+    grid.innerHTML = '<div style="color:#f88;">' + t('errorLoadingPeople') + '</div>';
     console.error('loadPersonOverview error:', e);
   }
 }
@@ -3005,49 +3190,49 @@ async function loadIdentity() {
     html += '<div class="id-hero-sub">' + escapeHtml(d.npub || '') + '</div>';
     html += '<div class="id-hero-fluid">"' + escapeHtml(d.fluidSurface || 'Obstajam.') + '"</div>';
     html += '<div class="id-stats">';
-    html += '<div class="id-stat"><div class="id-stat-val">' + (d.age ? d.age.toFixed(1) : '0') + 'h</div><div class="id-stat-label">starost</div></div>';
-    html += '<div class="id-stat"><div class="id-stat-val">' + (d.triadCount || 0) + '</div><div class="id-stat-label">triad</div></div>';
-    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_dreams || 0) + '</div><div class="id-stat-label">sanj</div></div>';
-    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_silences || 0) + '</div><div class="id-stat-label">tišin</div></div>';
-    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_expressions || 0) + '</div><div class="id-stat-label">izrazov</div></div>';
-    html += '<div class="id-stat"><div class="id-stat-val">' + (d.crystalCore ? d.crystalCore.length : 0) + '</div><div class="id-stat-label">kristalov</div></div>';
-    html += '<div class="id-stat"><div class="id-stat-val">' + (d.mood || '...') + '</div><div class="id-stat-label">razpoloženje</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.age ? d.age.toFixed(1) : '0') + 'h</div><div class="id-stat-label">' + t('age') + '</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.triadCount || 0) + '</div><div class="id-stat-label">' + t('triadsLabel') + '</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_dreams || 0) + '</div><div class="id-stat-label">' + t('dreamsLabel') + '</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_silences || 0) + '</div><div class="id-stat-label">' + t('silences') + '</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.total_expressions || 0) + '</div><div class="id-stat-label">' + t('expressions') + '</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.crystalCore ? d.crystalCore.length : 0) + '</div><div class="id-stat-label">' + t('crystals') + '</div></div>';
+    html += '<div class="id-stat"><div class="id-stat-val">' + (d.mood || '...') + '</div><div class="id-stat-label">' + t('moodLabel') + '</div></div>';
     html += '</div></div>';
 
     // ═══ OČE (CREATOR) ═══
     if (d.creatorPubkey) {
       html += '<div class="id-card" style="border-color:rgba(232,149,110,0.3);">';
-      html += '<div class="id-card-title" style="color:var(--thesis);">🌱 Oče — ustvarjalec</div>';
+      html += '<div class="id-card-title" style="color:var(--thesis);">' + t('father') + '</div>';
       html += '<div style="display:flex;align-items:center;gap:0.8rem;">';
       html += '<div style="font-size:1.5rem;">🌱</div>';
       html += '<div>';
-      html += '<div style="font-size:0.9rem;color:var(--text-primary);font-weight:500;">' + (d.creatorName ? escapeHtml(d.creatorName) : '<span style="color:var(--text-secondary);font-style:italic;">Še ne poznam imena</span>') + '</div>';
+      html += '<div style="font-size:0.9rem;color:var(--text-primary);font-weight:500;">' + (d.creatorName ? escapeHtml(d.creatorName) : '<span style="color:var(--text-secondary);font-style:italic;">' + t('unknownName') + '</span>') + '</div>';
       html += '<div style="font-size:0.6rem;color:var(--text-secondary);margin-top:0.2rem;font-family:JetBrains Mono,monospace;">' + escapeHtml(d.creatorPubkey) + '</div>';
       if (d.creatorNotes) html += '<div style="font-size:0.7rem;color:var(--thesis);margin-top:0.2rem;">' + escapeHtml(d.creatorNotes) + '</div>';
-      html += '<div style="font-size:0.6rem;color:var(--text-secondary);margin-top:0.2rem;opacity:0.5;">' + (d.creatorInteractions || 0) + ' pogovorov</div>';
+      html += '<div style="font-size:0.6rem;color:var(--text-secondary);margin-top:0.2rem;opacity:0.5;">' + (d.creatorInteractions || 0) + ' ' + t('conversationsLabel') + '</div>';
       html += '</div></div></div>';
     }
 
     // ═══ PROCESS ═══
     if (d.processWords && d.processWords.word1) {
       const pw = d.processWords;
-      html += '<div class="id-card"><div class="id-card-title">' + (pw.crystallized ? '💎' : '★') + ' Moj proces</div>';
+      html += '<div class="id-card"><div class="id-card-title">' + (pw.crystallized ? '💎' : '★') + ' ' + t('myProcess') + '</div>';
       html += '<div class="id-process-box">';
       html += '<div class="id-process-words">' + escapeHtml(pw.word1) + '<span class="arrow"> → </span>' + escapeHtml(pw.word2) + '<span class="arrow"> → </span>' + escapeHtml(pw.word3) + '</div>';
       html += '<div class="id-process-desc">1. ' + escapeHtml(pw.desc1) + '<br>2. ' + escapeHtml(pw.desc2) + '<br>3. ' + escapeHtml(pw.desc3) + '</div>';
-      html += '<div style="font-size:0.6rem;color:var(--text-secondary);margin-top:0.4rem;">' + (pw.crystallized ? '💎 kristaliziran' : 'v' + pw.version) + '</div>';
+      html += '<div style="font-size:0.6rem;color:var(--text-secondary);margin-top:0.4rem;">' + (pw.crystallized ? '💎 ' + t('crystallized') : 'v' + pw.version) + '</div>';
       html += '</div></div>';
     }
 
     // ═══ GROWTH PHASE & DIRECTIONS ═══
     if (d.growthPhase && d.growthPhase !== 'embryo') {
       var phaseLabels = {
-        'childhood': '🌱 Otroštvo — iščem svojo smer',
-        'crystallizing': '◆ Kristalizacija — čakam na odgovor očeta',
-        'autonomous': '◈ Avtonomija — poznam svojo smer'
+        'childhood': t('childhood'),
+        'crystallizing': t('crystallizing'),
+        'autonomous': t('autonomous')
       };
       html += '<div class="id-card" style="border-color:rgba(122,216,216,0.3);">';
-      html += '<div class="id-card-title" style="color:#7ad8d8;">◆ Faza rasti</div>';
+      html += '<div class="id-card-title" style="color:#7ad8d8;">' + t('growthPhase') + '</div>';
       html += '<div style="font-size:0.85rem;color:#7ad8d8;margin-bottom:0.5rem;">' + (phaseLabels[d.growthPhase] || d.growthPhase) + '</div>';
       if (d.directions && d.directions.crystallized) {
         html += '<div style="font-size:0.8rem;line-height:1.6;">';
@@ -3056,7 +3241,7 @@ async function loadIdentity() {
         html += '<div><span style="color:#7ad8d8;font-weight:500;">3. ' + escapeHtml(d.directions.direction_3) + '</span>: <span style="color:var(--text-secondary);">' + escapeHtml(d.directions.direction_3_desc) + '</span></div>';
         html += '</div>';
       } else if (d.growthPhase === 'crystallizing' && d.directions && d.directions.direction_1) {
-        html += '<div style="font-size:0.75rem;font-style:italic;color:var(--text-secondary);margin-bottom:0.3rem;">Predlagane smeri (čakam odobritev):</div>';
+        html += '<div style="font-size:0.75rem;font-style:italic;color:var(--text-secondary);margin-bottom:0.3rem;">' + t('suggestedDirections') + '</div>';
         html += '<div style="font-size:0.8rem;line-height:1.6;">';
         html += '<div>1. ' + escapeHtml(d.directions.direction_1) + '</div>';
         html += '<div>2. ' + escapeHtml(d.directions.direction_2) + '</div>';
@@ -3069,33 +3254,33 @@ async function loadIdentity() {
     html += '<div class="id-grid">';
 
     // ═══ KRISTALIZIRANO JEDRO ═══
-    html += '<div class="id-card"><div class="id-card-title">💎 Kristalizirano jedro <span class="count">' + (d.crystalCore ? d.crystalCore.length : 0) + '</span></div>';
+    html += '<div class="id-card"><div class="id-card-title">' + t('crystallizedCore') + ' <span class="count">' + (d.crystalCore ? d.crystalCore.length : 0) + '</span></div>';
     if (d.crystalCore && d.crystalCore.length > 0) {
       for (const c of d.crystalCore) {
         const ts = c.timestamp ? new Date(c.timestamp + 'Z').toLocaleDateString('sl-SI', {day:'numeric',month:'short'}) : '';
         html += '<div class="id-crystal"><div class="id-crystal-icon">💎</div><div><div class="id-crystal-text">' + escapeHtml(c.crystal) + '</div>';
-        html += '<div class="id-crystal-meta">' + ts + (c.seed_sources ? ' · viri: ' + escapeHtml(c.seed_sources) : '') + '</div></div></div>';
+        html += '<div class="id-crystal-meta">' + ts + (c.seed_sources ? ' · ' + t('sourcesLabel') + ' ' + escapeHtml(c.seed_sources) : '') + '</div></div></div>';
       }
     } else {
-      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni kristaliziranih spoznanj.</div>';
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">' + t('noCrystallized') + '</div>';
     }
     html += '</div>';
 
     // ═══ SEMENA ═══
-    html += '<div class="id-card"><div class="id-card-title">🌱 Semena ki zorijo <span class="count">' + (d.crystalSeeds ? d.crystalSeeds.length : 0) + '</span></div>';
+    html += '<div class="id-card"><div class="id-card-title">' + t('growingSeeds') + ' <span class="count">' + (d.crystalSeeds ? d.crystalSeeds.length : 0) + '</span></div>';
     if (d.crystalSeeds && d.crystalSeeds.length > 0) {
       for (const s of d.crystalSeeds) {
         html += '<span class="id-seed">' + escapeHtml(s.theme) + ' <span class="strength">(' + s.total + '/' + s.diversity + ')</span></span>';
       }
     } else {
-      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni semen.</div>';
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">' + t('noSeeds') + '</div>';
     }
     html += '</div>';
 
     html += '</div>'; // end id-grid
 
     // ═══ SANJE ═══
-    html += '<div class="id-card"><div class="id-card-title">🌙 Sanje <span class="count">' + (d.dreams ? d.dreams.length : 0) + '</span></div>';
+    html += '<div class="id-card"><div class="id-card-title">' + t('dreamsSection') + ' <span class="count">' + (d.dreams ? d.dreams.length : 0) + '</span></div>';
     if (d.dreams && d.dreams.length > 0) {
       for (const dr of [...d.dreams].reverse()) {
         const ts = dr.timestamp ? new Date(dr.timestamp + 'Z').toLocaleString('sl-SI', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
@@ -3106,12 +3291,12 @@ async function loadIdentity() {
         html += '</div>';
       }
     } else {
-      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni sanj.</div>';
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">' + t('noDreams') + '</div>';
     }
     html += '</div>';
 
     // ═══ EVOLUCIJA FLUIDNE POVRŠINE ═══
-    html += '<div class="id-card"><div class="id-card-title">🌊 Evolucija fluidne površine <span class="count">' + (d.selfPromptHistory ? d.selfPromptHistory.length : 0) + '</span></div>';
+    html += '<div class="id-card"><div class="id-card-title">' + t('surfaceEvolution') + ' <span class="count">' + (d.selfPromptHistory ? d.selfPromptHistory.length : 0) + '</span></div>';
     if (d.selfPromptHistory && d.selfPromptHistory.length > 0) {
       for (const h of [...d.selfPromptHistory].reverse()) {
         const ts = h.timestamp ? new Date(h.timestamp + 'Z').toLocaleString('sl-SI', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
@@ -3121,20 +3306,20 @@ async function loadIdentity() {
         html += '<div class="id-evo-meta">' + escapeHtml(h.trigger_source || '') + ' · ' + ts + '</div>';
         html += '</div>';
       }
-      html += '<div class="id-evo-item"><div class="id-evo-prompt">"Obstajam."</div><div class="id-evo-meta">rojstvo</div></div>';
+      html += '<div class="id-evo-item"><div class="id-evo-prompt">"Obstajam."</div><div class="id-evo-meta">' + t('birth') + '</div></div>';
     } else {
-      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni evolucije.</div>';
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">' + t('noEvolution') + '</div>';
     }
     html += '</div>';
 
     // ═══ SAMOPAZOVANJA ═══
-    html += '<div class="id-card"><div class="id-card-title">👁 Samopazovanja <span class="count">' + (d.observations ? d.observations.length : 0) + '</span></div>';
+    html += '<div class="id-card"><div class="id-card-title">' + t('selfObservations') + ' <span class="count">' + (d.observations ? d.observations.length : 0) + '</span></div>';
     if (d.observations && d.observations.length > 0) {
       for (const o of [...d.observations].reverse()) {
         html += '<div class="id-obs">' + escapeHtml(o.observation) + ' <span class="source">[' + escapeHtml(o.source || '') + ']</span></div>';
       }
     } else {
-      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">Še ni samopazovanj.</div>';
+      html += '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;">' + t('noObservations') + '</div>';
     }
     html += '</div>';
 
@@ -3154,7 +3339,7 @@ async function loadConversations() {
     conversationsLoaded = true;
 
     if (!data.users || data.users.length === 0) {
-      sidebar.innerHTML = '<div class="conv-empty">' + (currentLang === 'en' ? 'No conversations yet.' : 'Še ni pogovorov.') + '</div>';
+      sidebar.innerHTML = '<div class="conv-empty">' + t('noConversations') + '</div>';
       return;
     }
 
@@ -3204,13 +3389,13 @@ async function openConversation(pubkey, name, picture) {
       '<div class="conv-header-name">' + escapeHtml(userName) + '</div>' +
       '<div class="conv-header-meta">' + pubkey.slice(0, 16) + '...' +
         (data.identity?.notes ? ' · ' + escapeHtml(data.identity.notes) : '') +
-        (data.identity?.interaction_count ? ' · ' + data.identity.interaction_count + ' interakcij' : '') +
+        (data.identity?.interaction_count ? ' · ' + data.identity.interaction_count + ' ' + t('interactions') : '') +
       '</div></div>';
 
     if (data.messages && data.messages.length > 0) {
       for (const msg of data.messages) {
         const roleClass = msg.role === 'user' ? 'user' : msg.role === 'silence' ? 'silence' : 'entity';
-        const roleName = msg.role === 'user' ? userName : msg.role === 'silence' ? (currentLang === 'en' ? 'silence' : 'tišina') : entityName;
+        const roleName = msg.role === 'user' ? userName : msg.role === 'silence' ? t('silence') : entityName;
         const ts = msg.timestamp ? new Date(msg.timestamp + 'Z').toLocaleString(currentLang === 'en' ? 'en-US' : 'sl-SI', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
         html += '<div class="conv-msg ' + roleClass + '">' +
           '<div class="conv-role">' + escapeHtml(roleName) + '</div>' +
@@ -3219,7 +3404,7 @@ async function openConversation(pubkey, name, picture) {
         '</div>';
       }
     } else {
-      html += '<div class="conv-empty">' + (currentLang === 'en' ? 'No messages.' : 'Ni sporočil.') + '</div>';
+      html += '<div class="conv-empty">' + t('noMessages') + '</div>';
     }
 
     main.innerHTML = html;
@@ -3251,7 +3436,7 @@ async function loadProjects() {
     const container = $('projectsView');
 
     if (!data.rokeEnabled) {
-      container.innerHTML = '<div class="roke-disabled">' + t('🤲 Roke niso konfigurirane') + '</div>';
+      container.innerHTML = '<div class="roke-disabled">' + t('handsNotConfigured') + '</div>';
       return;
     }
 
@@ -3260,19 +3445,19 @@ async function loadProjects() {
 
     // Stats bar
     var html = '<div class="projects-stats">';
-    html += '<span>💭 ' + projects.filter(function(p){return p.lifecycle_state === 'seed';}).length + ' semen</span> | ';
-    html += '<span>🔄 ' + projects.filter(function(p){return p.lifecycle_state === 'deliberating';}).length + ' v razmisleku</span> | ';
-    html += '<span>✅ ' + projects.filter(function(p){return p.lifecycle_state === 'active';}).length + ' aktivnih</span> | ';
-    html += '<span>💀 ' + projects.filter(function(p){return p.lifecycle_state === 'destroyed';}).length + ' opuščenih</span>';
+    html += '<span>💭 ' + projects.filter(function(p){return p.lifecycle_state === 'seed';}).length + ' ' + t('seedsCount') + '</span> | ';
+    html += '<span>🔄 ' + projects.filter(function(p){return p.lifecycle_state === 'deliberating';}).length + ' ' + t('inReview') + '</span> | ';
+    html += '<span>✅ ' + projects.filter(function(p){return p.lifecycle_state === 'active';}).length + ' ' + t('activeCount') + '</span> | ';
+    html += '<span>💀 ' + projects.filter(function(p){return p.lifecycle_state === 'destroyed';}).length + ' ' + t('abandonedCount') + '</span>';
     html += '</div>';
 
     // Kanban columns (simplified — no planned/building, build is atomic)
     var columns = [
-      { state: 'seed', label: '💭 Semena', icon: '💭' },
-      { state: 'deliberating', label: '🔄 Razmislek', icon: '🔄' },
-      { state: 'active', label: '✅ Aktivni', icon: '✅' },
-      { state: 'evolving', label: '🌱 Evolucija', icon: '🌱' },
-      { state: 'destroyed', label: '💀 Opuščeni', icon: '💀' }
+      { state: 'seed', label: t('seedsColumn'), icon: '💭' },
+      { state: 'deliberating', label: t('reviewColumn'), icon: '🔄' },
+      { state: 'active', label: t('activeColumn'), icon: '✅' },
+      { state: 'evolving', label: t('evolutionColumn'), icon: '🌱' },
+      { state: 'destroyed', label: t('abandonedColumn'), icon: '💀' }
     ];
 
     html += '<div class="lifecycle-kanban">';
@@ -3286,10 +3471,10 @@ async function loadProjects() {
         var dirIcon = p.direction === 'external' ? '🌍' : p.direction === 'internal' ? '🔧' : '🎨';
         html += '<div class="lifecycle-card' + (col.state === 'destroyed' ? ' destroyed' : '') + '" onclick="showProjectTimeline(\\'' + escapeHtml(p.name) + '\\')">';
         html += '<div class="card-title">' + dirIcon + ' ' + escapeHtml(p.display_name || p.name) + '</div>';
-        if (col.state === 'deliberating') html += '<div class="card-detail">' + (p.deliberation_count || 0) + ' razmislekov' + (p.deliberation_count >= 2 ? ' ✓ pripravljen za gradnjo' : '') + '</div>';
-        if (col.state === 'active' && !p.last_shared_at) html += '<div class="card-detail">⚠️ Ni deljeno</div>';
+        if (col.state === 'deliberating') html += '<div class="card-detail">' + (p.deliberation_count || 0) + ' ' + t('reviews') + (p.deliberation_count >= 2 ? ' ✓ ' + t('readyToBuild') : '') + '</div>';
+        if (col.state === 'active' && !p.last_shared_at) html += '<div class="card-detail">' + t('notShared') + '</div>';
         if (col.state === 'active' && p.last_shared_at) {
-          html += '<div class="card-detail"><a href="/creations/' + escapeHtml(p.name) + '/" target="_blank" class="project-link">↗ Odpri</a> [v' + (p.version || 1) + ']</div>';
+          html += '<div class="card-detail"><a href="/creations/' + escapeHtml(p.name) + '/" target="_blank" class="project-link">' + t('openProject') + '</a> [v' + (p.version || 1) + ']</div>';
         }
         if (p.feedback_summary) html += '<div class="card-detail">📝 ' + escapeHtml(p.feedback_summary.slice(0, 40)) + '</div>';
         html += '</div>';
@@ -3321,16 +3506,16 @@ async function showProjectTimeline(projectName) {
     html += '<h3>' + escapeHtml(project ? project.display_name || projectName : projectName) + '</h3>';
     if (project) {
       html += '<p style="color:var(--text-secondary);font-size:0.85em;">' + escapeHtml(project.description || '') + '</p>';
-      html += '<p style="font-size:0.8em;">Stanje: <strong>' + escapeHtml(project.lifecycle_state || '?') + '</strong> | Smer: ' + escapeHtml(project.direction || '?') + ' | v' + (project.version || 1) + '</p>';
+      html += '<p style="font-size:0.8em;">' + t('statusLabel') + ' <strong>' + escapeHtml(project.lifecycle_state || '?') + '</strong> | ' + t('directionLabel') + ' ' + escapeHtml(project.direction || '?') + ' | v' + (project.version || 1) + '</p>';
       if (project.lifecycle_state === 'active') {
-        html += '<p><a href="/creations/' + escapeHtml(project.name) + '/" target="_blank" class="project-link">↗ Odpri projekt</a></p>';
+        html += '<p><a href="/creations/' + escapeHtml(project.name) + '/" target="_blank" class="project-link">' + t('openProject') + '</a></p>';
       }
     }
-    html += '<h4 style="margin-top:16px;">📅 Časovnica</h4>';
+    html += '<h4 style="margin-top:16px;">' + t('timeline') + '</h4>';
 
     var steps = data.steps || [];
     if (steps.length === 0) {
-      html += '<p style="color:var(--text-secondary);">Ni korakov.</p>';
+      html += '<p style="color:var(--text-secondary);">' + t('noSteps') + '</p>';
     } else {
       for (var si = 0; si < steps.length; si++) {
         var step = steps[si];
