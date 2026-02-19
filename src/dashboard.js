@@ -158,7 +158,7 @@ app.get('/api/conversations', async (req, res) => {
 app.get('/api/conversations/:pubkey', (req, res) => {
   try {
     const { pubkey } = req.params;
-    const messages = memory.getConversation(pubkey, 100);
+    const messages = memory.getConversation(pubkey, 1000);
     const identity = memory.getIdentity(pubkey);
     res.json({ pubkey, identity, messages });
   } catch (err) {
