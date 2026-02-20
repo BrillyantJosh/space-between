@@ -184,6 +184,19 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_build_logs_project ON build_logs(project_name);
 
+  CREATE TABLE IF NOT EXISTS project_perspectives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_name TEXT NOT NULL,
+    pubkey TEXT NOT NULL,
+    perspective TEXT NOT NULL,
+    source TEXT DEFAULT 'conversation',
+    status TEXT DEFAULT 'received',
+    gathered_at TEXT DEFAULT (datetime('now')),
+    triad_id INTEGER DEFAULT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_perspectives_project ON project_perspectives(project_name);
+  CREATE INDEX IF NOT EXISTS idx_perspectives_pubkey ON project_perspectives(pubkey);
+
   CREATE TABLE IF NOT EXISTS synapses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pattern TEXT NOT NULL,
@@ -271,6 +284,10 @@ const projectMigrations = [
   ['api_calls_date', "ALTER TABLE projects ADD COLUMN api_calls_date TEXT DEFAULT ''"],
   ['health_check_url', "ALTER TABLE projects ADD COLUMN health_check_url TEXT DEFAULT ''"],
   ['tech_stack', "ALTER TABLE projects ADD COLUMN tech_stack TEXT DEFAULT '[]'"],
+  // v4 — perspective gathering & project crystallization
+  ['perspectives_count', "ALTER TABLE projects ADD COLUMN perspectives_count INTEGER DEFAULT 0"],
+  ['crystallized_at', "ALTER TABLE projects ADD COLUMN crystallized_at TEXT DEFAULT NULL"],
+  ['crystallization_notes', "ALTER TABLE projects ADD COLUMN crystallization_notes TEXT DEFAULT ''"],
 ];
 
 for (const [col, sql] of migrations) {
@@ -295,6 +312,14 @@ for (const [col, sql] of projectMigrations) {
 try {
   db.prepare("UPDATE projects SET lifecycle_state = 'active', direction = 'external' WHERE status = 'active' AND lifecycle_state = 'seed'").run();
   db.prepare("UPDATE projects SET lifecycle_state = 'destroyed' WHERE status = 'destroyed' AND lifecycle_state = 'seed'").run();
+} catch (_) {}
+
+// v4 migration: deliberating → gathering_perspectives
+try {
+  const migrated = db.prepare("UPDATE projects SET lifecycle_state = 'gathering_perspectives' WHERE lifecycle_state = 'deliberating'").run();
+  if (migrated.changes > 0) {
+    console.log(`[MEMORY] Migrated ${migrated.changes} deliberating projects to gathering_perspectives`);
+  }
 } catch (_) {}
 
 // Auto-detect growth phase for existing entity
@@ -739,20 +764,30 @@ const memory = {
   },
 
   getSeedsAndDeliberating() {
-    return db.prepare("SELECT * FROM projects WHERE lifecycle_state IN ('seed', 'deliberating') ORDER BY updated_at ASC").all();
+    return db.prepare("SELECT * FROM projects WHERE lifecycle_state IN ('seed', 'gathering_perspectives') ORDER BY updated_at ASC").all();
   },
 
   getProjectsNeedingAttention() {
-    // Priority: planned→build, deliberating→plan, testing, unshared, feedback, unhealthy, seeds
+    // Priority: planned→build, crystallized→plan, gathering→gather/crystallize, testing, unshared, feedback, unhealthy, seeds
     const planned = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'planned' LIMIT 1").all();
-    const readyToPlan = db.prepare("SELECT *, 'plan' as needed_action FROM projects WHERE lifecycle_state = 'deliberating' AND deliberation_count >= 2 AND (plan_json IS NULL OR plan_json = '') LIMIT 1").all();
-    const readyToBuild = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'deliberating' AND deliberation_count >= 2 AND plan_json IS NOT NULL AND plan_json != '' LIMIT 1").all();
+    const crystallized = db.prepare("SELECT *, 'plan' as needed_action FROM projects WHERE lifecycle_state = 'crystallized' AND (plan_json IS NULL OR plan_json = '') LIMIT 1").all();
     const testing = db.prepare("SELECT *, 'test' as needed_action FROM projects WHERE lifecycle_state = 'testing' LIMIT 1").all();
     const unshared = db.prepare("SELECT *, 'share' as needed_action FROM projects WHERE lifecycle_state = 'active' AND last_shared_at IS NULL LIMIT 1").all();
     const withFeedback = db.prepare("SELECT *, 'evolve' as needed_action FROM projects WHERE lifecycle_state = 'active' AND feedback_summary != '' AND feedback_summary IS NOT NULL LIMIT 1").all();
     const unhealthy = db.prepare("SELECT *, 'check' as needed_action FROM projects WHERE service_status = 'unhealthy' LIMIT 1").all();
+    // Gathering perspectives — check if ready for crystallization or needs more gathering
+    const gathering = db.prepare("SELECT * FROM projects WHERE lifecycle_state = 'gathering_perspectives' ORDER BY updated_at ASC LIMIT 3").all();
+    const gatherActions = gathering.map(p => {
+      // Check if ready for crystallization
+      const uniqueExternal = db.prepare("SELECT COUNT(DISTINCT pubkey) as c FROM project_perspectives WHERE project_name = ? AND pubkey != 'self'").get(p.name).c;
+      const selfDelibs = db.prepare("SELECT COUNT(*) as c FROM project_perspectives WHERE project_name = ? AND source = 'self_deliberation'").get(p.name).c;
+      if (uniqueExternal >= 2 || (selfDelibs >= 5 && uniqueExternal === 0)) {
+        return { ...p, needed_action: 'crystallize' };
+      }
+      return { ...p, needed_action: 'gather' };
+    });
     const seeds = db.prepare("SELECT *, 'deliberate' as needed_action FROM projects WHERE lifecycle_state = 'seed' LIMIT 1").all();
-    return [...planned, ...readyToPlan, ...readyToBuild, ...testing, ...unshared, ...withFeedback, ...unhealthy, ...seeds];
+    return [...planned, ...crystallized, ...testing, ...unshared, ...withFeedback, ...unhealthy, ...gatherActions, ...seeds];
   },
 
   setProjectFeedback(name, summary) {
@@ -808,6 +843,96 @@ const memory = {
     const proj = this.getProject(projectName);
     if (!proj || proj.api_calls_date !== today) return 0;
     return proj.api_calls_today || 0;
+  },
+
+  // === PROJECT PERSPECTIVES (v4) ===
+
+  addProjectPerspective(projectName, pubkey, perspective, triadId = null, source = 'conversation') {
+    const status = source === 'gather_ask' ? 'asked' : 'received';
+    db.prepare(
+      'INSERT INTO project_perspectives (project_name, pubkey, perspective, triad_id, source, status) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(projectName, pubkey, (perspective || '').slice(0, 1000), triadId, source, status);
+    // Update perspectives_count (unique pubkeys excluding 'self', only received)
+    const count = db.prepare(
+      "SELECT COUNT(DISTINCT pubkey) as c FROM project_perspectives WHERE project_name = ? AND pubkey != 'self' AND status = 'received'"
+    ).get(projectName).c;
+    db.prepare("UPDATE projects SET perspectives_count = ?, updated_at = datetime('now') WHERE name = ?").run(count, projectName);
+    return count;
+  },
+
+  getProjectPerspectives(projectName) {
+    return db.prepare(
+      `SELECT pp.*, ki.name as person_name
+       FROM project_perspectives pp
+       LEFT JOIN known_identities ki ON pp.pubkey = ki.pubkey
+       WHERE pp.project_name = ?
+       ORDER BY pp.gathered_at ASC`
+    ).all(projectName);
+  },
+
+  getUniquePerspectiveCount(projectName) {
+    return db.prepare(
+      "SELECT COUNT(DISTINCT pubkey) as c FROM project_perspectives WHERE project_name = ? AND pubkey != 'self' AND status = 'received'"
+    ).get(projectName).c;
+  },
+
+  hasRecentGatherAsk(projectName, pubkey) {
+    // Check if we asked this person about this project in the last 7 days
+    const ask = db.prepare(
+      "SELECT 1 FROM project_perspectives WHERE project_name = ? AND pubkey = ? AND source = 'gather_ask' AND gathered_at > datetime('now', '-7 days') LIMIT 1"
+    ).get(projectName, pubkey);
+    return !!ask;
+  },
+
+  markPerspectiveReceived(projectName, pubkey, perspective) {
+    // If we had an 'asked' entry, update it to 'received' with the actual perspective
+    const existing = db.prepare(
+      "SELECT id FROM project_perspectives WHERE project_name = ? AND pubkey = ? AND status = 'asked' ORDER BY id DESC LIMIT 1"
+    ).get(projectName, pubkey);
+    if (existing) {
+      db.prepare(
+        "UPDATE project_perspectives SET status = 'received', perspective = ?, gathered_at = datetime('now') WHERE id = ?"
+      ).run((perspective || '').slice(0, 1000), existing.id);
+    } else {
+      // New perspective from someone we didn't explicitly ask
+      this.addProjectPerspective(projectName, pubkey, perspective, null, 'conversation');
+    }
+    // Update count
+    const count = db.prepare(
+      "SELECT COUNT(DISTINCT pubkey) as c FROM project_perspectives WHERE project_name = ? AND pubkey != 'self' AND status = 'received'"
+    ).get(projectName).c;
+    db.prepare("UPDATE projects SET perspectives_count = ?, updated_at = datetime('now') WHERE name = ?").run(count, projectName);
+    return count;
+  },
+
+  isProjectReadyForCrystallization(projectName, creatorPubkey = null) {
+    const project = this.getProject(projectName);
+    if (!project) return false;
+    if (project.lifecycle_state === 'crystallized') return true;
+    if (project.lifecycle_state !== 'gathering_perspectives') return false;
+
+    const uniqueExternal = db.prepare(
+      "SELECT COUNT(DISTINCT pubkey) as c FROM project_perspectives WHERE project_name = ? AND pubkey != 'self' AND status = 'received'"
+    ).get(projectName).c;
+    const selfDelibs = db.prepare(
+      "SELECT COUNT(*) as c FROM project_perspectives WHERE project_name = ? AND source = 'self_deliberation'"
+    ).get(projectName).c;
+
+    // If father gave perspective + at least 1 other unique perspective
+    if (creatorPubkey) {
+      const fatherPerspective = db.prepare(
+        "SELECT 1 FROM project_perspectives WHERE project_name = ? AND pubkey = ? AND status = 'received'"
+      ).get(projectName, creatorPubkey);
+      if (fatherPerspective && uniqueExternal >= 1) return true;
+    }
+
+    // 2+ unique external perspectives
+    if (uniqueExternal >= 2) return true;
+
+    // Fallback: 5+ self-deliberations with no external input (nobody to ask)
+    if (selfDelibs >= 5 && uniqueExternal === 0) return true;
+
+    return false;
   },
 
   // === GROWTH PHASE & DIRECTION CRYSTALLIZATION ===

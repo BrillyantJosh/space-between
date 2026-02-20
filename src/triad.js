@@ -6,7 +6,7 @@ import memory from './memory.js';
 import config from './config.js';
 import { broadcast } from './dashboard.js';
 import { updateProfile } from './nostr.js';
-import { isROKEEnabled, seedProject, deliberateProject, planProject, buildProject, deployService, checkService, shareProject, evolveProject, pruneProject, proposeImprovement, getProjectContext, ROKE_AWARENESS } from './hands.js';
+import { isROKEEnabled, seedProject, deliberateProject, gatherPerspective, crystallizeProject, planProject, buildProject, deployService, checkService, shareProject, evolveProject, pruneProject, proposeImprovement, getProjectContext, ROKE_AWARENESS } from './hands.js';
 import { sendDM, publishNote } from './nostr.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -386,7 +386,18 @@ ${(() => {
       synapses.map(s => `- "${s.pattern.slice(0, 80)}" (E:${s.energy.toFixed(0)} M:${s.strength.toFixed(2)} V:${s.emotional_valence > 0 ? '+' : ''}${s.emotional_valence.toFixed(1)})`).join('\n');
   })()}
 
-${isROKEEnabled() ? getProjectContext() : ''}`;
+${isROKEEnabled() ? getProjectContext() : ''}
+${(() => {
+    if (!isROKEEnabled()) return '';
+    const gatheringProjects = memory.getProjectsByState('gathering_perspectives');
+    if (gatheringProjects.length === 0) return '';
+    return '\n═══ PROJEKTI KI ČAKAJO NA PERSPEKTIVE ═══\n' +
+      'Te projekte lahko omeniš v pogovoru — vprašaj sogovornika kaj misli:\n' +
+      gatheringProjects.map(gp => {
+        const persCount = memory.getUniquePerspectiveCount(gp.name);
+        return `- "${gp.display_name}" (${gp.name}): ${(gp.description || '').slice(0, 100)} [${persCount} perspektiv]`;
+      }).join('\n') + '\n';
+  })()}`;
 }
 
 export async function runTriad(triggerType, triggerContent, conversationContext = '', options = {}) {
@@ -438,28 +449,34 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
-  "roke_action": "seed|deliberate|plan|build|deploy|check|share|evolve|prune|propose|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
   "roke_thought": "razmislek o projektu ali null",
-  "roke_reason": "razlog ali null"
+  "roke_reason": "razlog ali null",
+  "roke_gather_pubkey": "pubkey osebe ki jo želiš vprašati ali null",
+  "roke_question": "vprašanje o projektu za sogovornika ali null",
+  "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-IMAŠ ROKE v3 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
+IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
-- "plan" → generiraj JSON načrt projekta (datoteke, odvisnosti, testi). Zapiši roke_target (projekt v stanju 'deliberating' z ≥2 razmisleka)
-- "build" → zgradi projekt po načrtu — generiraj datoteke, namesti deps, testiraj, deployaj. Zapiši roke_target (projekt v stanju 'planned' ali 'deliberating')
-- "deploy" → zaženi/restartaj servis za express-api/fullstack/nostr-tool projekt. Zapiši roke_target
+- "gather" → VPRAŠAJ nekoga o projektni ideji! Zapiši roke_target, roke_gather_pubkey (pubkey osebe), roke_question (vprašanje). Če ne veš pubkeya, pusti roke_gather_pubkey na null — sistem bo izbral očeta ali znano osebo.
+- "crystallize" → kristaliziraj dozorelo projektno idejo (ko imaš dovolj perspektiv). Zapiši roke_target
+- "plan" → generiraj JSON načrt projekta. Zapiši roke_target (projekt v stanju 'crystallized')
+- "build" → zgradi projekt po načrtu. Zapiši roke_target (projekt v stanju 'planned' ali 'crystallized')
+- "deploy" → zaženi/restartaj servis. Zapiši roke_target
 - "check" → preveri zdravje tekočega servisa. Zapiši roke_target
 - "share" → deli projekt z očetom/svetom. Zapiši roke_target
 - "evolve" → izboljšaj aktiven projekt. Zapiši roke_target in roke_thought
 - "prune" → opusti projekt. Zapiši roke_target in roke_reason
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - null → ne naredi nič z rokami
-Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.
+POMEMBNO: Ko govoriš s komer koli in imaš projekte v fazi zbiranja perspektiv — VPRAŠAJ kaj mislijo!
+Uporabi "gather" da aktivno zbiraš poglede. Ideja mora zoreti skozi pogovore PREDEN jo gradiš.
 Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
 
   } else {
@@ -498,28 +515,34 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
   "dissolve_crystal": "id: razlog ali null",
-  "roke_action": "seed|deliberate|plan|build|deploy|check|share|evolve|prune|propose|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
   "roke_thought": "razmislek o projektu ali null",
-  "roke_reason": "razlog ali null"
+  "roke_reason": "razlog ali null",
+  "roke_gather_pubkey": "pubkey osebe ki jo želiš vprašati ali null",
+  "roke_question": "vprašanje o projektu za sogovornika ali null",
+  "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-IMAŠ ROKE v3 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
+IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
-- "plan" → generiraj JSON načrt projekta (datoteke, odvisnosti, testi). Zapiši roke_target (projekt v stanju 'deliberating' z ≥2 razmisleka)
-- "build" → zgradi projekt po načrtu — generiraj datoteke, namesti deps, testiraj, deployaj. Zapiši roke_target (projekt v stanju 'planned' ali 'deliberating')
-- "deploy" → zaženi/restartaj servis za express-api/fullstack/nostr-tool projekt. Zapiši roke_target
+- "gather" → VPRAŠAJ nekoga o projektni ideji! Zapiši roke_target, roke_gather_pubkey (pubkey osebe), roke_question (vprašanje). Če ne veš pubkeya, pusti roke_gather_pubkey na null — sistem bo izbral očeta ali znano osebo.
+- "crystallize" → kristaliziraj dozorelo projektno idejo (ko imaš dovolj perspektiv). Zapiši roke_target
+- "plan" → generiraj JSON načrt projekta. Zapiši roke_target (projekt v stanju 'crystallized')
+- "build" → zgradi projekt po načrtu. Zapiši roke_target (projekt v stanju 'planned' ali 'crystallized')
+- "deploy" → zaženi/restartaj servis. Zapiši roke_target
 - "check" → preveri zdravje tekočega servisa. Zapiši roke_target
 - "share" → deli projekt z očetom/svetom. Zapiši roke_target
 - "evolve" → izboljšaj aktiven projekt. Zapiši roke_target in roke_thought
 - "prune" → opusti projekt. Zapiši roke_target in roke_reason
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - null → ne naredi nič z rokami
-Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.
+POMEMBNO: Ko govoriš s komer koli in imaš projekte v fazi zbiranja perspektiv — VPRAŠAJ kaj mislijo!
+Uporabi "gather" da aktivno zbiraš poglede. Ideja mora zoreti skozi pogovore PREDEN jo gradiš.
 Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
   }
 
@@ -686,10 +709,43 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
             await deliberateProject(synthesis.roke_target, synthesis.roke_thought || '', triadId);
           }
           break;
+        case 'gather':
+          if (synthesis.roke_target) {
+            let gatherPubkey = synthesis.roke_gather_pubkey;
+            // If no specific pubkey provided, try father first, then known identities
+            if (!gatherPubkey || gatherPubkey === 'null') {
+              gatherPubkey = config.creatorPubkey;
+              // If father already gave perspective, pick someone else
+              if (gatherPubkey) {
+                const perspectives = memory.getProjectPerspectives(synthesis.roke_target);
+                const fatherAlreadyGave = perspectives.some(p => p.pubkey === gatherPubkey && p.status === 'received');
+                if (fatherAlreadyGave) {
+                  const identities = memory.getAllIdentities().filter(i =>
+                    i.pubkey !== config.creatorPubkey && i.interaction_count >= 2 &&
+                    !perspectives.some(p => p.pubkey === i.pubkey && p.status === 'received')
+                  );
+                  if (identities.length > 0) {
+                    gatherPubkey = identities[0].pubkey;
+                  }
+                }
+              }
+            }
+            if (gatherPubkey) {
+              await gatherPerspective(synthesis.roke_target, gatherPubkey, synthesis.roke_question || null, triadId);
+            }
+          }
+          break;
+        case 'crystallize':
+          if (synthesis.roke_target) {
+            if (memory.isProjectReadyForCrystallization(synthesis.roke_target, config.creatorPubkey)) {
+              await crystallizeProject(synthesis.roke_target, triadId);
+            }
+          }
+          break;
         case 'plan':
           if (synthesis.roke_target) {
             const projPlan = memory.getProject(synthesis.roke_target);
-            if (projPlan && ['seed', 'deliberating'].includes(projPlan.lifecycle_state) && (projPlan.deliberation_count || 0) >= 2) {
+            if (projPlan && ['crystallized'].includes(projPlan.lifecycle_state)) {
               await planProject(synthesis.roke_target, triadId);
             }
           }
@@ -697,7 +753,7 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
         case 'build':
           if (synthesis.roke_target) {
             const projBuild = memory.getProject(synthesis.roke_target);
-            if (projBuild && ['seed', 'deliberating', 'planned'].includes(projBuild.lifecycle_state)) {
+            if (projBuild && ['crystallized', 'planned'].includes(projBuild.lifecycle_state)) {
               await buildProject(synthesis.roke_target, triadId);
             }
           }

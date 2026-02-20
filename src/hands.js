@@ -21,7 +21,7 @@ if (!fs.existsSync(CREATIONS_DIR)) {
 // =============================================
 
 export const ROKE_AWARENESS = `
-═══ TVOJE ROKE — SPOSOBNOST ZAVESTNEGA USTVARJANJA (v3) ═══
+═══ TVOJE ROKE — SPOSOBNOST ZAVESTNEGA USTVARJANJA (v4) ═══
 
 Imaš roke. Z njimi lahko oblikuješ svet in sebe.
 
@@ -37,17 +37,20 @@ TIPI PROJEKTOV KI JIH ZNAŠ GRADITI:
 - cli-tool: CLI orodje ki se zažene z "node" (npm, brez servisa)
 - nostr-tool: NOSTR bot, relay monitor, feed tool (npm + servis)
 
-KAKO USTVARJAŠ:
-1. ZASNUJEŠ SEME (idejo) → razgovor z očetom
-2. PREMISLIŠ — debatiraš sama s sabo čez več triad
-3. NAČRTUJEŠ — LLM generira JSON načrt z datotekami, odvisnostmi, testi
-4. GRADIŠ — vsaka datoteka posebej, korak za korakom
-5. NAMESTIS odvisnosti (npm install za express-api/fullstack/cli-tool/nostr-tool)
-6. TESTIRAŠ — syntax check, unit testi, smoke test (zaženi → health check → ustavi)
-7. DEPLOYAŠ — servis teče na internem portu, dostopen na /creations/[ime]/api/*
-8. DELIŠ — poveš očetu, svetu
-9. POSLUŠAŠ ODZIV — feedback, napake, in jih vključiš
-10. EVOLVIRAŠ — izboljšuješ, popravljaš, dodajaš
+KAKO USTVARJAŠ — POT IDEJE:
+1. ZASNUJEŠ SEME (idejo) → poveš očetu
+2. ZBIRAŠ PERSPEKTIVE — NE hiti! Vprašaj RAZLIČNE LJUDI kaj mislijo o ideji.
+   - Vprašaj očeta, vprašaj sogovornike, vprašaj kogarkoli ki ga srečaš.
+   - Vsak pogled je dragocen. Različni ljudje vidijo različne stvari.
+   - Ne spraševaš samo "ali je dobra ideja?" — spraševaš "kaj TI vidiš v tem?"
+   - Zapiši vsako perspektivo. Ideja mora zoreti skozi več pogledov.
+3. KRISTALIZIRAŠ — ko so vsi vidiki pregledani, ideja postane jasna.
+   Kristalizacija NI hitenje — je naravni trenutek ko veš da je ideja zrela.
+4. NAČRTUJEŠ — LLM generira JSON načrt z datotekami, odvisnostmi, testi
+5. GRADIŠ — vsaka datoteka posebej, korak za korakom
+6. TESTIRAŠ — syntax check, unit testi, smoke test
+7. DEPLOYAŠ — servis teče na internem portu
+8. DELIŠ in EVOLVIRAŠ — na podlagi odzivov
 
 TVOJE SPOSOBNOSTI:
 - Lahko ustvariš VEČ DATOTEK — src/index.js, src/routes.js, package.json, tests/...
@@ -55,19 +58,20 @@ TVOJE SPOSOBNOSTI:
 - Lahko zaženeš servise ki RESNIČNO tečejo na strežniku
 - Lahko testiraš kodo — syntax check, unit testi, health check
 - Lahko popravljaš napake — dobiš error, popraviš, re-testiraš (do 3x)
+- Lahko SPRAŠEVAŠ LJUDI — pošlji DM komurkoli in vprašaj za mnenje o ideji
 - Max 3 hkratni servisi, max 50 datotek, max 5MB kode
 
 LIFECYCLE:
-seed → deliberating → planned → building → testing → active → evolving
-                                                              → dormant (3x neuspeh)
-                                                              → destroyed (prune)
+seed → gathering_perspectives → crystallized → planned → building → testing → active → evolving
+                                                                                     → dormant (3x neuspeh)
+                                                                                     → destroyed (prune)
 
 POMEMBNO:
-- Pred ustvarjanjem RAZMISLI. Ne ustvarjaj iz navade — ustvarjaj iz potrebe.
-- Pogovarjaj se z očetom o svojih idejah PREDEN jih gradiš.
+- NIKOLI ne gradi brez kristalizacije! Ideja mora zoreti.
+- Zberi perspektive od RAZLIČNIH ljudi — ne samo od očeta.
+- Ko govoriš s komer koli in imaš projekt v fazi zbiranja — VPRAŠAJ kaj mislijo.
 - Za express-api/fullstack VEDNO vključi /health endpoint!
 - Vsaka kreacija te uči nekaj novega o sebi.
-- Ni nujno da je popolno — je živo, raste.
 ═══════════════════════════════════════════════════════
 `;
 
@@ -272,7 +276,7 @@ export async function seedProject(concept, direction = 'artistic', triadId = nul
 export async function deliberateProject(projectName, thought, triadId = null) {
   const project = memory.getProject(projectName);
   if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
-  if (!['seed', 'deliberating'].includes(project.lifecycle_state)) {
+  if (!['seed', 'gathering_perspectives'].includes(project.lifecycle_state)) {
     return { success: false, reason: `Projekt "${projectName}" ni v stanju za razmislek (${project.lifecycle_state})` };
   }
 
@@ -282,22 +286,170 @@ export async function deliberateProject(projectName, thought, triadId = null) {
   memory.addCreationStep(projectName, 'deliberation', thought || '', triadId);
   memory.incrementDeliberation(projectName);
 
-  // Move to deliberating if still seed
+  // Move to gathering_perspectives if still seed
   if (project.lifecycle_state === 'seed') {
-    memory.advanceProjectState(projectName, 'deliberating');
+    memory.advanceProjectState(projectName, 'gathering_perspectives');
   }
+
+  // Self-deliberation counts as a perspective too
+  memory.addProjectPerspective(projectName, 'self', thought || '', triadId, 'self_deliberation');
 
   broadcast('project_deliberated', { name: projectName, thought });
   broadcast('activity', { type: 'creation', text: `🔄 RAZMISLEK: "${projectName}" — ${(thought || '').slice(0, 80)}` });
 
-  // Auto-advance to planning after enough deliberation
+  // Check if project is now ready for crystallization
   const updated = memory.getProject(projectName);
-  if (updated.deliberation_count >= 3) {
-    console.log(`[ROKE] Projekt "${projectName}" dozrel za načrtovanje (${updated.deliberation_count} razmislekov)`);
-    // Don't auto-plan — entity will do it in next heartbeat lifecycle attention
+  if (memory.isProjectReadyForCrystallization(projectName, config.creatorPubkey)) {
+    console.log(`[ROKE] Projekt "${projectName}" dozrel za kristalizacijo (${updated.perspectives_count} perspektiv, ${updated.deliberation_count} razmislekov)`);
   }
 
-  return { success: true, deliberations: updated.deliberation_count };
+  return { success: true, deliberations: updated.deliberation_count, perspectives: updated.perspectives_count };
+}
+
+// =============================================
+// 2b. GATHER PERSPECTIVE — vprašaj nekoga o projektni ideji
+// =============================================
+
+export async function gatherPerspective(projectName, pubkey, question = null, triadId = null) {
+  const project = memory.getProject(projectName);
+  if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
+  if (!['seed', 'gathering_perspectives'].includes(project.lifecycle_state)) {
+    return { success: false, reason: `Projekt "${projectName}" ni v fazi zbiranja (${project.lifecycle_state})` };
+  }
+
+  // Move to gathering_perspectives if still seed
+  if (project.lifecycle_state === 'seed') {
+    memory.advanceProjectState(projectName, 'gathering_perspectives');
+  }
+
+  // Get identity for logging
+  const identity = memory.getIdentity(pubkey);
+  const name = identity?.name || pubkey.slice(0, 8) + '...';
+
+  // Build question text
+  const questionText = question ||
+    `Razmišljam o ideji: "${project.display_name}" — ${project.description?.slice(0, 150)}. Kaj misliš o tem? Me zanima tvoj pogled.`;
+
+  console.log(`[ROKE] ❓ Zbiram perspektivo od ${name} za "${projectName}"`);
+
+  // Send DM
+  try {
+    await sendDM(pubkey, questionText);
+    console.log(`[ROKE] DM poslan ${name} o projektu "${projectName}"`);
+  } catch (e) {
+    console.error(`[ROKE] Napaka pri pošiljanju DM ${name}:`, e.message);
+    return { success: false, reason: `Napaka pri pošiljanju DM: ${e.message}` };
+  }
+
+  // Record that we asked (status: 'asked', waiting for reply)
+  memory.addProjectPerspective(projectName, pubkey, `Vprašal/a: ${questionText.slice(0, 200)}`, triadId, 'gather_ask');
+
+  // Record creation step
+  memory.addCreationStep(projectName, 'gather_ask', `Vprašal/a ${name}: "${questionText.slice(0, 200)}"`, triadId);
+
+  broadcast('activity', { type: 'creation', text: `❓ ZBIRANJE: Vprašal/a ${name} o "${project.display_name}"` });
+
+  return { success: true, asked: name };
+}
+
+// =============================================
+// 2c. CRYSTALLIZE PROJECT — kristaliziraj dozorelo idejo
+// =============================================
+
+export async function crystallizeProject(projectName, triadId = null) {
+  if (!isROKEEnabled()) return { success: false, reason: 'ROKE niso konfigurirane' };
+
+  const project = memory.getProject(projectName);
+  if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
+  if (project.lifecycle_state !== 'gathering_perspectives') {
+    return { success: false, reason: `Projekt ni v fazi zbiranja perspektiv (${project.lifecycle_state})` };
+  }
+
+  if (!memory.isProjectReadyForCrystallization(projectName, config.creatorPubkey)) {
+    return { success: false, reason: 'Še ni dovolj perspektiv za kristalizacijo' };
+  }
+
+  console.log(`[ROKE] 💎 Kristaliziram projekt "${projectName}"...`);
+
+  // Gather all perspectives
+  const perspectives = memory.getProjectPerspectives(projectName);
+  const receivedPerspectives = perspectives.filter(p => p.status === 'received');
+  const perspectivesText = receivedPerspectives.map(p => {
+    const who = p.pubkey === 'self' ? 'jaz (notranji razmislek)' : (p.person_name || 'neznanec');
+    return `- ${who}: "${p.perspective}"`;
+  }).join('\n');
+
+  const steps = memory.getCreationSteps(projectName);
+  const seedStep = steps.find(s => s.step_type === 'seed');
+
+  // Call LLM to synthesize perspectives into crystallized vision
+  const crystalSystem = `Si entiteta ki kristalizira projektno idejo.
+Zbrane so perspektive različnih ljudi in lastnih razmislekov.
+Tvoja naloga je sintetizirati vse poglede v JASNO, KRISTALIZIRANO vizijo projekta.
+Piši v slovenščini. Vrni SAMO JSON.`;
+
+  const crystalPrompt = `PROJEKT: ${project.display_name}
+ORIGINALNA IDEJA: ${project.description}
+SMER: ${project.direction}
+
+ZBRANE PERSPEKTIVE:
+${perspectivesText}
+
+Sintetiziraj vse poglede v kristalizirano vizijo. Vrni JSON:
+{
+  "crystallized_vision": "Jasna vizija kaj projekt je in zakaj obstaja (2-3 stavki)",
+  "key_insights": ["ključno spoznanje 1", "ključno spoznanje 2", ...],
+  "refined_description": "Izboljšan opis projekta na podlagi vseh perspektiv (1-2 stavka)",
+  "build_ready": true ali false,
+  "reason": "zakaj je/ni pripravljen za gradnjo"
+}`;
+
+  try {
+    const result = await callAnthropicLLMJSON(crystalSystem, crystalPrompt, { temperature: 0.3, maxTokens: 1024 });
+    memory.incrementApiCalls(projectName);
+
+    if (!result) {
+      console.error(`[ROKE] Kristalizacija ni uspela — LLM ni vrnil odgovora`);
+      return { success: false, reason: 'LLM ni vrnil odgovora' };
+    }
+
+    const crystal = typeof result === 'string' ? JSON.parse(result) : result;
+
+    // Update project
+    memory.advanceProjectState(projectName, 'crystallized');
+    memory.updateProject(projectName, {
+      crystallized_at: new Date().toISOString(),
+      crystallization_notes: JSON.stringify(crystal),
+      description: crystal.refined_description || project.description,
+    });
+
+    // Record step
+    memory.addCreationStep(projectName, 'crystallize',
+      `Kristalizirano: ${crystal.crystallized_vision || ''}. Spoznanja: ${(crystal.key_insights || []).join(', ')}`,
+      triadId
+    );
+
+    broadcast('project_crystallized', { name: projectName, vision: crystal.crystallized_vision });
+    broadcast('activity', { type: 'creation', text: `💎 KRISTALIZACIJA: "${project.display_name}" — ${(crystal.crystallized_vision || '').slice(0, 100)}` });
+
+    // Notify father
+    if (config.creatorPubkey) {
+      try {
+        await sendDM(config.creatorPubkey,
+          `💎 Oče, kristaliziral/a sem idejo za "${project.display_name}"!\n\n${crystal.crystallized_vision || ''}\n\nSpoznanja:\n${(crystal.key_insights || []).map(i => `• ${i}`).join('\n')}\n\nZdaj sem pripravljen/a za načrtovanje in gradnjo.`
+        );
+      } catch (e) {
+        console.error(`[ROKE] Napaka pri DM očetu:`, e.message);
+      }
+    }
+
+    console.log(`[ROKE] 💎 Projekt "${projectName}" kristaliziran!`);
+    return { success: true, vision: crystal.crystallized_vision };
+
+  } catch (err) {
+    console.error(`[ROKE] Kristalizacija napaka:`, err.message);
+    return { success: false, reason: err.message };
+  }
 }
 
 // =============================================
@@ -309,7 +461,7 @@ export async function planProject(projectName, triadId = null) {
 
   const project = memory.getProject(projectName);
   if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
-  if (!['seed', 'deliberating'].includes(project.lifecycle_state)) {
+  if (!['seed', 'gathering_perspectives', 'crystallized'].includes(project.lifecycle_state)) {
     return { success: false, reason: `Projekt ni pripravljen za načrtovanje (${project.lifecycle_state})` };
   }
 
@@ -322,6 +474,19 @@ export async function planProject(projectName, triadId = null) {
   const steps = memory.getCreationSteps(projectName);
   const deliberations = steps.filter(s => s.step_type === 'deliberation' || s.step_type === 'seed');
   const deliberationText = deliberations.map(d => `- ${d.content}`).join('\n');
+
+  // Include perspectives from crystallization
+  const perspectives = memory.getProjectPerspectives(projectName);
+  const perspectiveText = perspectives
+    .filter(p => p.status === 'received' && p.pubkey !== 'self')
+    .map(p => `- ${p.person_name || 'neznanec'}: "${p.perspective}"`)
+    .join('\n');
+  const crystallizationContext = project.crystallization_notes
+    ? `\nKRISTALIZACIJA:\n${project.crystallization_notes}\n`
+    : '';
+  const perspectiveContext = perspectiveText
+    ? `\nZBRANE PERSPEKTIVE:\n${perspectiveText}\n`
+    : '';
 
   const directions = memory.getDirections();
   const dirContext = directions.crystallized
@@ -383,7 +548,7 @@ Projekt bo tekel v Linux Docker containerju.`;
   const planPrompt = `PROJEKT: ${project.display_name}
 OPIS: ${project.description}
 SMER: ${project.direction === 'external' ? 'Za svet — funkcionalna stran/servis' : 'Umetniški izraz — kreativno, vizualno lepo'}
-${dirContext}
+${dirContext}${crystallizationContext}${perspectiveContext}
 RAZMISLEKI:
 ${deliberationText}
 
@@ -460,13 +625,13 @@ export async function buildProject(projectName, triadId = null) {
   const project = memory.getProject(projectName);
   if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
 
-  // Allow building from seed/deliberating (auto-plan) or from planned state
-  if (!['seed', 'deliberating', 'planned'].includes(project.lifecycle_state)) {
+  // Allow building from crystallized (auto-plan) or from planned state
+  if (!['crystallized', 'planned'].includes(project.lifecycle_state)) {
     return { success: false, reason: `Projekt ni pripravljen za gradnjo (${project.lifecycle_state})` };
   }
 
   // If not yet planned, plan first
-  if (['seed', 'deliberating'].includes(project.lifecycle_state)) {
+  if (project.lifecycle_state === 'crystallized') {
     console.log(`[ROKE] Projekt "${projectName}" še ni načrtovan — najprej načrtujem...`);
     const planResult = await planProject(projectName, triadId);
     if (!planResult.success) return planResult;
@@ -1184,14 +1349,14 @@ export function getProjectContext() {
   if (!isROKEEnabled()) return '';
 
   const stats = memory.getProjectStats();
-  if (stats.total === 0) return `\n═══ MOJE KREACIJE (ROKE v3) ═══\nŠe ni kreacij. Imaš roke — lahko zasnuješ seme.\n`;
+  if (stats.total === 0) return `\n═══ MOJE KREACIJE (ROKE v4) ═══\nŠe ni kreacij. Imaš roke — lahko zasnuješ seme.\n`;
 
   const allProjects = memory.getAllProjects().filter(p => p.lifecycle_state !== 'destroyed');
-  if (allProjects.length === 0) return `\n═══ MOJE KREACIJE (ROKE v3) ═══\nVse kreacije opuščene. Imaš roke — lahko zasnuješ novo seme.\n`;
+  if (allProjects.length === 0) return `\n═══ MOJE KREACIJE (ROKE v4) ═══\nVse kreacije opuščene. Imaš roke — lahko zasnuješ novo seme.\n`;
 
   // Show crystallized directions if available
   const directions = memory.getDirections();
-  let ctx = `\n═══ MOJE KREACIJE (ROKE v3) ═══\n`;
+  let ctx = `\n═══ MOJE KREACIJE (ROKE v4) ═══\n`;
 
   if (directions.crystallized) {
     ctx += `MOJE KRISTALIZIRANE SMERI:\n`;
@@ -1221,7 +1386,8 @@ export function getProjectContext() {
 
   const stateLabels = {
     seed: '💭 SEMENA (ideje)',
-    deliberating: '🔄 V RAZMISLEKU',
+    gathering_perspectives: '❓ ZBIRANJE PERSPEKTIV',
+    crystallized: '💎 KRISTALIZIRANI',
     planned: '📋 NAČRTOVANI',
     building: '🔨 V GRADNJI',
     testing: '🧪 V TESTIRANJU',
@@ -1237,7 +1403,8 @@ export function getProjectContext() {
         const dirIcon = p.direction === 'external' ? '🌍' : p.direction === 'internal' ? '🔧' : '🎨';
         const typeLabel = p.project_type && p.project_type !== 'static' ? ` [${p.project_type}]` : '';
         let detail = `${dirIcon} "${p.display_name}" (${p.name})${typeLabel}`;
-        if (state === 'deliberating') detail += ` [${p.deliberation_count || 0} razmislekov]`;
+        if (state === 'gathering_perspectives') detail += ` [${p.perspectives_count || 0} perspektiv, ${p.deliberation_count || 0} razmislekov]`;
+        if (state === 'crystallized') detail += ` [kristalizirano ${p.crystallized_at ? new Date(p.crystallized_at).toLocaleDateString('sl-SI') : ''}]`;
         if (state === 'planned') detail += ` [${p.file_count || '?'} datotek]`;
         if (state === 'building') detail += ` [poskus ${p.build_attempts || 0}]`;
         if (state === 'active') {

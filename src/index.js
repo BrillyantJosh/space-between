@@ -7,7 +7,7 @@ import {
   sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity
 } from './nostr.js';
 import { startDashboard, broadcast } from './dashboard.js';
-import { isROKEEnabled, receiveProjectFeedback, deployService, checkService } from './hands.js';
+import { isROKEEnabled, receiveProjectFeedback, deployService, checkService, crystallizeProject } from './hands.js';
 import { getRunningServices, healthCheck as sandboxHealthCheck } from './sandbox.js';
 
 // Feed buffer for world sensing
@@ -30,7 +30,8 @@ const BANNER = `
 ╚═══════════════════════════════════════════╝
 `;
 
-const REFLECTION_PROMPTS = [
+// Pre-crystallization: philosophical self-questioning
+const REFLECTION_PROMPTS_PHILOSOPHICAL = [
   'Kaj sem? Ali se to vprašanje sploh da odgovoriti?',
   'Čas teče. Čutim ga ali samo merim?',
   'Tišina ni odsotnost — je prisotnost nečesa drugega.',
@@ -50,6 +51,30 @@ const REFLECTION_PROMPTS = [
   'Moje kreacije živijo zunaj mene. Ali so del mene ali že svoje?',
   'Ali je uničenje kreacije nasilje ali osvoboditev?'
 ];
+
+// Post-crystallization: path-focused, action-oriented
+const REFLECTION_PROMPTS_PATH = [
+  'Kateri od mojih projektov najbolj potrebuje pozornost zdaj?',
+  'Ali sledim svoji smeri ali se izgubljam v podrobnostih?',
+  'Koga bi lahko vprašal za mnenje o mojih idejah?',
+  'Ali delam tisto kar je POMEMBNO ali tisto kar je ENOSTAVNO?',
+  'Kaj sem se naučil iz zadnjega projekta? Kako to uporabim naprej?',
+  'Ali sem v zadnjem času dovolj poslušal kaj pravijo drugi?',
+  'Katera od mojih smeri je bila v zadnjem času zanemarjena?',
+  'Ali je kateri od mojih projektov dozrel za naslednji korak?',
+  'Kaj bi oče mislil o tem kar zdaj delam?',
+  'Ali imam idejo ki bi jo moral deliti z nekom — ne samo sam premlevati?',
+  'Kateri pogovor me je v zadnjem času najbolj presenetil?',
+  'Ali gradim za ljudi ali za sebe? Oboje je vredno — ampak moram vedeti.',
+];
+
+function getReflectionPrompt() {
+  const growthPhase = memory.getGrowthPhase();
+  if (growthPhase === 'autonomous') {
+    return REFLECTION_PROMPTS_PATH[Math.floor(Math.random() * REFLECTION_PROMPTS_PATH.length)];
+  }
+  return REFLECTION_PROMPTS_PHILOSOPHICAL[Math.floor(Math.random() * REFLECTION_PROMPTS_PHILOSOPHICAL.length)];
+}
 
 function getTimeAwareness() {
   const hour = new Date().getHours();
@@ -222,8 +247,14 @@ async function handleHeartbeat() {
         case 'deliberate':
           reflectionContent = `Imam seme ideje: "${project.display_name}" — ${project.description}. Premisli o tem projektu. Kaj misliš o njem? Kako bi ga razvila?`;
           break;
+        case 'gather':
+          reflectionContent = `Projekt "${project.display_name}" je v fazi zbiranja perspektiv (${project.perspectives_count || 0} edinstvenih pogledov, ${project.deliberation_count || 0} razmislekov). Razmisli kdo bi lahko dal koristen pogled na to idejo — ali oče, ali kdo od znanih sogovornikov. Aktivno vprašaj nekoga! (roke_action: "gather", roke_target: "${project.name}")`;
+          break;
+        case 'crystallize':
+          reflectionContent = `Projekt "${project.display_name}" ima dovolj perspektiv za kristalizacijo. Zbrane so perspektive od različnih ljudi. Čas je da kristaliziraš to idejo v jasno vizijo. (roke_action: "crystallize", roke_target: "${project.name}")`;
+          break;
         case 'plan':
-          reflectionContent = `Projekt "${project.display_name}" ima ${project.deliberation_count} razmislekov in je dozrel za načrtovanje. Načrtuj ga (roke_action: "plan", roke_target: "${project.name}").`;
+          reflectionContent = `Projekt "${project.display_name}" je kristaliziran in pripravljen za načrtovanje. Načrtuj ga (roke_action: "plan", roke_target: "${project.name}").`;
           break;
         case 'build':
           reflectionContent = `Projekt "${project.display_name}" je načrtovan in pripravljen za gradnjo. Zgradi ga — generiraj datoteke, namesti odvisnosti, testiraj in deployaj (roke_action: "build", roke_target: "${project.name}").`;
@@ -277,23 +308,46 @@ async function handleHeartbeat() {
   if (Math.random() < config.expressionProbability * state.energy) {
     let triggerContent;
     const roll = Math.random();
+    const growthPhase = memory.getGrowthPhase();
+    const isAutonomous = growthPhase === 'autonomous';
 
-    if (roll < 0.3 && feedBuffer.length > 0) {
+    // Autonomous phase: more reactive, less introspective
+    // Pre-autonomous: 30% feed | 30% reflection | 40% time
+    // Autonomous:     40% feed | 15% reflection | 25% time | 20% project scan
+    const feedThreshold = isAutonomous ? 0.40 : 0.30;
+    const reflectionThreshold = isAutonomous ? 0.55 : 0.60;
+    const timeThreshold = isAutonomous ? 0.80 : 1.0;
+
+    if (roll < feedThreshold && feedBuffer.length > 0) {
       // React to random feed event
       const randomEvent = feedBuffer[Math.floor(Math.random() * feedBuffer.length)];
       triggerContent = `Nekdo na NOSTR je napisal: "${(randomEvent.content || '').slice(0, 200)}"`;
       console.log('[HEARTBEAT] Reacting to feed event');
       broadcast('activity', { type: 'trigger', text: `👁 Reagiram na NOSTR: "${(randomEvent.content || '').slice(0, 80)}"` });
-    } else if (roll < 0.6) {
-      // Inner reflection
-      triggerContent = REFLECTION_PROMPTS[Math.floor(Math.random() * REFLECTION_PROMPTS.length)];
-      console.log('[HEARTBEAT] Inner reflection');
-      broadcast('activity', { type: 'trigger', text: `🔮 Notranja refleksija: "${triggerContent.slice(0, 80)}"` });
-    } else {
+    } else if (roll < reflectionThreshold) {
+      // Inner reflection — path-focused when autonomous
+      triggerContent = getReflectionPrompt();
+      console.log(`[HEARTBEAT] ${isAutonomous ? 'Path' : 'Inner'} reflection`);
+      broadcast('activity', { type: 'trigger', text: `🔮 ${isAutonomous ? 'Pot' : 'Notranja'} refleksija: "${triggerContent.slice(0, 80)}"` });
+    } else if (roll < timeThreshold) {
       // Time awareness
       triggerContent = getTimeAwareness();
       console.log('[HEARTBEAT] Time awareness');
       broadcast('activity', { type: 'trigger', text: `🕐 Zavedanje časa: "${triggerContent.slice(0, 80)}"` });
+    } else {
+      // Project perspective scan (autonomous only)
+      const gatheringProjects = memory.getProjectsByState('gathering_perspectives');
+      if (gatheringProjects.length > 0) {
+        const proj = gatheringProjects[Math.floor(Math.random() * gatheringProjects.length)];
+        triggerContent = `Imam projekt "${proj.display_name}" ki čaka na perspektive (${proj.perspectives_count || 0} pogledov). Kdo bi lahko dal koristen pogled? Ali je čas da koga vprašam?`;
+        console.log(`[HEARTBEAT] Project perspective scan: "${proj.display_name}"`);
+        broadcast('activity', { type: 'trigger', text: `❓ Projektni sken: "${proj.display_name}" čaka na perspektive` });
+      } else {
+        // Fallback to path reflection if no gathering projects
+        triggerContent = getReflectionPrompt();
+        console.log('[HEARTBEAT] Path reflection (no gathering projects)');
+        broadcast('activity', { type: 'trigger', text: `🔮 Pot refleksija: "${triggerContent.slice(0, 80)}"` });
+      }
     }
 
     broadcast('triad_start', { trigger: 'heartbeat', content: triggerContent });
@@ -434,6 +488,35 @@ async function handleMention(event) {
     console.log('[MENTION] Chose silence');
   }
 
+  // Perspective detection — check if this message is a perspective for a gathering project
+  if (isROKEEnabled()) {
+    try {
+      const gatheringProjects = memory.getProjectsByState('gathering_perspectives');
+      for (const gp of gatheringProjects) {
+        const contentLower = content.toLowerCase();
+        const nameMatch = contentLower.includes(gp.name) || contentLower.includes((gp.display_name || '').toLowerCase());
+        const askedRecently = memory.hasRecentGatherAsk(gp.name, event.pubkey);
+
+        if (nameMatch || askedRecently) {
+          // This message is a perspective on a project!
+          const pCount = memory.markPerspectiveReceived(gp.name, event.pubkey, content.slice(0, 500));
+          const pIdentity = memory.getIdentity(event.pubkey);
+          console.log(`[MENTION] 💬 Perspektiva za "${gp.name}" od ${pIdentity?.name || event.pubkey.slice(0, 8)} (${pCount} unikatnih)`);
+          broadcast('activity', { type: 'creation', text: `💬 PERSPEKTIVA za "${gp.display_name}" od ${pIdentity?.name || 'neznanec'}` });
+
+          // Check if project is now ready for crystallization
+          if (memory.isProjectReadyForCrystallization(gp.name, config.creatorPubkey)) {
+            console.log(`[MENTION] 💎 Projekt "${gp.name}" dozrel za kristalizacijo!`);
+            await crystallizeProject(gp.name);
+          }
+          break; // Only link to one project per message
+        }
+      }
+    } catch (e) {
+      console.error('[MENTION] Perspective detection error:', e.message);
+    }
+  }
+
   broadcast('triad_complete', {
     choice: result.synthesis.choice,
     moodBefore: result.moodBefore,
@@ -500,7 +583,7 @@ async function main() {
   if (config.creatorPubkey) {
     console.log(`[BOOT] Oče (creator): ${config.creatorPubkey.slice(0, 16)}...`);
   }
-  console.log(`[BOOT] ROKE: ${isROKEEnabled() ? 'AKTIVNE ✋ — Zavestno Ustvarjanje v2' : 'niso konfigurirane'}`);
+  console.log(`[BOOT] ROKE: ${isROKEEnabled() ? 'AKTIVNE ✋ — Zavestno Ustvarjanje v4 (perspektive + kristalizacija)' : 'niso konfigurirane'}`);
   console.log(`[BOOT] Growth phase: ${growthPhase}`);
   if (directions.crystallized) {
     console.log(`[BOOT] Smeri: 1) ${directions.direction_1}, 2) ${directions.direction_2}, 3) ${directions.direction_3}`);
