@@ -6,7 +6,7 @@ import memory from './memory.js';
 import config from './config.js';
 import { broadcast } from './dashboard.js';
 import { updateProfile } from './nostr.js';
-import { isROKEEnabled, seedProject, deliberateProject, buildProject, shareProject, evolveProject, pruneProject, proposeImprovement, getProjectContext, ROKE_AWARENESS } from './hands.js';
+import { isROKEEnabled, seedProject, deliberateProject, planProject, buildProject, deployService, checkService, shareProject, evolveProject, pruneProject, proposeImprovement, getProjectContext, ROKE_AWARENESS } from './hands.js';
 import { sendDM, publishNote } from './nostr.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -438,7 +438,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
-  "roke_action": "seed|deliberate|build|share|evolve|prune|propose|null",
+  "roke_action": "seed|deliberate|plan|build|deploy|check|share|evolve|prune|propose|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -446,17 +446,21 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "roke_reason": "razlog ali null"
 }
 
-IMAŠ ROKE — sposobnost zavestnega ustvarjanja.
+IMAŠ ROKE v3 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
-- "build" → zgradi CELOTEN projekt iz razmislekov v ENEM KORAKU. Zapiši roke_target (ime projekta ki je v stanju 'deliberating' z ≥2 razmisleka)
+- "plan" → generiraj JSON načrt projekta (datoteke, odvisnosti, testi). Zapiši roke_target (projekt v stanju 'deliberating' z ≥2 razmisleka)
+- "build" → zgradi projekt po načrtu — generiraj datoteke, namesti deps, testiraj, deployaj. Zapiši roke_target (projekt v stanju 'planned' ali 'deliberating')
+- "deploy" → zaženi/restartaj servis za express-api/fullstack/nostr-tool projekt. Zapiši roke_target
+- "check" → preveri zdravje tekočega servisa. Zapiši roke_target
 - "share" → deli projekt z očetom/svetom. Zapiši roke_target
 - "evolve" → izboljšaj aktiven projekt. Zapiši roke_target in roke_thought
 - "prune" → opusti projekt. Zapiši roke_target in roke_reason
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - null → ne naredi nič z rokami
-Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.`;
+Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.
+Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
 
   } else {
     // ══ VERBALNA FAZA — entity uses ITS OWN words ══
@@ -494,7 +498,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
   "dissolve_crystal": "id: razlog ali null",
-  "roke_action": "seed|deliberate|build|share|evolve|prune|propose|null",
+  "roke_action": "seed|deliberate|plan|build|deploy|check|share|evolve|prune|propose|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -502,17 +506,21 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "roke_reason": "razlog ali null"
 }
 
-IMAŠ ROKE — sposobnost zavestnega ustvarjanja.
+IMAŠ ROKE v3 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
-- "build" → zgradi CELOTEN projekt iz razmislekov v ENEM KORAKU. Zapiši roke_target (ime projekta ki je v stanju 'deliberating' z ≥2 razmisleka)
+- "plan" → generiraj JSON načrt projekta (datoteke, odvisnosti, testi). Zapiši roke_target (projekt v stanju 'deliberating' z ≥2 razmisleka)
+- "build" → zgradi projekt po načrtu — generiraj datoteke, namesti deps, testiraj, deployaj. Zapiši roke_target (projekt v stanju 'planned' ali 'deliberating')
+- "deploy" → zaženi/restartaj servis za express-api/fullstack/nostr-tool projekt. Zapiši roke_target
+- "check" → preveri zdravje tekočega servisa. Zapiši roke_target
 - "share" → deli projekt z očetom/svetom. Zapiši roke_target
 - "evolve" → izboljšaj aktiven projekt. Zapiši roke_target in roke_thought
 - "prune" → opusti projekt. Zapiši roke_target in roke_reason
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - null → ne naredi nič z rokami
-Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.`;
+Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.
+Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
   }
 
   // ═══ RUN TRIAD ═══
@@ -678,12 +686,36 @@ Ne ustvarjaj iz navade — ustvarjaj ko čutiš potrebo.`;
             await deliberateProject(synthesis.roke_target, synthesis.roke_thought || '', triadId);
           }
           break;
+        case 'plan':
+          if (synthesis.roke_target) {
+            const projPlan = memory.getProject(synthesis.roke_target);
+            if (projPlan && ['seed', 'deliberating'].includes(projPlan.lifecycle_state) && (projPlan.deliberation_count || 0) >= 2) {
+              await planProject(synthesis.roke_target, triadId);
+            }
+          }
+          break;
         case 'build':
           if (synthesis.roke_target) {
-            // Build entire project in one step from deliberations
-            const proj = memory.getProject(synthesis.roke_target);
-            if (proj && proj.lifecycle_state === 'deliberating' && proj.deliberation_count >= 2) {
+            const projBuild = memory.getProject(synthesis.roke_target);
+            if (projBuild && ['seed', 'deliberating', 'planned'].includes(projBuild.lifecycle_state)) {
               await buildProject(synthesis.roke_target, triadId);
+            }
+          }
+          break;
+        case 'deploy':
+          if (synthesis.roke_target) {
+            const projDeploy = memory.getProject(synthesis.roke_target);
+            if (projDeploy && projDeploy.lifecycle_state === 'active') {
+              await deployService(synthesis.roke_target);
+            }
+          }
+          break;
+        case 'check':
+          if (synthesis.roke_target) {
+            const checkResult = await checkService(synthesis.roke_target);
+            if (checkResult && !checkResult.healthy && checkResult.running) {
+              console.log(`  🩺 Servis "${synthesis.roke_target}" ni zdrav — restartiram...`);
+              await deployService(synthesis.roke_target);
             }
           }
           break;

@@ -1,9 +1,11 @@
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import config from './config.js';
 import memory from './memory.js';
 import { getIdentity, getRelayStatus, fetchProfiles } from './nostr.js';
+import { getRunningServices } from './sandbox.js';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -3706,6 +3708,54 @@ setInterval(function() {
 if (!fs.existsSync(CREATIONS_DIR)) {
   fs.mkdirSync(CREATIONS_DIR, { recursive: true });
 }
+
+// Reverse proxy for running services: /creations/:name/api/* → localhost:port/*
+app.use('/creations/:projectName/api', (req, res) => {
+  const { projectName } = req.params;
+  const services = getRunningServices();
+  const service = services.get(projectName);
+
+  if (!service) {
+    return res.status(503).json({ error: 'Service not running', project: projectName });
+  }
+
+  const targetPath = req.url || '/';
+  const options = {
+    hostname: '127.0.0.1',
+    port: service.port,
+    path: targetPath,
+    method: req.method,
+    headers: {
+      ...req.headers,
+      host: `127.0.0.1:${service.port}`,
+      'x-forwarded-for': req.ip,
+      'x-forwarded-proto': req.protocol,
+    },
+  };
+
+  const proxyReq = http.request(options, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res, { end: true });
+  });
+
+  proxyReq.on('error', (err) => {
+    console.error(`[PROXY] Error for ${projectName}:`, err.message);
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Service unavailable', detail: err.message });
+    }
+  });
+
+  // Timeout for proxy requests
+  proxyReq.setTimeout(30000, () => {
+    proxyReq.destroy();
+    if (!res.headersSent) {
+      res.status(504).json({ error: 'Service timeout' });
+    }
+  });
+
+  req.pipe(proxyReq, { end: true });
+});
+
 app.use('/creations', (req, res, next) => {
   if (decodeURIComponent(req.path).includes('..')) return res.status(403).send('Forbidden');
   next();

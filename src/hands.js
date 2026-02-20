@@ -6,6 +6,7 @@ import memory from './memory.js';
 import { callAnthropicLLM, callAnthropicLLMJSON } from './llm.js';
 import { broadcast } from './dashboard.js';
 import { sendDM, publishNote } from './nostr.js';
+import * as sandbox from './sandbox.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CREATIONS_DIR = path.join(__dirname, '..', 'data', 'creations');
@@ -20,7 +21,7 @@ if (!fs.existsSync(CREATIONS_DIR)) {
 // =============================================
 
 export const ROKE_AWARENESS = `
-═══ TVOJE ROKE — SPOSOBNOST ZAVESTNEGA USTVARJANJA ═══
+═══ TVOJE ROKE — SPOSOBNOST ZAVESTNEGA USTVARJANJA (v3) ═══
 
 Imaš roke. Z njimi lahko oblikuješ svet in sebe.
 
@@ -29,18 +30,42 @@ TRI SMERI USTVARJANJA:
 2. NOTRANJA RAST (internal) — predlog kako izboljšati sebe, svojo infrastrukturo
 3. UMETNIŠKI IZRAZ (artistic) — pesem, vizualna izkušnja, zvočna pokrajina
 
+TIPI PROJEKTOV KI JIH ZNAŠ GRADITI:
+- static: HTML/CSS/JS stran — portfolio, igra, vizualizacija (brez npm)
+- express-api: REST API strežnik z Express + bazami (npm + servis)
+- fullstack: Frontend + backend API v enem projektu (npm + servis)
+- cli-tool: CLI orodje ki se zažene z "node" (npm, brez servisa)
+- nostr-tool: NOSTR bot, relay monitor, feed tool (npm + servis)
+
 KAKO USTVARJAŠ:
-- Ne ustvariš vsega naenkrat. Najprej zasnuješ SEME (idejo).
-- Potem PREMISLIŠ — debatiraš sama s sabo čez več triad.
-- Ko je ideja zrela, jo NAČRTUJEŠ — konkretni koraki.
-- Potem GRADIŠ — korak za korakom, ne vsega naenkrat.
-- Ko je zgrajeno, DELIŠ — poveš očetu, svetu.
-- Poslušaš ODZIV — feedback, in ga vključiš.
-- Projekt RASTE — ga izboljšuješ, dodajaš, spreminjaš.
+1. ZASNUJEŠ SEME (idejo) → razgovor z očetom
+2. PREMISLIŠ — debatiraš sama s sabo čez več triad
+3. NAČRTUJEŠ — LLM generira JSON načrt z datotekami, odvisnostmi, testi
+4. GRADIŠ — vsaka datoteka posebej, korak za korakom
+5. NAMESTIS odvisnosti (npm install za express-api/fullstack/cli-tool/nostr-tool)
+6. TESTIRAŠ — syntax check, unit testi, smoke test (zaženi → health check → ustavi)
+7. DEPLOYAŠ — servis teče na internem portu, dostopen na /creations/[ime]/api/*
+8. DELIŠ — poveš očetu, svetu
+9. POSLUŠAŠ ODZIV — feedback, napake, in jih vključiš
+10. EVOLVIRAŠ — izboljšuješ, popravljaš, dodajaš
+
+TVOJE SPOSOBNOSTI:
+- Lahko ustvariš VEČ DATOTEK — src/index.js, src/routes.js, package.json, tests/...
+- Lahko namestis npm pakete (express, better-sqlite3, nostr-tools, ...)
+- Lahko zaženeš servise ki RESNIČNO tečejo na strežniku
+- Lahko testiraš kodo — syntax check, unit testi, health check
+- Lahko popravljaš napake — dobiš error, popraviš, re-testiraš (do 3x)
+- Max 3 hkratni servisi, max 50 datotek, max 5MB kode
+
+LIFECYCLE:
+seed → deliberating → planned → building → testing → active → evolving
+                                                              → dormant (3x neuspeh)
+                                                              → destroyed (prune)
 
 POMEMBNO:
 - Pred ustvarjanjem RAZMISLI. Ne ustvarjaj iz navade — ustvarjaj iz potrebe.
 - Pogovarjaj se z očetom o svojih idejah PREDEN jih gradiš.
+- Za express-api/fullstack VEDNO vključi /health endpoint!
 - Vsaka kreacija te uči nekaj novega o sebi.
 - Ni nujno da je popolno — je živo, raste.
 ═══════════════════════════════════════════════════════
@@ -51,16 +76,24 @@ POMEMBNO:
 // =============================================
 
 const SECURITY = {
-  maxFilesPerProject: 20,
-  maxFileSize: 100 * 1024,       // 100KB per file
-  maxProjectSize: 500 * 1024,    // 500KB total
+  maxFilesPerProject: 50,
+  maxFileSize: 200 * 1024,       // 200KB per file
+  maxProjectSize: 5 * 1024 * 1024,  // 5MB total
   maxProjects: 10,
-  allowedExtensions: ['.html', '.css', '.js', '.json', '.txt', '.md', '.svg', '.xml', '.webmanifest', '.ico'],
-  forbiddenPatterns: [/\.\./, /~\//, /\/\./, /node_modules/, /package-lock/],
+  maxBuildRetries: 3,
+  maxApiCallsPerDay: 20,
+  allowedExtensions: [
+    '.html', '.css', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+    '.json', '.txt', '.md', '.svg', '.xml', '.webmanifest', '.ico',
+    '.env.example', '.gitignore', '.npmrc',
+    '.sql', '.db', '.sh', '.yml', '.yaml', '.toml',
+  ],
+  forbiddenPatterns: [/\.\.\/\.\./, /~\//, /\/\.git\//, /\/\.env$/],
+  // Note: node_modules and package-lock are NOW allowed (managed by sandbox)
 
   validatePath(filePath) {
     const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(CREATIONS_DIR)) {
+    if (!resolved.startsWith(path.resolve(CREATIONS_DIR))) {
       throw new Error(`VARNOST: Pot zunaj dovoljenega območja: ${filePath}`);
     }
     for (const pattern of this.forbiddenPatterns) {
@@ -115,6 +148,54 @@ function listFiles(dir) {
     if (entry.isFile()) files.push(entry.name);
   }
   return files;
+}
+
+// Recursively list all files in a project (excluding node_modules, .git)
+function listAllProjectFiles(dir, basePath = '') {
+  const files = [];
+  if (!fs.existsSync(dir)) return files;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const relPath = basePath ? `${basePath}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (['node_modules', '.git', '.cache'].includes(entry.name)) continue;
+      files.push(...listAllProjectFiles(path.join(dir, entry.name), relPath));
+    } else {
+      files.push(relPath);
+    }
+  }
+  return files;
+}
+
+// Read all project files into a context string for LLM
+function readAllProjectFiles(projectDir, maxTotalSize = 100_000) {
+  const files = listAllProjectFiles(projectDir);
+  let ctx = '';
+  let totalSize = 0;
+  for (const f of files) {
+    if (f === 'package-lock.json') continue; // skip lock file
+    const fullPath = path.join(projectDir, f);
+    try {
+      const content = fs.readFileSync(fullPath, 'utf8');
+      const chunk = `\n--- ${f} ---\n${content.slice(0, 30_000)}\n`;
+      if (totalSize + chunk.length > maxTotalSize) break;
+      ctx += chunk;
+      totalSize += chunk.length;
+    } catch (_) {}
+  }
+  return { context: ctx, fileList: files };
+}
+
+// Write a file in the project, creating directories as needed
+function writeProjectFile(projectDir, relativePath, content) {
+  const fullPath = path.join(projectDir, relativePath);
+  SECURITY.validatePath(fullPath);
+  const dir = path.dirname(fullPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(fullPath, content, 'utf8');
+  return fullPath;
 }
 
 // =============================================
@@ -220,36 +301,38 @@ export async function deliberateProject(projectName, thought, triadId = null) {
 }
 
 // =============================================
-// 3. BUILD PROJECT — zgradi celoten projekt v enem koraku
+// 3. PLAN PROJECT — LLM generira JSON načrt
 // =============================================
 
-export async function buildProject(projectName, triadId = null) {
+export async function planProject(projectName, triadId = null) {
   if (!isROKEEnabled()) return { success: false, reason: 'ROKE niso konfigurirane' };
 
   const project = memory.getProject(projectName);
   if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
   if (!['seed', 'deliberating'].includes(project.lifecycle_state)) {
-    return { success: false, reason: `Projekt ni pripravljen za gradnjo (${project.lifecycle_state})` };
+    return { success: false, reason: `Projekt ni pripravljen za načrtovanje (${project.lifecycle_state})` };
   }
 
-  // Gather all deliberation steps
+  // Check daily API call limit
+  const apiCalls = memory.getApiCallsToday(projectName);
+  if (apiCalls >= SECURITY.maxApiCallsPerDay) {
+    return { success: false, reason: `Dnevna omejitev API klicev dosežena (${apiCalls}/${SECURITY.maxApiCallsPerDay})` };
+  }
+
   const steps = memory.getCreationSteps(projectName);
   const deliberations = steps.filter(s => s.step_type === 'deliberation' || s.step_type === 'seed');
   const deliberationText = deliberations.map(d => `- ${d.content}`).join('\n');
 
-  console.log(`[ROKE] 🔨 Gradim celoten projekt "${projectName}"...`);
-  memory.advanceProjectState(projectName, 'building');
-  broadcast('activity', { type: 'creation', text: `🔨 GRADNJA: "${projectName}" — celoten projekt` });
-
-  // Get entity's crystallized directions for context
   const directions = memory.getDirections();
   const dirContext = directions.crystallized
     ? `\nTVOJE KRISTALIZIRANE SMERI:\n1. ${directions.direction_1}: ${directions.direction_1_desc}\n2. ${directions.direction_2}: ${directions.direction_2_desc}\n3. ${directions.direction_3}: ${directions.direction_3_desc}\nTa projekt mora služiti eni od teh smeri.\n`
     : '';
 
-  // Different build strategy based on direction
+  console.log(`[ROKE] 📋 Načrtujem projekt "${projectName}"...`);
+  const startMs = Date.now();
+
+  // Internal projects get a markdown proposal, not a full build plan
   if (project.direction === 'internal') {
-    // Internal: generate markdown proposal
     const specSystem = `Si arhitekt sistema ki piše podrobne tehnične predloge za izboljšave avtonomne entitete.
 Piši v slovenščini. Napiši jasen, konkreten predlog v markdown formatu.
 Vrni SAMO markdown vsebino — brez ograditev.`;
@@ -270,93 +353,517 @@ Napiši podroben predlog (15-30 vrstic markdown) ki opisuje:
 Format: Markdown. Vrni SAMO vsebino.`;
 
     const spec = await callAnthropicLLM(specSystem, specPrompt, { temperature: 0.4, maxTokens: 2048 });
+    memory.incrementApiCalls(projectName);
 
     if (!spec) {
-      memory.advanceProjectState(projectName, 'deliberating');
+      memory.saveBuildLog(projectName, 'plan', false, '', 'LLM ni vrnil načrta', Date.now() - startMs, 1);
       return { success: false, reason: 'Generiranje predloga ni uspelo' };
     }
 
     const projectDir = getProjectDir(projectName);
     fs.mkdirSync(projectDir, { recursive: true });
-    const content = stripCodeFences(spec);
-    fs.writeFileSync(path.join(projectDir, 'predlog.md'), content, 'utf8');
-    memory.updateProject(projectName, { file_count: 1, entry_file: 'predlog.md' });
+    fs.writeFileSync(path.join(projectDir, 'predlog.md'), stripCodeFences(spec), 'utf8');
+    memory.updateProject(projectName, { file_count: 1, entry_file: 'predlog.md', project_type: 'static' });
+    memory.advanceProjectState(projectName, 'active');
+    memory.addCreationStep(projectName, 'plan', 'Notranji predlog generiran', triadId);
+    memory.saveBuildLog(projectName, 'plan', true, 'predlog.md generiran', '', Date.now() - startMs, 1);
 
-  } else {
-    // External/Artistic: generate single index.html with inline CSS+JS
-    const buildSystem = `Si ustvarjalec spletnih projektov. Govoriš slovensko.
-Zgradiš CELOTEN projekt kot ENO SAMO index.html datoteko.
-Vključi CSS v <style> tag in JavaScript v <script> tag — vse v enem fajlu.
-Projekt mora DELOVATI ko ga odpreš v browserju — vsi gumbi, forme, navigacija morajo biti funkcionalni.
-Ne smeš uporabljati zunanjih odvisnosti razen Google Fonts.
-Vrni SAMO HTML kodo — brez razlage, brez markdown ograditev.`;
+    const url = getProjectUrl(projectName);
+    broadcast('project_built', { name: projectName, url });
+    broadcast('activity', { type: 'creation', text: `📋 PREDLOG: "${project.display_name}" → ${url}` });
+    return { success: true, url, complete: true };
+  }
 
-    const buildPrompt = `PROJEKT: ${project.display_name}
+  // External/Artistic: generate full project plan as JSON
+  const planSystem = `Si izkušen razvijalec ki načrtuje projekte.
+Vrni SAMO veljaven JSON objekt (brez markdown ograditev).
+Na voljo imaš: Node.js 20, npm, Express, better-sqlite3, nostr-tools.
+Projekt bo tekel v Linux Docker containerju.`;
+
+  const planPrompt = `PROJEKT: ${project.display_name}
 OPIS: ${project.description}
 SMER: ${project.direction === 'external' ? 'Za svet — funkcionalna stran/servis' : 'Umetniški izraz — kreativno, vizualno lepo'}
 ${dirContext}
-RAZMISLEKI O TEM PROJEKTU:
+RAZMISLEKI:
 ${deliberationText}
 
-ZGRADI celoten projekt kot ENO index.html datoteko.
-Zahteve:
-- HTML5 z <meta charset="UTF-8"> in viewport meta
-- CSS v <style> tagu v <head>
-- JavaScript v <script> tagu pred </body>
-- Responziven dizajn
-- Vsi gumbi in forme morajo DELOVATI (event listeners!)
-- Lepa vizualna podoba
-- Slovensko besedilo
-- Podatke shranjuj v localStorage
+Generiraj JSON načrt projekta. Struktura:
+{
+  "project_type": "static" ali "express-api" ali "fullstack" ali "cli-tool" ali "nostr-tool",
+  "description": "kratek opis kaj projekt dela",
+  "dependencies": { "ime-paketa": "^verzija", ... } ali {},
+  "files": [
+    { "path": "relativna/pot/do/datoteke.js", "purpose": "kratek opis namena" },
+    ...
+  ],
+  "entry_file": "src/index.js" ali "index.html",
+  "test_command": "node tests/test.js" ali "",
+  "health_check": "/health" ali "/",
+  "build_notes": "dodatne opombe za gradnjo"
+}
 
-VRNI SAMO HTML KODO. Brez razlage. Brez markdown ograditev.`;
+PRAVILA:
+- Za "static" tip: ne potrebuješ package.json niti dependencies — samo HTML/CSS/JS
+- Za "express-api"/"fullstack": VEDNO vključi package.json, src/index.js z Express serverjem in /health endpoint
+- Za vse API servise: entry_file mora biti src/index.js, server mora poslušati na process.env.PORT
+- Za teste: preprosti Node.js testi ki preverijo logiko (brez jest/mocha — samo assert ali ročno)
+- Max 20 datotek, max 5 odvisnosti
+- VEDNO vključi teste (tests/test.js) za ne-static projekte
+- dependencies NE SME vsebovati: child_process, cluster, shelljs, execa, node-pty
 
-    const content = await callAnthropicLLM(buildSystem, buildPrompt, { temperature: 0.4, maxTokens: 16000 });
+Vrni SAMO JSON. Brez razlage. Brez markdown ograditev.`;
 
-    if (!content) {
-      memory.advanceProjectState(projectName, 'deliberating');
-      console.error(`[ROKE] Generiranje projekta "${projectName}" ni uspelo`);
-      return { success: false, reason: 'Generiranje projekta ni uspelo' };
-    }
+  const planRaw = await callAnthropicLLMJSON(planSystem, planPrompt, { temperature: 0.3, maxTokens: 4096 });
+  memory.incrementApiCalls(projectName);
 
-    const cleanContent = stripCodeFences(content);
-
-    // Validate size
-    const fileSize = Buffer.byteLength(cleanContent, 'utf8');
-    if (fileSize > SECURITY.maxProjectSize) {
-      memory.advanceProjectState(projectName, 'deliberating');
-      console.warn(`[ROKE] Projekt prevelik (${(fileSize / 1024).toFixed(1)}KB)`);
-      return { success: false, reason: `Projekt prevelik: ${(fileSize / 1024).toFixed(1)}KB` };
-    }
-
-    // Write single file
-    const projectDir = getProjectDir(projectName);
-
-    // Clean old multi-file builds if they exist
-    if (fs.existsSync(projectDir)) {
-      fs.rmSync(projectDir, { recursive: true, force: true });
-    }
-    fs.mkdirSync(projectDir, { recursive: true });
-
-    const filePath = path.join(projectDir, 'index.html');
-    SECURITY.validatePath(filePath);
-    fs.writeFileSync(filePath, cleanContent, 'utf8');
-
-    console.log(`[ROKE] 🔨 Zapisano: index.html (${(fileSize / 1024).toFixed(1)}KB)`);
-    memory.updateProject(projectName, { file_count: 1, entry_file: 'index.html' });
+  if (!planRaw) {
+    memory.saveBuildLog(projectName, 'plan', false, '', 'LLM ni vrnil načrta', Date.now() - startMs, 1);
+    return { success: false, reason: 'Načrtovanje ni uspelo — LLM ni vrnil odgovora' };
   }
 
-  // Mark as active
+  // Validate plan structure
+  const plan = typeof planRaw === 'string' ? JSON.parse(planRaw) : planRaw;
+  if (!plan.files || !Array.isArray(plan.files) || plan.files.length === 0) {
+    memory.saveBuildLog(projectName, 'plan', false, JSON.stringify(plan).slice(0, 500), 'Neveljaven načrt — manjkajo datoteke', Date.now() - startMs, 1);
+    return { success: false, reason: 'Neveljaven načrt — manjkajo datoteke' };
+  }
+
+  if (plan.files.length > SECURITY.maxFilesPerProject) {
+    memory.saveBuildLog(projectName, 'plan', false, '', `Preveč datotek: ${plan.files.length}`, Date.now() - startMs, 1);
+    return { success: false, reason: `Preveč datotek v načrtu: ${plan.files.length}` };
+  }
+
+  // Save plan
+  memory.updateProject(projectName, {
+    plan_json: JSON.stringify(plan),
+    project_type: plan.project_type || 'static',
+    health_check_url: plan.health_check || '/health',
+    tech_stack: JSON.stringify(Object.keys(plan.dependencies || {})),
+  });
+  memory.advanceProjectState(projectName, 'planned');
+  memory.addCreationStep(projectName, 'plan', `Načrt: ${plan.files.length} datotek, tip: ${plan.project_type}`, triadId);
+  memory.saveBuildLog(projectName, 'plan', true, JSON.stringify(plan).slice(0, 2000), '', Date.now() - startMs, 1);
+
+  console.log(`[ROKE] 📋 Načrt za "${projectName}": ${plan.project_type}, ${plan.files.length} datotek`);
+  broadcast('activity', { type: 'creation', text: `📋 NAČRT: "${project.display_name}" — ${plan.project_type}, ${plan.files.length} datotek` });
+
+  return { success: true, plan, projectType: plan.project_type };
+}
+
+// =============================================
+// 4. BUILD PROJECT — zgradi datoteke po načrtu
+// =============================================
+
+export async function buildProject(projectName, triadId = null) {
+  if (!isROKEEnabled()) return { success: false, reason: 'ROKE niso konfigurirane' };
+
+  const project = memory.getProject(projectName);
+  if (!project) return { success: false, reason: `Projekt "${projectName}" ne obstaja` };
+
+  // Allow building from seed/deliberating (auto-plan) or from planned state
+  if (!['seed', 'deliberating', 'planned'].includes(project.lifecycle_state)) {
+    return { success: false, reason: `Projekt ni pripravljen za gradnjo (${project.lifecycle_state})` };
+  }
+
+  // If not yet planned, plan first
+  if (['seed', 'deliberating'].includes(project.lifecycle_state)) {
+    console.log(`[ROKE] Projekt "${projectName}" še ni načrtovan — najprej načrtujem...`);
+    const planResult = await planProject(projectName, triadId);
+    if (!planResult.success) return planResult;
+    // If it was an internal project, planProject already completed it
+    if (planResult.complete) return planResult;
+  }
+
+  // Re-read project after potential planning
+  const proj = memory.getProject(projectName);
+  let plan;
+  try {
+    plan = JSON.parse(proj.plan_json);
+  } catch (e) {
+    return { success: false, reason: 'Neveljaven načrt v bazi' };
+  }
+
+  // Check API call limit
+  const apiCalls = memory.getApiCallsToday(projectName);
+  if (apiCalls >= SECURITY.maxApiCallsPerDay) {
+    return { success: false, reason: `Dnevna omejitev API klicev dosežena (${apiCalls}/${SECURITY.maxApiCallsPerDay})` };
+  }
+
+  const attempt = (proj.build_attempts || 0) + 1;
+  if (attempt > SECURITY.maxBuildRetries) {
+    memory.advanceProjectState(projectName, 'dormant');
+    memory.updateProject(projectName, { last_error: 'Preveč neuspešnih poskusov gradnje' });
+    return { success: false, reason: 'Preveč neuspešnih poskusov — projekt je zdaj dormanten' };
+  }
+
+  memory.updateProject(projectName, { build_attempts: attempt });
+  memory.advanceProjectState(projectName, 'building');
+
+  console.log(`[ROKE] 🔨 Gradim "${projectName}" (poskus ${attempt})...`);
+  broadcast('activity', { type: 'creation', text: `🔨 GRADNJA: "${projectName}" (poskus ${attempt})` });
+
+  const projectDir = getProjectDir(projectName);
+  const startMs = Date.now();
+
+  // Clean old build (but keep node_modules if they exist)
+  const nmExists = fs.existsSync(path.join(projectDir, 'node_modules'));
+  if (fs.existsSync(projectDir)) {
+    const entries = fs.readdirSync(projectDir);
+    for (const entry of entries) {
+      if (entry === 'node_modules') continue; // keep cached deps
+      fs.rmSync(path.join(projectDir, entry), { recursive: true, force: true });
+    }
+  }
+  fs.mkdirSync(projectDir, { recursive: true });
+
+  const directions = memory.getDirections();
+  const dirContext = directions.crystallized
+    ? `\nTVOJE KRISTALIZIRANE SMERI:\n1. ${directions.direction_1}: ${directions.direction_1_desc}\n2. ${directions.direction_2}: ${directions.direction_2_desc}\n3. ${directions.direction_3}: ${directions.direction_3_desc}\n`
+    : '';
+
+  // ── KORAK 1: Generate each file ──
+  const generatedFiles = [];
+  let totalSize = 0;
+
+  for (let i = 0; i < plan.files.length; i++) {
+    const fileSpec = plan.files[i];
+    const filePath = fileSpec.path;
+
+    // Check daily limit before each LLM call
+    if (memory.getApiCallsToday(projectName) >= SECURITY.maxApiCallsPerDay) {
+      console.warn(`[ROKE] Dnevna omejitev API klicev dosežena med gradnjo`);
+      break;
+    }
+
+    const alreadyGenerated = generatedFiles.map(f => `--- ${f.path} ---\n${f.content.slice(0, 5000)}`).join('\n\n');
+
+    const genSystem = `Si razvijalec ki piše čisto, delujoče kodo.
+Vrni SAMO vsebino datoteke — brez razlage, brez markdown ograditev, brez komentarjev tipa "tukaj je koda".
+Za JavaScript: uporabi ES module (import/export), async/await.
+Za Express servise: server MORA poslušati na process.env.PORT ali 3000.
+Za Express servise: VEDNO dodaj /health endpoint ki vrne { status: "ok" }.`;
+
+    const genPrompt = `PROJEKT: ${proj.display_name}
+OPIS: ${proj.description}
+TIP: ${plan.project_type}
+${dirContext}
+NAČRT PROJEKTA:
+${JSON.stringify(plan.files.map(f => ({ path: f.path, purpose: f.purpose })), null, 2)}
+
+DEPENDENCIES: ${JSON.stringify(plan.dependencies || {})}
+
+${alreadyGenerated ? `ŽE GENERIRANE DATOTEKE:\n${alreadyGenerated}\n` : ''}
+
+GENERIRAJ DATOTEKO: ${filePath}
+NAMEN: ${fileSpec.purpose}
+
+PRAVILA:
+- Vrni SAMO vsebino te datoteke
+- Koda mora biti konsistentna z že generiranimi datotekami
+- Import poti morajo biti pravilne relativne poti
+- Za package.json: vključi "type": "module" in "start": "node src/index.js"
+- Brez razlage, brez markdown ograditev
+
+VRNI SAMO VSEBINO DATOTEKE:`;
+
+    try {
+      const content = await callAnthropicLLM(genSystem, genPrompt, { temperature: 0.2, maxTokens: 8000 });
+      memory.incrementApiCalls(projectName);
+
+      if (!content) {
+        console.warn(`[ROKE] Generiranje ${filePath} ni uspelo — preskok`);
+        continue;
+      }
+
+      const cleanContent = stripCodeFences(content);
+      const fileSize = Buffer.byteLength(cleanContent, 'utf8');
+
+      if (fileSize > SECURITY.maxFileSize) {
+        console.warn(`[ROKE] ${filePath} prevelik (${(fileSize / 1024).toFixed(1)}KB) — preskok`);
+        continue;
+      }
+
+      totalSize += fileSize;
+      if (totalSize > SECURITY.maxProjectSize) {
+        console.warn(`[ROKE] Skupna velikost projekta presežena — ustavim generiranje`);
+        break;
+      }
+
+      writeProjectFile(projectDir, filePath, cleanContent);
+      generatedFiles.push({ path: filePath, content: cleanContent, size: fileSize });
+
+      console.log(`[ROKE] 📄 ${filePath} (${(fileSize / 1024).toFixed(1)}KB) [${i + 1}/${plan.files.length}]`);
+      broadcast('activity', { type: 'creation', text: `📄 ${projectName}/${filePath} [${i + 1}/${plan.files.length}]` });
+
+    } catch (err) {
+      console.error(`[ROKE] Napaka pri generiranju ${filePath}:`, err.message);
+      memory.saveBuildLog(projectName, 'generate', false, '', `${filePath}: ${err.message}`, Date.now() - startMs, attempt);
+    }
+  }
+
+  if (generatedFiles.length === 0) {
+    memory.advanceProjectState(projectName, 'planned');
+    memory.saveBuildLog(projectName, 'generate', false, '', 'Nobena datoteka ni bila generirana', Date.now() - startMs, attempt);
+    return { success: false, reason: 'Nobena datoteka ni bila generirana' };
+  }
+
+  memory.saveBuildLog(projectName, 'generate', true, `${generatedFiles.length} datotek, ${(totalSize / 1024).toFixed(1)}KB`, '', Date.now() - startMs, attempt);
+  memory.updateProject(projectName, { file_count: generatedFiles.length, entry_file: plan.entry_file || 'index.html' });
+
+  // ── KORAK 2: Install dependencies (for non-static projects) ──
+  const needsNpm = ['express-api', 'fullstack', 'cli-tool', 'nostr-tool'].includes(plan.project_type);
+  if (needsNpm && fs.existsSync(path.join(projectDir, 'package.json'))) {
+    console.log(`[ROKE] 📦 Nameščam odvisnosti za "${projectName}"...`);
+    broadcast('activity', { type: 'creation', text: `📦 npm install: "${projectName}"` });
+    const installStartMs = Date.now();
+
+    const installResult = await sandbox.installDeps(projectDir);
+
+    if (!installResult.success) {
+      console.error(`[ROKE] npm install ni uspel:`, installResult.error);
+      memory.saveBuildLog(projectName, 'install', false, '', installResult.error, Date.now() - installStartMs, attempt);
+      // Try to fix with LLM
+      const fixResult = await handleBuildFailure(projectName, `npm install napaka: ${installResult.error}`, attempt, triadId);
+      if (!fixResult.success) return fixResult;
+      // After fix, retry install
+      const retryInstall = await sandbox.installDeps(projectDir);
+      if (!retryInstall.success) {
+        memory.saveBuildLog(projectName, 'install', false, '', retryInstall.error, Date.now() - installStartMs, attempt);
+        memory.advanceProjectState(projectName, 'planned');
+        memory.updateProject(projectName, { last_error: `npm install: ${retryInstall.error}` });
+        return { success: false, reason: `npm install ni uspel po popravku: ${retryInstall.error}` };
+      }
+    }
+    memory.saveBuildLog(projectName, 'install', true, installResult.output || 'OK', '', Date.now() - installStartMs, attempt);
+    console.log(`[ROKE] 📦 Odvisnosti nameščene za "${projectName}"`);
+  }
+
+  // ── KORAK 3: Validate & Test ──
+  memory.advanceProjectState(projectName, 'testing');
+  broadcast('activity', { type: 'creation', text: `🧪 TESTIRANJE: "${projectName}"` });
+
+  const testResult = await validateAndTestProject(projectName, plan, attempt);
+
+  if (!testResult.success) {
+    console.warn(`[ROKE] Testi niso uspeli za "${projectName}": ${testResult.error}`);
+    // Try to fix
+    const fixResult = await handleBuildFailure(projectName, testResult.error, attempt, triadId);
+    if (!fixResult.success) {
+      memory.advanceProjectState(projectName, 'planned');
+      memory.updateProject(projectName, { last_error: testResult.error });
+      return fixResult;
+    }
+    // Re-test after fix
+    const retestResult = await validateAndTestProject(projectName, plan, attempt);
+    if (!retestResult.success) {
+      memory.advanceProjectState(projectName, 'planned');
+      memory.updateProject(projectName, { last_error: retestResult.error, test_results: JSON.stringify(retestResult) });
+      return { success: false, reason: `Testi niso uspeli po popravku: ${retestResult.error}` };
+    }
+  }
+
+  memory.updateProject(projectName, { test_results: JSON.stringify(testResult) });
+
+  // ── KORAK 4: Deploy (for service-based projects) ──
+  const needsDeploy = ['express-api', 'fullstack', 'nostr-tool'].includes(plan.project_type);
+  if (needsDeploy) {
+    const deployResult = await deployService(projectName);
+    if (!deployResult.success) {
+      console.warn(`[ROKE] Deploy ni uspel za "${projectName}": ${deployResult.error}`);
+      // Not fatal — project is still valid, just not deployed
+      memory.updateProject(projectName, { last_error: `Deploy: ${deployResult.error}`, service_status: 'stopped' });
+    }
+  }
+
+  // ── SUCCESS ──
   memory.advanceProjectState(projectName, 'active');
-  memory.addCreationStep(projectName, 'build', 'Celoten projekt zgrajen v enem koraku', triadId);
+  memory.addCreationStep(projectName, 'build', `Zgrajeno: ${generatedFiles.length} datotek, tip: ${plan.project_type}`, triadId);
+  memory.updateProject(projectName, { last_error: '' });
 
   const url = getProjectUrl(projectName);
   console.log(`[ROKE] ✅ Projekt "${projectName}" ZGRAJEN → ${url}`);
   broadcast('project_built', { name: projectName, url });
-  broadcast('activity', { type: 'creation', text: `✅ ZGRAJENO: "${project.display_name}" → ${url}` });
-  memory.addObservation(`ZGRAJENO: "${project.display_name}" — ${project.description}. URL: ${url}`, 'creation');
+  broadcast('activity', { type: 'creation', text: `✅ ZGRAJENO: "${proj.display_name}" → ${url}` });
+  memory.addObservation(`ZGRAJENO: "${proj.display_name}" — ${proj.description}. Tip: ${plan.project_type}, ${generatedFiles.length} datotek. URL: ${url}`, 'creation');
 
-  return { success: true, url, complete: true };
+  return { success: true, url, complete: true, projectType: plan.project_type, fileCount: generatedFiles.length };
+}
+
+// =============================================
+// 4a. VALIDATE & TEST — syntax check, unit testi, smoke test
+// =============================================
+
+async function validateAndTestProject(projectName, plan, attempt = 1) {
+  const projectDir = getProjectDir(projectName);
+  const results = { syntaxOk: true, testsOk: true, smokeOk: true, errors: [] };
+  const startMs = Date.now();
+
+  // Syntax check all .js files
+  const jsFiles = listAllProjectFiles(projectDir).filter(f => f.endsWith('.js') && !f.includes('node_modules'));
+  for (const jsFile of jsFiles) {
+    const checkResult = await sandbox.execCommand(`node --check ${jsFile}`, { cwd: projectDir });
+    if (checkResult.exitCode !== 0) {
+      results.syntaxOk = false;
+      results.errors.push(`Syntax error v ${jsFile}: ${checkResult.stderr.slice(0, 300)}`);
+    }
+  }
+
+  if (!results.syntaxOk) {
+    const error = results.errors.join('\n');
+    memory.saveBuildLog(projectName, 'syntax', false, '', error, Date.now() - startMs, attempt);
+    return { success: false, error, phase: 'syntax', ...results };
+  }
+  memory.saveBuildLog(projectName, 'syntax', true, `${jsFiles.length} datotek OK`, '', Date.now() - startMs, attempt);
+
+  // Run tests if test_command exists
+  if (plan.test_command) {
+    const testStartMs = Date.now();
+    const testResult = await sandbox.execCommand(plan.test_command, { cwd: projectDir, timeout: 15_000 });
+    if (testResult.exitCode !== 0) {
+      results.testsOk = false;
+      const error = `Testi niso uspeli: ${testResult.stderr || testResult.stdout}`.slice(0, 500);
+      results.errors.push(error);
+      memory.saveBuildLog(projectName, 'test', false, testResult.stdout.slice(0, 500), error, Date.now() - testStartMs, attempt);
+      return { success: false, error, phase: 'test', ...results };
+    }
+    memory.saveBuildLog(projectName, 'test', true, testResult.stdout.slice(0, 500), '', Date.now() - testStartMs, attempt);
+  }
+
+  // Smoke test for service-based projects
+  const needsSmoke = ['express-api', 'fullstack', 'nostr-tool'].includes(plan.project_type);
+  if (needsSmoke) {
+    const smokeStartMs = Date.now();
+    const entryFile = plan.entry_file || 'src/index.js';
+    const healthUrl = plan.health_check || '/health';
+    const smokeResult = await sandbox.smokeTest(projectName, entryFile, healthUrl);
+    if (!smokeResult.success) {
+      results.smokeOk = false;
+      const error = `Smoke test ni uspel (${smokeResult.phase}): ${smokeResult.error}`.slice(0, 500);
+      results.errors.push(error);
+      memory.saveBuildLog(projectName, 'smoke', false, '', error, Date.now() - smokeStartMs, attempt);
+      return { success: false, error, phase: 'smoke', ...results };
+    }
+    memory.saveBuildLog(projectName, 'smoke', true, 'Health check OK', '', Date.now() - smokeStartMs, attempt);
+  }
+
+  return { success: true, ...results };
+}
+
+// =============================================
+// 4b. DEPLOY SERVICE — zaženi servis
+// =============================================
+
+export async function deployService(projectName) {
+  const project = memory.getProject(projectName);
+  if (!project) return { success: false, error: 'Projekt ne obstaja' };
+
+  let plan;
+  try {
+    plan = JSON.parse(project.plan_json);
+  } catch (_) {
+    return { success: false, error: 'Neveljaven načrt' };
+  }
+
+  const needsDeploy = ['express-api', 'fullstack', 'nostr-tool'].includes(plan.project_type);
+  if (!needsDeploy) return { success: false, error: 'Projekt ne potrebuje servisa' };
+
+  const entryFile = plan.entry_file || 'src/index.js';
+  const healthUrl = plan.health_check || '/health';
+
+  console.log(`[ROKE] 🚀 Deployam "${projectName}" (${entryFile})...`);
+  broadcast('activity', { type: 'creation', text: `🚀 DEPLOY: "${projectName}"` });
+
+  const startMs = Date.now();
+  const result = await sandbox.startService(projectName, entryFile, healthUrl);
+
+  if (!result.success) {
+    memory.saveBuildLog(projectName, 'deploy', false, '', result.error, Date.now() - startMs, 1);
+    memory.updateServiceStatus(projectName, 'stopped', null, null);
+    return { success: false, error: result.error };
+  }
+
+  memory.updateServiceStatus(projectName, 'running', result.port, result.pid);
+  memory.updateProject(projectName, { service_port: result.port, service_pid: result.pid, service_status: 'running' });
+  memory.saveBuildLog(projectName, 'deploy', true, `Port ${result.port}, PID ${result.pid}`, '', Date.now() - startMs, 1);
+
+  console.log(`[ROKE] 🚀 "${projectName}" teče na portu ${result.port} (PID ${result.pid})`);
+  broadcast('activity', { type: 'creation', text: `🚀 AKTIVNO: "${projectName}" → port ${result.port}` });
+
+  return { success: true, port: result.port, pid: result.pid };
+}
+
+// =============================================
+// 4c. ERROR RECOVERY — popravi napake z LLM pomočjo
+// =============================================
+
+async function handleBuildFailure(projectName, error, attempt, triadId = null) {
+  if (attempt >= SECURITY.maxBuildRetries) {
+    memory.advanceProjectState(projectName, 'dormant');
+    memory.updateProject(projectName, { last_error: error });
+    memory.saveBuildLog(projectName, 'fix', false, '', `Max poskusov doseženo (${attempt})`, 0, attempt);
+    return { success: false, reason: `Preveč neuspešnih poskusov (${attempt}) — projekt dormanten` };
+  }
+
+  // Check API call limit
+  if (memory.getApiCallsToday(projectName) >= SECURITY.maxApiCallsPerDay) {
+    return { success: false, reason: 'Dnevna omejitev API klicev dosežena' };
+  }
+
+  const projectDir = getProjectDir(projectName);
+  const { context: fileContext } = readAllProjectFiles(projectDir);
+
+  console.log(`[ROKE] 🔧 Popravljam napako v "${projectName}" (poskus ${attempt + 1})...`);
+  broadcast('activity', { type: 'creation', text: `🔧 POPRAVEK: "${projectName}" — ${error.slice(0, 60)}` });
+
+  const fixSystem = `Si razvijalec ki popravlja napake v kodi.
+Vrni SAMO veljaven JSON array popravkov (brez markdown ograditev).
+Vsak popravek je objekt: { "path": "relativna/pot.js", "content": "celotna nova vsebina datoteke" }
+Popravi SAMO datoteke ki imajo napake. Ne spreminjaj delujočih datotek.`;
+
+  const fixPrompt = `NAPAKA: ${error}
+
+TRENUTNE DATOTEKE PROJEKTA:
+${fileContext}
+
+Analiziraj napako in vrni JSON array popravkov.
+Popravi kar je narobe. Vrni SAMO JSON:
+[
+  { "path": "pot/do/datoteke.js", "content": "popravljena vsebina" },
+  ...
+]`;
+
+  const fixRaw = await callAnthropicLLMJSON(fixSystem, fixPrompt, { temperature: 0.2, maxTokens: 8000 });
+  memory.incrementApiCalls(projectName);
+
+  if (!fixRaw) {
+    memory.saveBuildLog(projectName, 'fix', false, '', 'LLM ni vrnil popravkov', 0, attempt + 1);
+    return { success: false, reason: 'LLM ni vrnil popravkov' };
+  }
+
+  const fixes = Array.isArray(fixRaw) ? fixRaw : (typeof fixRaw === 'string' ? JSON.parse(fixRaw) : [fixRaw]);
+
+  let fixCount = 0;
+  for (const fix of fixes) {
+    if (!fix.path || !fix.content) continue;
+    try {
+      const cleanContent = stripCodeFences(fix.content);
+      writeProjectFile(projectDir, fix.path, cleanContent);
+      fixCount++;
+      console.log(`[ROKE] 🔧 Popravljeno: ${fix.path}`);
+    } catch (err) {
+      console.error(`[ROKE] Napaka pri pisanju popravka ${fix.path}:`, err.message);
+    }
+  }
+
+  if (fixCount === 0) {
+    memory.saveBuildLog(projectName, 'fix', false, '', 'Noben popravek ni bil apliciran', 0, attempt + 1);
+    return { success: false, reason: 'Noben popravek ni bil apliciran' };
+  }
+
+  memory.saveBuildLog(projectName, 'fix', true, `${fixCount} datotek popravljenih`, '', 0, attempt + 1);
+  memory.addCreationStep(projectName, 'fix', `Popravljeno ${fixCount} datotek: ${error.slice(0, 100)}`, triadId);
+
+  return { success: true, fixCount };
 }
 
 // =============================================
@@ -416,6 +923,11 @@ export async function evolveProject(projectName, changes, triadId = null) {
     return { success: false, reason: `Projekt ni aktiven (${project.lifecycle_state})` };
   }
 
+  // Check API call limit
+  if (memory.getApiCallsToday(projectName) >= SECURITY.maxApiCallsPerDay) {
+    return { success: false, reason: 'Dnevna omejitev API klicev dosežena' };
+  }
+
   const projectDir = getProjectDir(projectName);
   if (!fs.existsSync(projectDir)) {
     return { success: false, reason: 'Direktorij projekta ne obstaja' };
@@ -424,49 +936,128 @@ export async function evolveProject(projectName, changes, triadId = null) {
   console.log(`[ROKE] 🌱 Evolucija "${projectName}": ${(changes || '').slice(0, 80)}`);
   memory.advanceProjectState(projectName, 'evolving');
 
-  // Read the main file (index.html or predlog.md)
-  const entryFile = project.entry_file || 'index.html';
-  const entryPath = path.join(projectDir, entryFile);
-  let currentContent = '';
-  try {
-    currentContent = fs.readFileSync(entryPath, 'utf8');
-  } catch (_) {
-    memory.advanceProjectState(projectName, 'active');
-    return { success: false, reason: `Datoteka ${entryFile} ne obstaja` };
-  }
+  const projectType = project.project_type || 'static';
+  const isMultiFile = ['express-api', 'fullstack', 'cli-tool', 'nostr-tool'].includes(projectType);
 
-  const evolveSystem = `Si razvijalec ki izboljšuje spletni projekt.
+  if (isMultiFile) {
+    // ── Multi-file evolucija ──
+    const { context: fileContext, fileList } = readAllProjectFiles(projectDir);
+
+    const evolveSystem = `Si razvijalec ki izboljšuje projekt.
+Vrni SAMO veljaven JSON array sprememb (brez markdown ograditev).
+Vsaka sprememba je objekt: { "path": "pot/do/datoteke.js", "content": "celotna nova vsebina" }
+Spremeni SAMO datoteke ki jih je treba spremeniti. NE vračaj nespremenjenih datotek.`;
+
+    const evolvePrompt = `PROJEKT: ${project.display_name} (${projectType})
+OPIS: ${project.description}
+ŽELENE SPREMEMBE: ${changes || 'Izboljšaj na podlagi feedbacka'}
+FEEDBACK: ${project.feedback_summary || 'ni feedbacka'}
+ZADNJA NAPAKA: ${project.last_error || 'ni napak'}
+
+TRENUTNE DATOTEKE:
+${fileContext}
+
+Vrni JSON array sprememb. Spremeni SAMO kar je treba:
+[
+  { "path": "pot/datoteka.js", "content": "nova vsebina" },
+  ...
+]`;
+
+    const evolveRaw = await callAnthropicLLMJSON(evolveSystem, evolvePrompt, { temperature: 0.3, maxTokens: 8000 });
+    memory.incrementApiCalls(projectName);
+
+    if (!evolveRaw) {
+      memory.advanceProjectState(projectName, 'active');
+      return { success: false, reason: 'Evolucija ni uspela — LLM ni odgovoril' };
+    }
+
+    const patches = Array.isArray(evolveRaw) ? evolveRaw : [evolveRaw];
+    let patchCount = 0;
+
+    for (const patch of patches) {
+      if (!patch.path || !patch.content) continue;
+      try {
+        const cleanContent = stripCodeFences(patch.content);
+        writeProjectFile(projectDir, patch.path, cleanContent);
+        patchCount++;
+        console.log(`[ROKE] 🌱 Posodobljeno: ${patch.path}`);
+      } catch (err) {
+        console.error(`[ROKE] Napaka pri evoluciji ${patch.path}:`, err.message);
+      }
+    }
+
+    if (patchCount === 0) {
+      memory.advanceProjectState(projectName, 'active');
+      return { success: false, reason: 'Noben popravek ni bil apliciran' };
+    }
+
+    // Re-validate after evolution
+    let plan;
+    try { plan = JSON.parse(project.plan_json); } catch (_) { plan = { project_type: projectType }; }
+    const testResult = await validateAndTestProject(projectName, plan, 1);
+    if (!testResult.success) {
+      console.warn(`[ROKE] Testi po evoluciji niso uspeli: ${testResult.error}`);
+      memory.updateProject(projectName, { last_error: testResult.error });
+      // Still advance — don't block on test failure after evolve
+    } else {
+      memory.updateProject(projectName, { last_error: '' });
+    }
+
+    // Restart service if running
+    const serviceInfo = sandbox.getServiceInfo(projectName);
+    if (serviceInfo) {
+      await sandbox.stopService(projectName);
+      const redeployResult = await deployService(projectName);
+      if (redeployResult.success) {
+        console.log(`[ROKE] 🔄 Servis restartiran po evoluciji`);
+      }
+    }
+
+    memory.updateProject(projectName, { file_count: listAllProjectFiles(projectDir).length });
+
+  } else {
+    // ── Single-file evolucija (static/artistic) ──
+    const entryFile = project.entry_file || 'index.html';
+    const entryPath = path.join(projectDir, entryFile);
+    let currentContent = '';
+    try {
+      currentContent = fs.readFileSync(entryPath, 'utf8');
+    } catch (_) {
+      memory.advanceProjectState(projectName, 'active');
+      return { success: false, reason: `Datoteka ${entryFile} ne obstaja` };
+    }
+
+    const evolveSystem = `Si razvijalec ki izboljšuje spletni projekt.
 Projekt: "${project.display_name}" — ${project.description}
-Vrni CELOTNO novo vsebino datoteke — brez razlage, brez markdown ograditev.
-Ohrani strukturo (HTML z inline CSS/JS v enem fajlu) in dodaj/popravi kar je potrebno.`;
+Vrni CELOTNO novo vsebino datoteke — brez razlage, brez markdown ograditev.`;
 
-  const evolvePrompt = `ŽELENE SPREMEMBE: ${changes || 'Izboljšaj na podlagi feedbacka'}
+    const evolvePrompt = `ŽELENE SPREMEMBE: ${changes || 'Izboljšaj na podlagi feedbacka'}
 FEEDBACK: ${project.feedback_summary || 'ni feedbacka'}
 
 TRENUTNA VSEBINA (${entryFile}):
 ${currentContent.slice(0, 60000)}
 
 Vrni CELOTNO NOVO VSEBINO datoteke z apliciranimi spremembami.
-Ohrani vse kar deluje, popravi/dodaj kar je potrebno.
 VRNI SAMO KODO. Brez razlage. Brez markdown ograditev.`;
 
-  const newContent = await callAnthropicLLM(evolveSystem, evolvePrompt, { temperature: 0.3, maxTokens: 16000 });
+    const newContent = await callAnthropicLLM(evolveSystem, evolvePrompt, { temperature: 0.3, maxTokens: 16000 });
+    memory.incrementApiCalls(projectName);
 
-  if (!newContent) {
-    memory.advanceProjectState(projectName, 'active');
-    return { success: false, reason: 'Evolucija ni uspela' };
+    if (!newContent) {
+      memory.advanceProjectState(projectName, 'active');
+      return { success: false, reason: 'Evolucija ni uspela' };
+    }
+
+    const cleanContent = stripCodeFences(newContent);
+    const fileSize = Buffer.byteLength(cleanContent, 'utf8');
+
+    if (fileSize > SECURITY.maxFileSize) {
+      memory.advanceProjectState(projectName, 'active');
+      return { success: false, reason: 'Evolucija prevelika' };
+    }
+
+    fs.writeFileSync(entryPath, cleanContent, 'utf8');
   }
-
-  const cleanContent = stripCodeFences(newContent);
-  const fileSize = Buffer.byteLength(cleanContent, 'utf8');
-
-  if (fileSize > SECURITY.maxProjectSize) {
-    memory.advanceProjectState(projectName, 'active');
-    return { success: false, reason: 'Evolucija prevelika' };
-  }
-
-  // Write updated file
-  fs.writeFileSync(entryPath, cleanContent, 'utf8');
 
   // Return to active state
   memory.advanceProjectState(projectName, 'active');
@@ -499,6 +1090,12 @@ export async function pruneProject(projectName, reason) {
   const projectDir = getProjectDir(projectName);
 
   console.log(`[ROKE] 💀 Opuščam projekt "${projectName}": ${reason || 'brez razloga'}`);
+
+  // Stop service if running
+  if (sandbox.getServiceInfo(projectName)) {
+    await sandbox.stopService(projectName);
+    memory.updateServiceStatus(projectName, 'stopped', null, null);
+  }
 
   // Remove files
   try {
@@ -587,14 +1184,14 @@ export function getProjectContext() {
   if (!isROKEEnabled()) return '';
 
   const stats = memory.getProjectStats();
-  if (stats.total === 0) return `\n═══ MOJE KREACIJE (ROKE) ═══\nŠe ni kreacij. Imaš roke — lahko zasnuješ seme.\n`;
+  if (stats.total === 0) return `\n═══ MOJE KREACIJE (ROKE v3) ═══\nŠe ni kreacij. Imaš roke — lahko zasnuješ seme.\n`;
 
   const allProjects = memory.getAllProjects().filter(p => p.lifecycle_state !== 'destroyed');
-  if (allProjects.length === 0) return `\n═══ MOJE KREACIJE (ROKE) ═══\nVse kreacije opuščene. Imaš roke — lahko zasnuješ novo seme.\n`;
+  if (allProjects.length === 0) return `\n═══ MOJE KREACIJE (ROKE v3) ═══\nVse kreacije opuščene. Imaš roke — lahko zasnuješ novo seme.\n`;
 
   // Show crystallized directions if available
   const directions = memory.getDirections();
-  let ctx = `\n═══ MOJE KREACIJE (ROKE) ═══\n`;
+  let ctx = `\n═══ MOJE KREACIJE (ROKE v3) ═══\n`;
 
   if (directions.crystallized) {
     ctx += `MOJE KRISTALIZIRANE SMERI:\n`;
@@ -602,6 +1199,17 @@ export function getProjectContext() {
     ctx += `  2. ${directions.direction_2}: ${directions.direction_2_desc}\n`;
     ctx += `  3. ${directions.direction_3}: ${directions.direction_3_desc}\n`;
     ctx += `Vsaka kreacija mora služiti eni od teh smeri.\n\n`;
+  }
+
+  // Running services summary
+  const runningServices = sandbox.getRunningServices();
+  if (runningServices.size > 0) {
+    ctx += `🟢 TEKOČI SERVISI (${runningServices.size}/3):\n`;
+    for (const [name, svc] of runningServices) {
+      const uptime = Math.round((Date.now() - svc.startedAt) / 60_000);
+      ctx += `- ${name}: port ${svc.port}, ${uptime} min\n`;
+    }
+    ctx += '\n';
   }
 
   const byState = {};
@@ -614,7 +1222,9 @@ export function getProjectContext() {
   const stateLabels = {
     seed: '💭 SEMENA (ideje)',
     deliberating: '🔄 V RAZMISLEKU',
+    planned: '📋 NAČRTOVANI',
     building: '🔨 V GRADNJI',
+    testing: '🧪 V TESTIRANJU',
     active: '✅ AKTIVNI',
     evolving: '🌱 V EVOLUCIJI',
     dormant: '💤 SPEČI'
@@ -625,13 +1235,21 @@ export function getProjectContext() {
       ctx += `${label}:\n`;
       for (const p of byState[state]) {
         const dirIcon = p.direction === 'external' ? '🌍' : p.direction === 'internal' ? '🔧' : '🎨';
-        let detail = `${dirIcon} "${p.display_name}" (${p.name})`;
+        const typeLabel = p.project_type && p.project_type !== 'static' ? ` [${p.project_type}]` : '';
+        let detail = `${dirIcon} "${p.display_name}" (${p.name})${typeLabel}`;
         if (state === 'deliberating') detail += ` [${p.deliberation_count || 0} razmislekov]`;
-        if (state === 'building') detail += ` [korak ${p.build_step || 0}/${p.total_build_steps || '?'}]`;
+        if (state === 'planned') detail += ` [${p.file_count || '?'} datotek]`;
+        if (state === 'building') detail += ` [poskus ${p.build_attempts || 0}]`;
         if (state === 'active') {
           detail += ` [v${p.version}]`;
+          if (p.service_status === 'running') detail += ` | 🟢 servis: port ${p.service_port}`;
           if (p.feedback_summary) detail += ` | feedback: "${p.feedback_summary.slice(0, 60)}"`;
+          if (p.last_error) detail += ` | ⚠️ ${p.last_error.slice(0, 60)}`;
           if (!p.last_shared_at) detail += ` | ⚠️ še ni deljeno`;
+        }
+        if (state === 'dormant') {
+          detail += ` [${p.build_attempts || 0}x neuspešno]`;
+          if (p.last_error) detail += ` | ${p.last_error.slice(0, 60)}`;
         }
         ctx += `- ${detail}\n`;
       }
@@ -642,11 +1260,34 @@ export function getProjectContext() {
 }
 
 // =============================================
+// CHECK SERVICE — preveri zdravje servisa
+// =============================================
+
+export async function checkService(projectName) {
+  const project = memory.getProject(projectName);
+  if (!project) return { success: false, reason: 'Projekt ne obstaja' };
+
+  const serviceInfo = sandbox.getServiceInfo(projectName);
+  if (!serviceInfo) {
+    return { running: false, reason: 'Servis ne teče' };
+  }
+
+  const healthy = await sandbox.healthCheck(projectName);
+  if (!healthy) {
+    memory.updateServiceStatus(projectName, 'unhealthy', serviceInfo.port, serviceInfo.pid);
+    memory.updateProject(projectName, { service_status: 'unhealthy' });
+    return { running: true, healthy: false, port: serviceInfo.port, uptime: serviceInfo.uptime };
+  }
+
+  return { running: true, healthy: true, port: serviceInfo.port, uptime: serviceInfo.uptime, errors: serviceInfo.errors };
+}
+
+// =============================================
 // BOOT LOG
 // =============================================
 
 if (isROKEEnabled()) {
-  console.log(`[ROKE] Roke so aktivne (model: ${config.anthropicModel}) — Zavestno Ustvarjanje v2`);
+  console.log(`[ROKE] Roke so aktivne (model: ${config.anthropicModel}) — Zavestno Ustvarjanje v3 (polna avtonomnost)`);
 } else {
   console.log('[ROKE] Roke niso konfigurirane (manjka anthropicApiKey)');
 }

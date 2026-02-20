@@ -171,6 +171,19 @@ db.exec(`
   );
 
   
+  CREATE TABLE IF NOT EXISTS build_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_name TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    success INTEGER DEFAULT 0,
+    output TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    duration_ms INTEGER DEFAULT 0,
+    attempt INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_build_logs_project ON build_logs(project_name);
+
   CREATE TABLE IF NOT EXISTS synapses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pattern TEXT NOT NULL,
@@ -246,6 +259,18 @@ const projectMigrations = [
   ['last_shared_at', "ALTER TABLE projects ADD COLUMN last_shared_at TEXT DEFAULT NULL"],
   ['feedback_summary', "ALTER TABLE projects ADD COLUMN feedback_summary TEXT DEFAULT ''"],
   ['plan_json', "ALTER TABLE projects ADD COLUMN plan_json TEXT DEFAULT ''"],
+  // v3 — full dev autonomy
+  ['project_type', "ALTER TABLE projects ADD COLUMN project_type TEXT DEFAULT 'static'"],
+  ['service_port', "ALTER TABLE projects ADD COLUMN service_port INTEGER DEFAULT NULL"],
+  ['service_pid', "ALTER TABLE projects ADD COLUMN service_pid INTEGER DEFAULT NULL"],
+  ['service_status', "ALTER TABLE projects ADD COLUMN service_status TEXT DEFAULT 'stopped'"],
+  ['last_error', "ALTER TABLE projects ADD COLUMN last_error TEXT DEFAULT ''"],
+  ['build_attempts', "ALTER TABLE projects ADD COLUMN build_attempts INTEGER DEFAULT 0"],
+  ['test_results', "ALTER TABLE projects ADD COLUMN test_results TEXT DEFAULT ''"],
+  ['api_calls_today', "ALTER TABLE projects ADD COLUMN api_calls_today INTEGER DEFAULT 0"],
+  ['api_calls_date', "ALTER TABLE projects ADD COLUMN api_calls_date TEXT DEFAULT ''"],
+  ['health_check_url', "ALTER TABLE projects ADD COLUMN health_check_url TEXT DEFAULT ''"],
+  ['tech_stack', "ALTER TABLE projects ADD COLUMN tech_stack TEXT DEFAULT '[]'"],
 ];
 
 for (const [col, sql] of migrations) {
@@ -633,7 +658,7 @@ const memory = {
   },
 
   updateProject(name, updates) {
-    const allowed = ['display_name', 'description', 'status', 'entry_file', 'file_count', 'notes', 'version', 'destruction_reason', 'destroyed_at', 'last_reflected_at', 'direction', 'lifecycle_state', 'deliberation_count', 'build_step', 'total_build_steps', 'last_shared_at', 'feedback_summary', 'plan_json'];
+    const allowed = ['display_name', 'description', 'status', 'entry_file', 'file_count', 'notes', 'version', 'destruction_reason', 'destroyed_at', 'last_reflected_at', 'direction', 'lifecycle_state', 'deliberation_count', 'build_step', 'total_build_steps', 'last_shared_at', 'feedback_summary', 'plan_json', 'project_type', 'service_port', 'service_pid', 'service_status', 'last_error', 'build_attempts', 'test_results', 'api_calls_today', 'api_calls_date', 'health_check_url', 'tech_stack'];
     const keys = Object.keys(updates).filter(k => allowed.includes(k));
     if (keys.length === 0) return;
     const sets = keys.map(k => `${k} = ?`).join(', ');
@@ -718,12 +743,16 @@ const memory = {
   },
 
   getProjectsNeedingAttention() {
-    // Priority order: deliberating ready to build, seeds needing deliberation, active+unshared, active+feedback
-    const readyToBuild = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'deliberating' AND deliberation_count >= 2 LIMIT 1").all();
-    const seeds = db.prepare("SELECT *, 'deliberate' as needed_action FROM projects WHERE lifecycle_state = 'seed' LIMIT 1").all();
+    // Priority: planned→build, deliberating→plan, testing, unshared, feedback, unhealthy, seeds
+    const planned = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'planned' LIMIT 1").all();
+    const readyToPlan = db.prepare("SELECT *, 'plan' as needed_action FROM projects WHERE lifecycle_state = 'deliberating' AND deliberation_count >= 2 AND (plan_json IS NULL OR plan_json = '') LIMIT 1").all();
+    const readyToBuild = db.prepare("SELECT *, 'build' as needed_action FROM projects WHERE lifecycle_state = 'deliberating' AND deliberation_count >= 2 AND plan_json IS NOT NULL AND plan_json != '' LIMIT 1").all();
+    const testing = db.prepare("SELECT *, 'test' as needed_action FROM projects WHERE lifecycle_state = 'testing' LIMIT 1").all();
     const unshared = db.prepare("SELECT *, 'share' as needed_action FROM projects WHERE lifecycle_state = 'active' AND last_shared_at IS NULL LIMIT 1").all();
     const withFeedback = db.prepare("SELECT *, 'evolve' as needed_action FROM projects WHERE lifecycle_state = 'active' AND feedback_summary != '' AND feedback_summary IS NOT NULL LIMIT 1").all();
-    return [...readyToBuild, ...seeds, ...unshared, ...withFeedback];
+    const unhealthy = db.prepare("SELECT *, 'check' as needed_action FROM projects WHERE service_status = 'unhealthy' LIMIT 1").all();
+    const seeds = db.prepare("SELECT *, 'deliberate' as needed_action FROM projects WHERE lifecycle_state = 'seed' LIMIT 1").all();
+    return [...planned, ...readyToPlan, ...readyToBuild, ...testing, ...unshared, ...withFeedback, ...unhealthy, ...seeds];
   },
 
   setProjectFeedback(name, summary) {
@@ -732,6 +761,53 @@ const memory = {
 
   markProjectShared(name) {
     db.prepare("UPDATE projects SET last_shared_at = datetime('now'), updated_at = datetime('now') WHERE name = ?").run(name);
+  },
+
+  // === BUILD LOGS ===
+
+  saveBuildLog(projectName, phase, success, output, error, durationMs, attempt = 1) {
+    db.prepare(
+      'INSERT INTO build_logs (project_name, phase, success, output, error, duration_ms, attempt) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(projectName, phase, success ? 1 : 0, (output || '').slice(0, 5000), (error || '').slice(0, 5000), durationMs || 0, attempt);
+  },
+
+  getBuildLogs(projectName, n = 20) {
+    return db.prepare('SELECT * FROM build_logs WHERE project_name = ? ORDER BY id DESC LIMIT ?').all(projectName, n).reverse();
+  },
+
+  getLastBuildError(projectName) {
+    return db.prepare('SELECT * FROM build_logs WHERE project_name = ? AND success = 0 ORDER BY id DESC LIMIT 1').get(projectName);
+  },
+
+  // === SERVICE MANAGEMENT ===
+
+  updateServiceStatus(name, status, port = null, pid = null) {
+    db.prepare("UPDATE projects SET service_status = ?, service_port = ?, service_pid = ?, updated_at = datetime('now') WHERE name = ?").run(status, port, pid, name);
+  },
+
+  getRunningServiceProjects() {
+    return db.prepare("SELECT * FROM projects WHERE service_status = 'running'").all();
+  },
+
+  // === API CALL TRACKING ===
+
+  incrementApiCalls(projectName) {
+    const today = new Date().toISOString().split('T')[0];
+    const proj = this.getProject(projectName);
+    if (!proj) return 0;
+    if (proj.api_calls_date !== today) {
+      db.prepare("UPDATE projects SET api_calls_today = 1, api_calls_date = ? WHERE name = ?").run(today, projectName);
+      return 1;
+    }
+    db.prepare("UPDATE projects SET api_calls_today = api_calls_today + 1 WHERE name = ?").run(projectName);
+    return (proj.api_calls_today || 0) + 1;
+  },
+
+  getApiCallsToday(projectName) {
+    const today = new Date().toISOString().split('T')[0];
+    const proj = this.getProject(projectName);
+    if (!proj || proj.api_calls_date !== today) return 0;
+    return proj.api_calls_today || 0;
   },
 
   // === GROWTH PHASE & DIRECTION CRYSTALLIZATION ===

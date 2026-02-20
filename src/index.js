@@ -7,7 +7,8 @@ import {
   sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity
 } from './nostr.js';
 import { startDashboard, broadcast } from './dashboard.js';
-import { isROKEEnabled, receiveProjectFeedback } from './hands.js';
+import { isROKEEnabled, receiveProjectFeedback, deployService, checkService } from './hands.js';
+import { getRunningServices, healthCheck as sandboxHealthCheck } from './sandbox.js';
 
 // Feed buffer for world sensing
 const feedBuffer = [];
@@ -182,6 +183,32 @@ async function handleHeartbeat() {
     }
   }
 
+  // Service health monitoring (every 5th heartbeat = ~5 min)
+  if (heartbeatNum % 5 === 0) {
+    const runningServices = getRunningServices();
+    for (const [name, _svc] of runningServices) {
+      try {
+        const healthy = await sandboxHealthCheck(name);
+        if (!healthy) {
+          console.warn(`[HEALTH] ⚠️ Servis "${name}" ni zdrav — restartiram...`);
+          broadcast('activity', { type: 'health', text: `⚠️ Servis "${name}" ni zdrav — restart` });
+          memory.updateProject(name, { service_status: 'unhealthy' });
+          // Auto-restart
+          const redeployResult = await deployService(name);
+          if (redeployResult.success) {
+            console.log(`[HEALTH] ✅ "${name}" restartiran na portu ${redeployResult.port}`);
+            memory.addObservation(`Servis "${name}" je bil nezdrav — uspešno restartiran`, 'system');
+          } else {
+            console.error(`[HEALTH] ❌ Restart "${name}" ni uspel: ${redeployResult.error}`);
+            memory.addObservation(`Servis "${name}" ni zdrav in restart ni uspel: ${redeployResult.error}`, 'system');
+          }
+        }
+      } catch (e) {
+        console.error(`[HEALTH] Error checking "${name}":`, e.message);
+      }
+    }
+  }
+
   // Lifecycle attention (every 15th heartbeat) — tends to projects that need attention
   if (isROKEEnabled() && heartbeatNum % 15 === 0) {
     const needsAttention = memory.getProjectsNeedingAttention();
@@ -195,8 +222,17 @@ async function handleHeartbeat() {
         case 'deliberate':
           reflectionContent = `Imam seme ideje: "${project.display_name}" — ${project.description}. Premisli o tem projektu. Kaj misliš o njem? Kako bi ga razvila?`;
           break;
+        case 'plan':
+          reflectionContent = `Projekt "${project.display_name}" ima ${project.deliberation_count} razmislekov in je dozrel za načrtovanje. Načrtuj ga (roke_action: "plan", roke_target: "${project.name}").`;
+          break;
         case 'build':
-          reflectionContent = `Projekt "${project.display_name}" ima ${project.deliberation_count} razmislekov. Čas je da ga zgradiš v enem koraku. Uporabi roke (roke_action: "build", roke_target: "${project.name}").`;
+          reflectionContent = `Projekt "${project.display_name}" je načrtovan in pripravljen za gradnjo. Zgradi ga — generiraj datoteke, namesti odvisnosti, testiraj in deployaj (roke_action: "build", roke_target: "${project.name}").`;
+          break;
+        case 'deploy':
+          reflectionContent = `Projekt "${project.display_name}" je aktiven ampak servis ne teče. Deployaj ga (roke_action: "deploy", roke_target: "${project.name}").`;
+          break;
+        case 'check':
+          reflectionContent = `Servis za projekt "${project.display_name}" je nezdrav. Preveri in restartaj (roke_action: "check", roke_target: "${project.name}").`;
           break;
         case 'share':
           reflectionContent = `Projekt "${project.display_name}" je zgrajen ampak ga še nisi delila z očetom. Deli ga (roke_action: "share", roke_target: "${project.name}").`;
