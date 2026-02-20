@@ -2,6 +2,7 @@ import { callLLMJSON } from './llm.js';
 import memory from './memory.js';
 import { broadcast } from './dashboard.js';
 import { publishMemoryArchive, publishMemorySnapshot } from './nostr.js';
+import { redefineEntityCore } from './triad.js';
 
 
 // ═══ DREAM CONSOLIDATION — prune weak, strengthen strong, create connections ═══
@@ -246,6 +247,9 @@ V sanjah ego ne more filtrirati. Kaj vidiš ko obramba pade?`;
         memory.addObservation(`KRISTALIZACIJA iz sanj: "${candidate.expression}"`, 'dream_crystallization');
         broadcast('crystallization', { crystal: candidate.expression, theme: candidate.theme, strength: candidate.total_strength, sources: candidate.sources });
         broadcast('activity', { type: 'crystallization', text: `✦ KRISTALIZACIJA iz sanj: "${candidate.expression}" (moč: ${candidate.total_strength})` });
+
+        // ═══ ENTITY CORE REDEFINITION TRIGGER ═══
+        await redefineEntityCore(`kristalizacija misli iz sanj: "${candidate.theme}"`);
       }
     }
   }

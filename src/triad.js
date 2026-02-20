@@ -32,7 +32,7 @@ function getEntityCore() {
 
 
 // ═══ ENTITY CORE REDEFINITION — triggered at crystallization moments ═══
-async function redefineEntityCore(triggerSource) {
+export async function redefineEntityCore(triggerSource) {
   const currentCore = getEntityCore();
   const crystalCore = memory.getCrystalCore();
   const process = memory.getProcessWords();

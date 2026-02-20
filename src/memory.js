@@ -568,20 +568,24 @@ const memory = {
 
   checkCrystallization(threshold = 5) {
     return db.prepare(`
-      SELECT theme, MAX(expression) as expression, SUM(strength) as total_strength,
-             COUNT(DISTINCT source_type) as source_diversity,
-             GROUP_CONCAT(DISTINCT source_type) as sources
-      FROM crystal_seeds
-      WHERE theme IS NOT NULL
-      GROUP BY theme
+      SELECT cs.theme,
+             (SELECT expression FROM crystal_seeds WHERE theme = cs.theme ORDER BY timestamp DESC LIMIT 1) as expression,
+             SUM(cs.strength) as total_strength,
+             COUNT(DISTINCT cs.source_type) as source_diversity,
+             GROUP_CONCAT(DISTINCT cs.source_type) as sources
+      FROM crystal_seeds cs
+      WHERE cs.theme IS NOT NULL
+      GROUP BY cs.theme
       HAVING total_strength >= ? AND source_diversity >= 2
     `).all(threshold);
   },
 
   crystallize(theme, expression, seedCount, sources) {
+    if (!theme || !seedCount) return null;
+    const crystal = expression || theme;
     const result = db.prepare(
       'INSERT INTO crystallized_core (crystal, formed_from_seeds, seed_sources) VALUES (?, ?, ?)'
-    ).run(expression, seedCount, sources);
+    ).run(crystal, seedCount, sources);
     db.prepare('DELETE FROM crystal_seeds WHERE theme = ?').run(theme);
     return result.lastInsertRowid;
   },
