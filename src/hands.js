@@ -159,6 +159,46 @@ function stripCodeFences(text) {
     .trim();
 }
 
+function generateMarkdownHtml(title, markdownContent) {
+  const escaped = markdownContent
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html = escaped
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>\n?)+/gs, '<ul>$&</ul>')
+    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\n\n/g, '</p><p>');
+  return `<!DOCTYPE html>
+<html lang="sl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #e0e0e0; background: #1a1a2e; }
+    h1, h2, h3 { color: #c0a0ff; }
+    h1 { border-bottom: 1px solid #333; padding-bottom: 8px; }
+    code { background: #2a2a3e; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+    pre { background: #2a2a3e; padding: 16px; border-radius: 8px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    ul { padding-left: 24px; }
+    li { margin: 4px 0; }
+    a { color: #8080ff; }
+    .meta { color: #888; font-size: 0.85em; margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+  <div class="meta">◈ Sožitje — notranji predlog</div>
+  <p>${html}</p>
+</body>
+</html>`;
+}
+
 function getProjectDir(projectName) {
   return path.join(CREATIONS_DIR, projectName);
 }
@@ -550,11 +590,13 @@ Format: Markdown. Vrni SAMO vsebino.`;
 
     const projectDir = getProjectDir(projectName);
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'predlog.md'), stripCodeFences(spec), 'utf8');
-    memory.updateProject(projectName, { file_count: 1, entry_file: 'predlog.md', project_type: 'static' });
+    const mdContent = stripCodeFences(spec);
+    fs.writeFileSync(path.join(projectDir, 'predlog.md'), mdContent, 'utf8');
+    fs.writeFileSync(path.join(projectDir, 'index.html'), generateMarkdownHtml(project.display_name || projectName, mdContent), 'utf8');
+    memory.updateProject(projectName, { file_count: 2, entry_file: 'index.html', project_type: 'static' });
     memory.advanceProjectState(projectName, 'active');
     memory.addCreationStep(projectName, 'plan', 'Notranji predlog generiran', triadId);
-    memory.saveBuildLog(projectName, 'plan', true, 'predlog.md generiran', '', Date.now() - startMs, 1);
+    memory.saveBuildLog(projectName, 'plan', true, 'predlog.md + index.html generiran', '', Date.now() - startMs, 1);
 
     const url = getProjectUrl(projectName);
     broadcast('project_built', { name: projectName, url });
@@ -1340,8 +1382,10 @@ Format: Markdown.`;
   if (spec) {
     const projectDir = getProjectDir(result.name);
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.writeFileSync(path.join(projectDir, 'predlog.md'), stripCodeFences(spec), 'utf8');
-    memory.updateProject(result.name, { file_count: 1, entry_file: 'predlog.md' });
+    const mdContent = stripCodeFences(spec);
+    fs.writeFileSync(path.join(projectDir, 'predlog.md'), mdContent, 'utf8');
+    fs.writeFileSync(path.join(projectDir, 'index.html'), generateMarkdownHtml(concept, mdContent), 'utf8');
+    memory.updateProject(result.name, { file_count: 2, entry_file: 'index.html' });
   }
 
   return result;

@@ -3761,6 +3761,29 @@ app.use('/creations', (req, res, next) => {
   next();
 }, express.static(CREATIONS_DIR, { index: ['index.html'], dotfiles: 'deny' }));
 
+// Fallback: serve predlog.md as HTML if index.html doesn't exist
+app.get('/creations/:projectName/', (req, res) => {
+  const projectDir = path.join(CREATIONS_DIR, req.params.projectName);
+  const predlogPath = path.join(projectDir, 'predlog.md');
+  if (fs.existsSync(predlogPath)) {
+    const md = fs.readFileSync(predlogPath, 'utf8');
+    const title = req.params.projectName.replace(/-/g, ' ');
+    const escaped = md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const html = escaped
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\n\n/g, '</p><p>');
+    res.send(`<!DOCTYPE html><html lang="sl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#1a1a2e}h1,h2,h3{color:#c0a0ff}h1{border-bottom:1px solid #333;padding-bottom:8px}code{background:#2a2a3e;padding:2px 6px;border-radius:3px}pre{background:#2a2a3e;padding:16px;border-radius:8px;overflow-x:auto}ul{padding-left:24px}a{color:#8080ff}.meta{color:#888;font-size:.85em;margin-bottom:24px}</style></head><body><div class="meta">◈ Sožitje — notranji predlog</div><p>${html}</p></body></html>`);
+  } else {
+    res.status(404).send('Creation not found');
+  }
+});
+
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html');
   res.send(DASHBOARD_HTML);
