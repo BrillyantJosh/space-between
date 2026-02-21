@@ -9,6 +9,7 @@ import {
 import { startDashboard, broadcast } from './dashboard.js';
 import { isROKEEnabled, receiveProjectFeedback, deployService, checkService, crystallizeProject } from './hands.js';
 import { getRunningServices, healthCheck as sandboxHealthCheck } from './sandbox.js';
+import { loadAllPlugins, runHeartbeatHooks, getPluginCount } from './plugins.js';
 
 // Feed buffer for world sensing
 const feedBuffer = [];
@@ -117,6 +118,15 @@ async function handleHeartbeat() {
       broadcast('activity', { type: 'decay', text: `\u{1F551} Razpad: ${decayResult.pruned} sinaps odstranjenih, ${decayResult.decayed} preostalih` });
     } catch (e) {
       console.error('[DECAY] Error:', e.message);
+    }
+  }
+
+  // ═══ PLUGIN HEARTBEAT HOOKS ═══
+  if (heartbeatNum % 10 === 0) {
+    try {
+      await runHeartbeatHooks(heartbeatNum);
+    } catch (e) {
+      console.error('[PLUGIN] Heartbeat hook error:', e.message);
     }
   }
 
@@ -573,6 +583,9 @@ async function main() {
     }
   }
 
+  // Load self-plugins
+  await loadAllPlugins();
+
   const { npub } = getIdentity();
   const entityName = memory.getEntityName();
   const growthPhase = memory.getGrowthPhase();
@@ -584,6 +597,7 @@ async function main() {
     console.log(`[BOOT] Oče (creator): ${config.creatorPubkey.slice(0, 16)}...`);
   }
   console.log(`[BOOT] ROKE: ${isROKEEnabled() ? 'AKTIVNE ✋ — Zavestno Ustvarjanje v4 (perspektive + kristalizacija)' : 'niso konfigurirane'}`);
+  console.log(`[BOOT] Plugini: ${getPluginCount()} aktivnih`);
   console.log(`[BOOT] Growth phase: ${growthPhase}`);
   if (directions.crystallized) {
     console.log(`[BOOT] Smeri: 1) ${directions.direction_1}, 2) ${directions.direction_2}, 3) ${directions.direction_3}`);

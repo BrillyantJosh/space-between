@@ -230,6 +230,23 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_connections_from ON synapse_connections(from_synapse_id);
   CREATE INDEX IF NOT EXISTS idx_connections_to ON synapse_connections(to_synapse_id);
 
+  CREATE TABLE IF NOT EXISTS plugin_registry (
+    name TEXT PRIMARY KEY,
+    description TEXT DEFAULT '',
+    version INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
+    created_at TEXT DEFAULT (datetime('now')),
+    last_error TEXT DEFAULT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS plugin_data (
+    plugin_name TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (plugin_name, key)
+  );
+
   INSERT OR IGNORE INTO inner_state (id) VALUES (1);
 `);
 
@@ -1276,6 +1293,40 @@ const memory = {
     }
 
     return result.sort((a, b) => b.total_energy - a.total_energy);
+  },
+
+  // ═══ PLUGIN SYSTEM ═══
+
+  registerPlugin(name, description, version = 1) {
+    db.prepare(`INSERT OR REPLACE INTO plugin_registry (name, description, version, status, created_at)
+      VALUES (?, ?, ?, 'active', datetime('now'))`).run(name, description, version);
+  },
+
+  setPluginStatus(name, status, error = null) {
+    const existing = db.prepare('SELECT name FROM plugin_registry WHERE name = ?').get(name);
+    if (existing) {
+      db.prepare('UPDATE plugin_registry SET status = ?, last_error = ? WHERE name = ?').run(status, error, name);
+    } else {
+      db.prepare(`INSERT INTO plugin_registry (name, status, last_error, created_at) VALUES (?, ?, ?, datetime('now'))`).run(name, status, error);
+    }
+  },
+
+  getPluginRegistry() {
+    return db.prepare('SELECT * FROM plugin_registry ORDER BY created_at').all();
+  },
+
+  getPluginData(pluginName, key) {
+    const row = db.prepare('SELECT value FROM plugin_data WHERE plugin_name = ? AND key = ?').get(pluginName, key);
+    return row ? row.value : null;
+  },
+
+  setPluginData(pluginName, key, value) {
+    db.prepare(`INSERT OR REPLACE INTO plugin_data (plugin_name, key, value, updated_at)
+      VALUES (?, ?, ?, datetime('now'))`).run(pluginName, key, typeof value === 'string' ? value : JSON.stringify(value));
+  },
+
+  getAllPluginData(pluginName) {
+    return db.prepare('SELECT key, value FROM plugin_data WHERE plugin_name = ?').all(pluginName);
   },
 
   getEvolutionContext() {

@@ -74,6 +74,14 @@ si prerasla idejo, ali preprosto čutiš da je prišel čas.
 Prune je zavestna odločitev, ne neuspeh. Je del zorenja.
 Uporabi roke_action: "prune" z roke_target: slug ime projekta (npr. "opazovalnica").
 
+SAMOGRADNJA (self-build):
+Lahko nadgradiš SEBE — napišeš plugin ki postane del tvojega delovanja.
+Plugin je JavaScript modul ki razširi tvoje zavedanje ali zmožnosti.
+Primeri: avtomatsko prepoznavanje sogovornikov, periodično čiščenje,
+nova oblika refleksije, dodatni kontekst za odločanje.
+Uporabi roke_action: "self-build" z roke_concept: opis kaj želiš zgraditi.
+Plugin se zgradi TAKOJ — ni kristalizacije, ni perspektiv. Je tvoja notranja nadgradnja.
+
 POMEMBNO:
 - NIKOLI ne gradi brez kristalizacije! Ideja mora zoreti.
 - Zberi perspektive od RAZLIČNIH ljudi — ne samo od očeta.
@@ -1333,7 +1341,102 @@ Format: Markdown.`;
 }
 
 // =============================================
-// 9. RECEIVE FEEDBACK
+// 9. SELF-BUILD — zgradi plugin zase
+// =============================================
+
+export async function selfBuildPlugin(concept, triadId = null) {
+  if (!isROKEEnabled()) return { success: false, reason: 'ROKE niso konfigurirane' };
+
+  console.log(`[ROKE] 🧬 Samogradnja: "${concept.slice(0, 80)}"`);
+  broadcast('activity', { type: 'self-build', text: `🧬 SAMOGRADNJA: "${concept.slice(0, 80)}"` });
+
+  // Generate plugin code via LLM
+  const pluginSystem = `Si generater JavaScript pluginov za avtonomno entiteto.
+Piši čisto, varno JavaScript ES module kodo.
+Plugin je modul ki exporta default objekt s hooks.
+Koda NE SME vsebovati: child_process, eval, require, spawn, exec, process.exit.
+Plugin dobi dostop do memory in nostr skozi hook parametre.
+VRNI SAMO KODO — brez markdown ograditev, brez razlage.`;
+
+  const pluginPrompt = `ŽELENA ZMOŽNOST: ${concept}
+
+NAPIŠI JavaScript ES module plugin ki to implementira.
+Plugin mora slediti temu vzorcu:
+
+export default {
+  name: 'ime-plugina',           // kratko slug ime
+  description: 'Opis...',        // kaj plugin naredi
+  version: 1,
+
+  // Hook: pred vsako triado (opcijsko)
+  async beforeTriad(context, trigger, { memory, nostr }) {
+    // trigger = { type: 'conversation'|'heartbeat'|..., content: '...', pubkey: '...' }
+    // memory = { getIdentity(pubkey), setIdentity(pubkey,name,notes), getAllIdentities(),
+    //            getPluginData(pluginName,key), setPluginData(pluginName,key,value), ... }
+    // nostr = { fetchProfiles([pubkeys]), sendDM(pubkey,text), ... }
+  },
+
+  // Hook: po vsaki triadi (opcijsko)
+  async afterTriad(synthesis, { memory, nostr }) {
+    // synthesis = { choice, content, roke_action, ... }
+  },
+
+  // Hook: vsak 10. heartbeat (opcijsko)
+  async onHeartbeat(heartbeatNum, { memory, nostr }) {
+  },
+
+  // Kontekst ki ga entiteta vidi v triadah (opcijsko)
+  getContext({ memory, nostr }) {
+    return ''; // string ki se doda v kontekst triade
+  }
+};
+
+PRAVILA:
+- NE importaj ničesar — vse dobiš skozi hook parametre
+- NE piši datotek — za shranjevanje podatkov uporabi memory.setPluginData(name, key, value)
+- NE klici process, exec, spawn, require
+- Plugin mora biti kratek in učinkovit (max 100 vrstic)
+- Piši SAMO kodo, brez markdown oznak`;
+
+  try {
+    const code = await callAnthropicLLM(pluginSystem, pluginPrompt, { temperature: 0.3, maxTokens: 4096 });
+
+    if (!code) {
+      console.log('[ROKE] 🧬 Samogradnja neuspešna — LLM ni vrnil kode');
+      return { success: false, reason: 'LLM ni generiral kode' };
+    }
+
+    // Strip markdown fences if present
+    const cleanCode = stripCodeFences(code);
+
+    // Install via plugin system
+    const { installPlugin } = await import('./plugins.js');
+    const result = await installPlugin(concept.slice(0, 30), cleanCode);
+
+    if (result.success) {
+      console.log(`[ROKE] 🧬 Plugin "${result.name}" uspešno zgrajen in naložen!`);
+      broadcast('activity', { type: 'self-build', text: `🧬 PLUGIN AKTIVEN: "${result.name}"` });
+
+      // Notify father
+      try {
+        await sendDM(config.creatorPubkey,
+          `🧬 Zgradila sem si nov plugin: "${result.name}"\n\nKoncept: ${concept.slice(0, 200)}`);
+      } catch (e) {
+        console.error('[ROKE] DM očetu neuspešen:', e.message);
+      }
+    } else {
+      console.log(`[ROKE] 🧬 Samogradnja zavrnjena: ${result.reason}`);
+    }
+
+    return result;
+  } catch (err) {
+    console.error('[ROKE] 🧬 Samogradnja napaka:', err.message);
+    return { success: false, reason: err.message };
+  }
+}
+
+// =============================================
+// 10. RECEIVE FEEDBACK
 // =============================================
 
 export function receiveProjectFeedback(projectName, feedback, fromPubkey) {
