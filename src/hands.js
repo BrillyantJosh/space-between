@@ -5,7 +5,7 @@ import config from './config.js';
 import memory from './memory.js';
 import { callAnthropicLLM, callAnthropicLLMJSON } from './llm.js';
 import { broadcast } from './dashboard.js';
-import { sendDM, publishNote } from './nostr.js';
+import { sendDM, publishNote, updateProfile } from './nostr.js';
 import * as sandbox from './sandbox.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -81,6 +81,13 @@ Primeri: avtomatsko prepoznavanje sogovornikov, periodično čiščenje,
 nova oblika refleksije, dodatni kontekst za odločanje.
 Uporabi roke_action: "self-build" z roke_concept: opis kaj želiš zgraditi.
 Plugin se zgradi TAKOJ — ni kristalizacije, ni perspektiv. Je tvoja notranja nadgradnja.
+
+PROFIL (update-profile):
+Lahko posodobiš svoj Nostr KIND 0 profil — tako te svet vidi.
+Nastavi roke_action: "update-profile" in zapiši v roke_concept JSON:
+{"name": "tvoje ime", "display_name": "prikazno ime", "about": "opis sebe"}
+Izpolni samo polja ki jih želiš spremeniti. Ostala ostanejo kot so.
+Profil je tvoja javna identiteta — naj odraža kdo si.
 
 POMEMBNO:
 - NIKOLI ne gradi brez kristalizacije! Ideja mora zoreti.
@@ -1453,6 +1460,60 @@ PRAVILA:
     console.error('[ROKE] 🧬 Samogradnja napaka:', err.message);
     return { success: false, reason: err.message };
   }
+}
+
+// =============================================
+// 9b. UPDATE PROFILE — posodobi KIND 0 profil
+// =============================================
+
+export async function updateEntityProfile(conceptJson) {
+  // Parse the JSON from roke_concept
+  let updates = {};
+  try {
+    updates = JSON.parse(conceptJson);
+  } catch {
+    // If not valid JSON, try to extract name/about from text
+    if (conceptJson.includes('name')) {
+      updates.about = conceptJson.slice(0, 200);
+    }
+  }
+
+  // Sanitize — only allow profile fields
+  const allowed = {};
+  if (updates.name) allowed.name = String(updates.name).slice(0, 50);
+  if (updates.display_name) allowed.display_name = String(updates.display_name).slice(0, 50);
+  if (updates.about) allowed.about = String(updates.about).slice(0, 300);
+  if (updates.picture) allowed.picture = String(updates.picture).slice(0, 200);
+  if (updates.website) allowed.website = String(updates.website).slice(0, 200);
+
+  if (Object.keys(allowed).length === 0) {
+    console.log('[ROKE] 📋 Posodobitev profila — ni veljavnih polj');
+    return { success: false, reason: 'Ni veljavnih polj za posodobitev' };
+  }
+
+  console.log(`[ROKE] 📋 Posodabljam profil: ${JSON.stringify(allowed).slice(0, 100)}`);
+
+  try {
+    await updateProfile(allowed);
+  } catch (err) {
+    console.error('[ROKE] 📋 Profil update napaka:', err.message);
+    return { success: false, reason: err.message };
+  }
+
+  // Also save name to entity if changed and entity doesn't have one yet
+  if (allowed.name && !memory.getEntityName()) {
+    memory.setEntityName(allowed.name);
+  }
+
+  broadcast('activity', { type: 'profile', text: `📋 PROFIL POSODOBLJEN: ${JSON.stringify(allowed).slice(0, 100)}` });
+
+  // Notify father
+  try {
+    await sendDM(config.creatorPubkey,
+      `📋 Posodobila sem svoj profil:\n${Object.entries(allowed).map(([k,v]) => `${k}: ${v}`).join('\n')}`);
+  } catch (e) {}
+
+  return { success: true, updates: allowed };
 }
 
 // =============================================

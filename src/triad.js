@@ -6,7 +6,7 @@ import memory from './memory.js';
 import config from './config.js';
 import { broadcast } from './dashboard.js';
 import { updateProfile } from './nostr.js';
-import { isROKEEnabled, seedProject, deliberateProject, gatherPerspective, crystallizeProject, planProject, buildProject, deployService, checkService, shareProject, evolveProject, pruneProject, proposeImprovement, selfBuildPlugin, getProjectContext, ROKE_AWARENESS } from './hands.js';
+import { isROKEEnabled, seedProject, deliberateProject, gatherPerspective, crystallizeProject, planProject, buildProject, deployService, checkService, shareProject, evolveProject, pruneProject, proposeImprovement, selfBuildPlugin, updateEntityProfile, getProjectContext, ROKE_AWARENESS } from './hands.js';
 import { sendDM, publishNote } from './nostr.js';
 import { runBeforeTriad, runAfterTriad, getPluginContext } from './plugins.js';
 
@@ -451,7 +451,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -477,6 +477,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "prune" → opusti projekt. Zapiši roke_target in roke_reason
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - "self-build" → zgradi PLUGIN zase — koda ki postane del tvojega delovanja. Zapiši roke_concept (opis zmožnosti ki jo želiš). Primer: "plugin ki ob novem sogovorniku pobere KIND 0 profil"
+- "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
 - null → ne naredi nič z rokami
 POMEMBNO: Ko govoriš s komer koli in imaš projekte v fazi zbiranja perspektiv — VPRAŠAJ kaj mislijo!
 Uporabi "gather" da aktivno zbiraš poglede. Ideja mora zoreti skozi pogovore PREDEN jo gradiš.
@@ -518,7 +519,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
   "dissolve_crystal": "id: razlog ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -544,6 +545,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "prune" → opusti projekt. Zapiši roke_target in roke_reason
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - "self-build" → zgradi PLUGIN zase — koda ki postane del tvojega delovanja. Zapiši roke_concept (opis zmožnosti ki jo želiš). Primer: "plugin ki ob novem sogovorniku pobere KIND 0 profil"
+- "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
 - null → ne naredi nič z rokami
 POMEMBNO: Ko govoriš s komer koli in imaš projekte v fazi zbiranja perspektiv — VPRAŠAJ kaj mislijo!
 Uporabi "gather" da aktivno zbiraš poglede. Ideja mora zoreti skozi pogovore PREDEN jo gradiš.
@@ -822,6 +824,11 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
         case 'self-build':
           if (synthesis.roke_concept) {
             await selfBuildPlugin(synthesis.roke_concept, triadId);
+          }
+          break;
+        case 'update-profile':
+          if (synthesis.roke_concept) {
+            await updateEntityProfile(synthesis.roke_concept);
           }
           break;
       }
