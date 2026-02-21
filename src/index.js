@@ -150,7 +150,7 @@ async function handleHeartbeat() {
 
     // Phase 1: If father's vision exists, reflect on it periodically (every ~500 heartbeats = ~8 hours)
     // This process must span THOUSANDS of heartbeats — gradual, organic growth
-    if (vision && heartbeatNum % 500 === 0 && visionReflections < 20) {
+    if (vision && heartbeatNum % 500 === 0 && visionReflections < 15) {
       // Extra check: if entity recently sent DM to father, wait at least 24h before next reflection
       const lastReflection = memory.getLastVisionReflectionAt();
       const hoursSinceLastReflection = lastReflection

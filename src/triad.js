@@ -1060,7 +1060,7 @@ export async function crystallizeDirections() {
   const process = memory.getProcessWords();
   const seeds = memory.getCrystalSeeds();
   const recentDreams = memory.getRecentDreams(10);
-  const projects = memory.getProjects();
+  const projects = memory.getAllProjects();
   const interactions = memory.getRecentInteractions ? memory.getRecentInteractions(20) : [];
   const entityName = memory.getEntityName();
   const fluidSurface = memory.getFluidSurface();
