@@ -146,8 +146,24 @@ export async function installPlugin(name, code) {
     return { success: false, reason: validation.reason };
   }
 
-  // Save to file
+  // Check for duplicates — by file name
   const safeName = name.replace(/[^a-z0-9-]/g, '-').toLowerCase();
+  if (activePlugins.has(safeName)) {
+    console.log(`[PLUGIN] ⚠️ Plugin "${safeName}" že obstaja — ne prepisujem`);
+    return { success: false, reason: `Plugin "${safeName}" že obstaja` };
+  }
+
+  // Check for duplicates — by plugin name field inside code
+  const nameMatch = code.match(/name:\s*['"]([^'"]+)['"]/);
+  if (nameMatch) {
+    const pluginName = nameMatch[1];
+    if (activePlugins.has(pluginName)) {
+      console.log(`[PLUGIN] ⚠️ Plugin "${pluginName}" že aktiven — ne prepisujem`);
+      return { success: false, reason: `Plugin "${pluginName}" že obstaja` };
+    }
+  }
+
+  // Save to file
   const filePath = path.join(PLUGINS_DIR, `${safeName}.js`);
   fs.writeFileSync(filePath, code, 'utf8');
 

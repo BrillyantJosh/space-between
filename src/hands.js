@@ -1347,6 +1347,26 @@ Format: Markdown.`;
 export async function selfBuildPlugin(concept, triadId = null) {
   if (!isROKEEnabled()) return { success: false, reason: 'ROKE niso konfigurirane' };
 
+  // Check if a similar plugin already exists
+  const { getActivePlugins } = await import('./plugins.js');
+  const active = getActivePlugins();
+  if (active.length > 0) {
+    const conceptLower = concept.toLowerCase();
+    for (const p of active) {
+      const nameLower = p.name.toLowerCase();
+      const descLower = (p.description || '').toLowerCase();
+      // Match by plugin name appearing in concept, or key concept words appearing in description
+      const conceptWords = conceptLower.split(/\s+/).filter(w => w.length > 4);
+      const nameInConcept = conceptLower.includes(nameLower);
+      const wordsInDesc = conceptWords.some(w => descLower.includes(w));
+      if (nameInConcept || wordsInDesc) {
+        console.log(`[ROKE] 🧬 Podoben plugin "${p.name}" že obstaja — preskakujem`);
+        broadcast('activity', { type: 'self-build', text: `🧬 Plugin "${p.name}" že obstaja` });
+        return { success: false, reason: `Podoben plugin "${p.name}" že obstaja` };
+      }
+    }
+  }
+
   console.log(`[ROKE] 🧬 Samogradnja: "${concept.slice(0, 80)}"`);
   broadcast('activity', { type: 'self-build', text: `🧬 SAMOGRADNJA: "${concept.slice(0, 80)}"` });
 
