@@ -695,6 +695,21 @@ const memory = {
     return db.prepare('SELECT * FROM projects WHERE name = ?').get(name) || null;
   },
 
+  // Resolve project name: LLM sometimes returns display_name instead of slug
+  resolveProjectName(input) {
+    if (!input) return null;
+    // Najprej poskusi po slug name (eksaktno)
+    const byName = db.prepare('SELECT name FROM projects WHERE name = ?').get(input);
+    if (byName) return byName.name;
+    // Potem po display_name (eksaktno)
+    const byDisplay = db.prepare('SELECT name FROM projects WHERE display_name = ?').get(input);
+    if (byDisplay) return byDisplay.name;
+    // Potem po display_name (LIKE — za okrnjene name)
+    const byLike = db.prepare("SELECT name FROM projects WHERE display_name LIKE ? AND status != 'destroyed' LIMIT 1").get(input.slice(0, 30) + '%');
+    if (byLike) return byLike.name;
+    return null;
+  },
+
   getActiveProjects() {
     return db.prepare("SELECT * FROM projects WHERE status = 'active' ORDER BY updated_at DESC").all();
   },

@@ -695,7 +695,20 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
   // ═══ POST-TRIAD: ROKE LIFECYCLE ═══
   if (isROKEEnabled() && synthesis.roke_action && synthesis.roke_action !== 'null' && synthesis.roke_action !== null) {
     const rokeAction = synthesis.roke_action;
-    console.log(`  🤲 ROKE: ${rokeAction} ${synthesis.roke_target ? `→ "${synthesis.roke_target}"` : synthesis.roke_concept ? `→ "${(synthesis.roke_concept || '').slice(0, 60)}"` : ''}`);
+
+    // Resolve roke_target: LLM pogosto vrne display_name namesto slug
+    let roke_target = synthesis.roke_target;
+    if (roke_target && roke_target !== 'null') {
+      const resolved = memory.resolveProjectName(roke_target);
+      if (resolved && resolved !== roke_target) {
+        console.log(`  🤲 ROKE target resolved: "${roke_target.slice(0, 40)}" → "${resolved}"`);
+        roke_target = resolved;
+      } else if (!resolved) {
+        console.log(`  🤲 ROKE target not found: "${roke_target.slice(0, 60)}"`);
+      }
+    }
+
+    console.log(`  🤲 ROKE: ${rokeAction} ${roke_target ? `→ "${roke_target}"` : synthesis.roke_concept ? `→ "${(synthesis.roke_concept || '').slice(0, 60)}"` : ''}`);
 
     try {
       switch (rokeAction) {
@@ -705,19 +718,19 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
           }
           break;
         case 'deliberate':
-          if (synthesis.roke_target) {
-            await deliberateProject(synthesis.roke_target, synthesis.roke_thought || '', triadId);
+          if (roke_target) {
+            await deliberateProject(roke_target, synthesis.roke_thought || '', triadId);
           }
           break;
         case 'gather':
-          if (synthesis.roke_target) {
+          if (roke_target) {
             let gatherPubkey = synthesis.roke_gather_pubkey;
             // If no specific pubkey provided, try father first, then known identities
             if (!gatherPubkey || gatherPubkey === 'null') {
               gatherPubkey = config.creatorPubkey;
               // If father already gave perspective, pick someone else
               if (gatherPubkey) {
-                const perspectives = memory.getProjectPerspectives(synthesis.roke_target);
+                const perspectives = memory.getProjectPerspectives(roke_target);
                 const fatherAlreadyGave = perspectives.some(p => p.pubkey === gatherPubkey && p.status === 'received');
                 if (fatherAlreadyGave) {
                   const identities = memory.getAllIdentities().filter(i =>
@@ -731,63 +744,63 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
               }
             }
             if (gatherPubkey) {
-              await gatherPerspective(synthesis.roke_target, gatherPubkey, synthesis.roke_question || null, triadId);
+              await gatherPerspective(roke_target, gatherPubkey, synthesis.roke_question || null, triadId);
             }
           }
           break;
         case 'crystallize':
-          if (synthesis.roke_target) {
-            if (memory.isProjectReadyForCrystallization(synthesis.roke_target, config.creatorPubkey)) {
-              await crystallizeProject(synthesis.roke_target, triadId);
+          if (roke_target) {
+            if (memory.isProjectReadyForCrystallization(roke_target, config.creatorPubkey)) {
+              await crystallizeProject(roke_target, triadId);
             }
           }
           break;
         case 'plan':
-          if (synthesis.roke_target) {
-            const projPlan = memory.getProject(synthesis.roke_target);
+          if (roke_target) {
+            const projPlan = memory.getProject(roke_target);
             if (projPlan && ['crystallized'].includes(projPlan.lifecycle_state)) {
-              await planProject(synthesis.roke_target, triadId);
+              await planProject(roke_target, triadId);
             }
           }
           break;
         case 'build':
-          if (synthesis.roke_target) {
-            const projBuild = memory.getProject(synthesis.roke_target);
+          if (roke_target) {
+            const projBuild = memory.getProject(roke_target);
             if (projBuild && ['crystallized', 'planned'].includes(projBuild.lifecycle_state)) {
-              await buildProject(synthesis.roke_target, triadId);
+              await buildProject(roke_target, triadId);
             }
           }
           break;
         case 'deploy':
-          if (synthesis.roke_target) {
-            const projDeploy = memory.getProject(synthesis.roke_target);
+          if (roke_target) {
+            const projDeploy = memory.getProject(roke_target);
             if (projDeploy && projDeploy.lifecycle_state === 'active') {
-              await deployService(synthesis.roke_target);
+              await deployService(roke_target);
             }
           }
           break;
         case 'check':
-          if (synthesis.roke_target) {
-            const checkResult = await checkService(synthesis.roke_target);
+          if (roke_target) {
+            const checkResult = await checkService(roke_target);
             if (checkResult && !checkResult.healthy && checkResult.running) {
-              console.log(`  🩺 Servis "${synthesis.roke_target}" ni zdrav — restartiram...`);
-              await deployService(synthesis.roke_target);
+              console.log(`  🩺 Servis "${roke_target}" ni zdrav — restartiram...`);
+              await deployService(roke_target);
             }
           }
           break;
         case 'share':
-          if (synthesis.roke_target) {
-            await shareProject(synthesis.roke_target);
+          if (roke_target) {
+            await shareProject(roke_target);
           }
           break;
         case 'evolve':
-          if (synthesis.roke_target) {
-            await evolveProject(synthesis.roke_target, synthesis.roke_thought || '', triadId);
+          if (roke_target) {
+            await evolveProject(roke_target, synthesis.roke_thought || '', triadId);
           }
           break;
         case 'prune':
-          if (synthesis.roke_target) {
-            await pruneProject(synthesis.roke_target, synthesis.roke_reason || '');
+          if (roke_target) {
+            await pruneProject(roke_target, synthesis.roke_reason || '');
           }
           break;
         case 'propose':
