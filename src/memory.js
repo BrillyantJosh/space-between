@@ -937,6 +937,19 @@ const memory = {
       "SELECT COUNT(DISTINCT pubkey) as c FROM project_perspectives WHERE project_name = ? AND pubkey != 'self' AND status = 'received'"
     ).get(projectName).c;
     db.prepare("UPDATE projects SET perspectives_count = ?, updated_at = datetime('now') WHERE name = ?").run(count, projectName);
+
+    // ROKE Zavedanje: posodobi gather sinapso (waiting → received)
+    const gatherSynapse = this.hasActiveROKESynapse('gather', projectName, pubkey);
+    if (gatherSynapse) {
+      this.fireSynapse(gatherSynapse.id);
+      this.spreadActivation(gatherSynapse.id, 40);
+      try {
+        const tags = JSON.parse(gatherSynapse.tags || '[]');
+        const updatedTags = tags.map(t => t === 'outcome:waiting' ? 'outcome:received' : t);
+        db.prepare("UPDATE synapses SET tags = ? WHERE id = ?").run(JSON.stringify(updatedTags), gatherSynapse.id);
+      } catch (_) {}
+    }
+
     return count;
   },
 
@@ -1078,6 +1091,27 @@ const memory = {
 
   getActiveSynapses(minEnergy = 20) {
     return db.prepare('SELECT * FROM synapses WHERE energy >= ? ORDER BY last_fired_at DESC').all(minEnergy);
+  },
+
+  // === ROKE ZAVEDANJE — sinaptični spomin dejanj ===
+
+  getROKESynapses(limit = 8) {
+    return db.prepare(
+      "SELECT * FROM synapses WHERE source_type = 'roke' AND energy >= 10 ORDER BY last_fired_at DESC LIMIT ?"
+    ).all(limit);
+  },
+
+  getROKESynapsesForProject(projectName, limit = 3) {
+    return db.prepare(
+      "SELECT * FROM synapses WHERE source_type = 'roke' AND tags LIKE ? AND energy >= 10 ORDER BY last_fired_at DESC LIMIT ?"
+    ).all(`%project:${projectName}%`, limit);
+  },
+
+  hasActiveROKESynapse(action, projectName, pubkey = null) {
+    let q = "SELECT * FROM synapses WHERE source_type = 'roke' AND tags LIKE ? AND tags LIKE ? AND energy >= 30";
+    const p = [`%roke:${action}%`, `%project:${projectName}%`];
+    if (pubkey) { q += " AND tags LIKE ?"; p.push(`%person:${pubkey}%`); }
+    return db.prepare(q + " ORDER BY last_fired_at DESC LIMIT 1").get(...p) || null;
   },
 
   getSynapsesByPattern(searchTerm) {

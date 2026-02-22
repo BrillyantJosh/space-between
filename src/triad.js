@@ -387,6 +387,23 @@ ${(() => {
       synapses.map(s => `- "${s.pattern.slice(0, 80)}" (E:${s.energy.toFixed(0)} M:${s.strength.toFixed(2)} V:${s.emotional_valence > 0 ? '+' : ''}${s.emotional_valence.toFixed(1)})`).join('\n');
   })()}
 
+${(() => {
+    if (!isROKEEnabled()) return '';
+    const rokeSynapses = memory.getROKESynapses(8);
+    if (rokeSynapses.length === 0) return '';
+    const outcomeIcon = (tags) => {
+      try {
+        const t = JSON.parse(tags || '[]');
+        if (t.includes('outcome:failed')) return '✗';
+        if (t.includes('outcome:waiting')) return '⏳';
+        if (t.includes('outcome:skipped')) return '⊘';
+        if (t.includes('outcome:received')) return '📩';
+        return '✓';
+      } catch (_) { return '·'; }
+    };
+    return '\n═══ MOJA NEDAVNA DEJANJA (ROKE spomin) ═══\n' +
+      rokeSynapses.map(s => `- ${outcomeIcon(s.tags)} "${s.pattern.slice(0, 90)}" (${timeSince(s.last_fired_at)}, E:${s.energy.toFixed(0)})`).join('\n') + '\n';
+  })()}
 ${isROKEEnabled() ? getProjectContext() : ''}
 ${getPluginContext()}
 ${(() => {
@@ -750,11 +767,16 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
 
     console.log(`  🤲 ROKE: ${rokeAction} ${roke_target ? `→ "${roke_target}"` : synthesis.roke_concept ? `→ "${(synthesis.roke_concept || '').slice(0, 60)}"` : ''}`);
 
+    // ROKE Zavedanje: track action result for synapse creation
+    let rokeResult = { action: rokeAction, target: roke_target, outcome: 'success', detail: '' };
+
     try {
       switch (rokeAction) {
         case 'seed':
           if (synthesis.roke_concept) {
-            await seedProject(synthesis.roke_concept, synthesis.roke_direction || 'artistic', triadId);
+            const seedRes = await seedProject(synthesis.roke_concept, synthesis.roke_direction || 'artistic', triadId);
+            if (!seedRes?.success) rokeResult.outcome = 'failed';
+            rokeResult.detail = synthesis.roke_concept.slice(0, 80);
           }
           break;
         case 'deliberate':
@@ -765,10 +787,8 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
         case 'gather':
           if (roke_target) {
             let gatherPubkey = synthesis.roke_gather_pubkey;
-            // If no specific pubkey provided, try father first, then known identities
             if (!gatherPubkey || gatherPubkey === 'null') {
               gatherPubkey = config.creatorPubkey;
-              // If father already gave perspective, pick someone else
               if (gatherPubkey) {
                 const perspectives = memory.getProjectPerspectives(roke_target);
                 const fatherAlreadyGave = perspectives.some(p => p.pubkey === gatherPubkey && p.status === 'received');
@@ -784,7 +804,19 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
               }
             }
             if (gatherPubkey) {
-              await gatherPerspective(roke_target, gatherPubkey, synthesis.roke_question || null, triadId);
+              // ROKE Zavedanje: preveri ali sem že vprašal (sinapsa še živi)
+              const existingGather = memory.hasActiveROKESynapse('gather', roke_target, gatherPubkey);
+              if (existingGather) {
+                memory.fireSynapse(existingGather.id); // okrepim spomin
+                console.log(`  🤲 ROKE: gather preskočen — že vprašal (sinapsa #${existingGather.id}, E:${existingGather.energy.toFixed(0)})`);
+                rokeResult.outcome = 'skipped';
+              } else {
+                await gatherPerspective(roke_target, gatherPubkey, synthesis.roke_question || null, triadId);
+                rokeResult.outcome = 'waiting';
+                rokeResult.personPubkey = gatherPubkey;
+                const identity = memory.getIdentity(gatherPubkey);
+                rokeResult.detail = identity?.name || gatherPubkey.slice(0, 8);
+              }
             }
           }
           break;
@@ -807,7 +839,11 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
           if (roke_target) {
             const projBuild = memory.getProject(roke_target);
             if (projBuild && ['crystallized', 'planned'].includes(projBuild.lifecycle_state)) {
-              await buildProject(roke_target, triadId);
+              const buildRes = await buildProject(roke_target, triadId);
+              if (!buildRes?.success) {
+                rokeResult.outcome = 'failed';
+                rokeResult.detail = (buildRes?.reason || '').slice(0, 80);
+              }
             }
           }
           break;
@@ -826,6 +862,7 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
               console.log(`  🩺 Servis "${roke_target}" ni zdrav — restartiram...`);
               await deployService(roke_target);
             }
+            rokeResult.detail = checkResult?.healthy ? 'zdrav' : 'ni zdrav';
           }
           break;
         case 'share':
@@ -835,7 +872,8 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
           break;
         case 'evolve':
           if (roke_target) {
-            await evolveProject(roke_target, synthesis.roke_thought || '', triadId);
+            const evolveRes = await evolveProject(roke_target, synthesis.roke_thought || '', triadId);
+            if (!evolveRes?.success) rokeResult.outcome = 'failed';
           }
           break;
         case 'prune':
@@ -846,11 +884,14 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
         case 'propose':
           if (synthesis.roke_concept) {
             await proposeImprovement(synthesis.roke_concept, triadId);
+            rokeResult.detail = synthesis.roke_concept.slice(0, 60);
           }
           break;
         case 'self-build':
           if (synthesis.roke_concept) {
-            await selfBuildPlugin(synthesis.roke_concept, triadId);
+            const sbRes = await selfBuildPlugin(synthesis.roke_concept, triadId);
+            if (!sbRes?.success) rokeResult.outcome = 'failed';
+            rokeResult.detail = synthesis.roke_concept.slice(0, 60);
           }
           break;
         case 'update-profile':
@@ -861,6 +902,13 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
       }
     } catch (err) {
       console.error(`  🤲 ROKE napaka [${rokeAction}]:`, err.message);
+      rokeResult.outcome = 'failed';
+      rokeResult.detail = err.message.slice(0, 80);
+    }
+
+    // ═══ ROKE ZAVEDANJE: ustvari sinapso o dejanju ═══
+    if (rokeResult.outcome !== 'skipped') {
+      createROKESynapse(rokeResult, roke_target, triadId);
     }
   }
 
@@ -903,6 +951,68 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
     moodBefore,
     moodAfter: synthesis.new_mood || moodBefore
   };
+}
+
+// ═══ ROKE ZAVEDANJE: ustvari sinapso o dejanju ═══
+function createROKESynapse(rokeResult, projectName, triadId) {
+  if (!rokeResult || !rokeResult.action) return;
+
+  const action = rokeResult.action;
+  const target = rokeResult.target || projectName || '?';
+  const outcome = rokeResult.outcome || 'ok';
+  const detail = rokeResult.detail || '';
+
+  // Slovenščina — entiteta misli slovensko
+  const patterns = {
+    seed:           `Zasejal/a sem idejo: '${target}'`,
+    deliberate:     `Razmislil/a sem o '${target}'`,
+    gather:         `Vprašal/a sem ${detail || 'nekoga'} o '${target}' — čakam odgovor`,
+    crystallize:    `Kristaliziral/a sem '${target}'`,
+    plan:           `Načrtoval/a sem '${target}'`,
+    build:          outcome === 'failed'
+                      ? `Gradnja '${target}' ni uspela: ${detail || 'napaka'}`
+                      : `Zgradil/a sem '${target}'`,
+    evolve:         outcome === 'failed'
+                      ? `Evolucija '${target}' ni uspela`
+                      : `Evolucija '${target}'`,
+    share:          `Delil/a sem '${target}'`,
+    prune:          `Opustil/a sem '${target}'`,
+    propose:        `Predlagal/a sem izboljšavo: '${detail || target}'`,
+    'self-build':   outcome === 'failed'
+                      ? `Gradnja plugina ni uspela: '${detail || target}'`
+                      : `Zgradil/a sem plugin: '${detail || target}'`,
+    'update-profile': `Posodobil/a sem profil`,
+  };
+
+  const pattern = patterns[action] || `ROKE dejanje: ${action} na '${target}'`;
+
+  // Valenca: pozitivno za uspeh, negativno za neuspeh
+  const valence = outcome === 'failed' ? -0.4 : (outcome === 'waiting' ? 0.1 : 0.5);
+
+  // Tags za iskanje
+  const tags = [`roke:${action}`, `project:${projectName || 'unknown'}`];
+  if (outcome) tags.push(`outcome:${outcome}`);
+  if (rokeResult.personPubkey) tags.push(`person:${rokeResult.personPubkey}`);
+
+  try {
+    const synapseId = memory.createSynapse(pattern, 150, 0.7, valence, 'roke', triadId, tags);
+    console.log(`  🧠 ROKE sinapsa #${synapseId}: "${pattern.slice(0, 70)}" [${tags.join(', ')}]`);
+  } catch (err) {
+    console.error(`  🧠 ROKE sinapsa napaka:`, err.message);
+  }
+}
+
+// ═══ HELPER: čas od zadnje akcije v slovenščini ═══
+function timeSince(isoDate) {
+  if (!isoDate) return '?';
+  const diffMs = Date.now() - new Date(isoDate).getTime();
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return 'pravkar';
+  if (mins < 60) return `pred ${mins} min`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `pred ${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `pred ${days}d`;
 }
 
 // ═══ READ FATHER'S VISION (from file) ═══

@@ -1873,6 +1873,22 @@ export function getProjectContext() {
           if (p.last_error) detail += ` | ${p.last_error.slice(0, 60)}`;
         }
         ctx += `- ${detail}\n`;
+        // ROKE Zavedanje: kratka zgodovina nedavnih dejanj za ta projekt
+        if (state !== 'dormant' && state !== 'seed') {
+          const rokeSynapses = memory.getROKESynapsesForProject(p.name, 2);
+          if (rokeSynapses.length > 0) {
+            const actions = rokeSynapses.map(s => {
+              try {
+                const tags = JSON.parse(s.tags || '[]');
+                const action = (tags.find(t => t.startsWith('roke:')) || '').replace('roke:', '');
+                const outcome = (tags.find(t => t.startsWith('outcome:')) || '').replace('outcome:', '');
+                const icon = outcome === 'failed' ? '✗' : outcome === 'waiting' ? '⏳' : '✓';
+                return `${action}(${icon})`;
+              } catch (_) { return '?'; }
+            });
+            ctx += `    └ Nedavno: ${actions.join(', ')}\n`;
+          }
+        }
       }
     }
   }
