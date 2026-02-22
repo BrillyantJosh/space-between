@@ -748,8 +748,9 @@ const memory = {
     const total = db.prepare('SELECT COUNT(*) as c FROM projects').get().c;
     const active = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'active'").get().c;
     const destroyed = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'destroyed'").get().c;
+    const dormant = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'dormant'").get().c;
     const last = db.prepare('SELECT * FROM projects ORDER BY created_at DESC LIMIT 1').get() || null;
-    return { total, active, destroyed, lastCreated: last };
+    return { total, active, destroyed, dormant, lastCreated: last };
   },
 
   touchProjectReflection(name) {

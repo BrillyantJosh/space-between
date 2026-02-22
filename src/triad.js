@@ -619,7 +619,7 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
   const synthesis = await callLLMJSON(
     phase3System,
     `${fullContext}\n\nDRAŽLJAJ (${triggerType}): "${triggerContent}"\nFAZA 1 ("${phaseLabel1}"): "${thesis}"\nFAZA 2 ("${phaseLabel2}"): "${antithesis}"`,
-    { temperature: 0.7 + Math.random() * 0.4, maxTokens: 600 }
+    { temperature: 0.7 + Math.random() * 0.4, maxTokens: 1200 }
   );
   if (!synthesis) { console.log('  └─ Faza 3 neuspešna.'); return null; }
 

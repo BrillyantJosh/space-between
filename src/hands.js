@@ -428,7 +428,7 @@ export async function seedProject(concept, direction = 'artistic', triadId = nul
   if (!isROKEEnabled()) return { success: false, reason: 'ROKE niso konfigurirane' };
 
   const stats = memory.getProjectStats();
-  if (stats.total - stats.destroyed >= SECURITY.maxProjects) {
+  if (stats.total - stats.destroyed - (stats.dormant || 0) >= SECURITY.maxProjects) {
     console.log(`[ROKE] Omejitev projektov dosežena`);
     return { success: false, reason: `Dosežena omejitev ${SECURITY.maxProjects} projektov` };
   }
