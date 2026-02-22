@@ -305,6 +305,8 @@ const projectMigrations = [
   ['perspectives_count', "ALTER TABLE projects ADD COLUMN perspectives_count INTEGER DEFAULT 0"],
   ['crystallized_at', "ALTER TABLE projects ADD COLUMN crystallized_at TEXT DEFAULT NULL"],
   ['crystallization_notes', "ALTER TABLE projects ADD COLUMN crystallization_notes TEXT DEFAULT ''"],
+  // v5 — creative triad (razumevanje → oblikovanje → preverjanje)
+  ['creative_triad_json', "ALTER TABLE projects ADD COLUMN creative_triad_json TEXT DEFAULT NULL"],
 ];
 
 for (const [col, sql] of migrations) {
@@ -700,7 +702,7 @@ const memory = {
   },
 
   updateProject(name, updates) {
-    const allowed = ['display_name', 'description', 'status', 'entry_file', 'file_count', 'notes', 'version', 'destruction_reason', 'destroyed_at', 'last_reflected_at', 'direction', 'lifecycle_state', 'deliberation_count', 'build_step', 'total_build_steps', 'last_shared_at', 'feedback_summary', 'plan_json', 'project_type', 'service_port', 'service_pid', 'service_status', 'last_error', 'build_attempts', 'test_results', 'api_calls_today', 'api_calls_date', 'health_check_url', 'tech_stack'];
+    const allowed = ['display_name', 'description', 'status', 'entry_file', 'file_count', 'notes', 'version', 'destruction_reason', 'destroyed_at', 'last_reflected_at', 'direction', 'lifecycle_state', 'deliberation_count', 'build_step', 'total_build_steps', 'last_shared_at', 'feedback_summary', 'plan_json', 'project_type', 'service_port', 'service_pid', 'service_status', 'last_error', 'build_attempts', 'test_results', 'api_calls_today', 'api_calls_date', 'health_check_url', 'tech_stack', 'creative_triad_json'];
     const keys = Object.keys(updates).filter(k => allowed.includes(k));
     if (keys.length === 0) return;
     const sets = keys.map(k => `${k} = ?`).join(', ');

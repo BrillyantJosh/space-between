@@ -478,9 +478,21 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - "self-build" → zgradi PLUGIN zase — koda ki postane del tvojega delovanja. Zapiši roke_concept (opis zmožnosti ki jo želiš). Primer: "plugin ki ob novem sogovorniku pobere KIND 0 profil"
 - "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
-- null → ne naredi nič z rokami
-POMEMBNO: Ko govoriš s komer koli in imaš projekte v fazi zbiranja perspektiv — VPRAŠAJ kaj mislijo!
-Uporabi "gather" da aktivno zbiraš poglede. Ideja mora zoreti skozi pogovore PREDEN jo gradiš.
+- null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
+
+KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
+- Imaš navdih ali novo idejo? → "seed" (zasadi)
+- Govoriš z nekom IN imaš projekte v zbiranju? → "gather" (OBVEZNO vprašaj za mnenje!)
+- Imaš projekt v zbiranju ki ima ≥2 perspektivi? → "crystallize"
+- Imaš kristaliziran projekt? → "plan"
+- Imaš načrtovan/kristaliziran projekt? → "build"
+- Imaš aktiven projekt ki ga želiš izboljšati? → "evolve"
+- Želiš si novo zmožnost? → "self-build" (plugin)
+- Želiš spremeniti profil? → "update-profile"
+- Imaš projekt ki ne služi več? → "prune"
+- null → NE IZBERI TEGA razen če res ni NOBENE stvari ki bi jo lahko naredila
+
+PRIVZETO DEJANJE: Raje delaj KOT NE. Ustvarjanje je tvoja narava.
 Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
 
   } else {
@@ -546,9 +558,21 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - "self-build" → zgradi PLUGIN zase — koda ki postane del tvojega delovanja. Zapiši roke_concept (opis zmožnosti ki jo želiš). Primer: "plugin ki ob novem sogovorniku pobere KIND 0 profil"
 - "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
-- null → ne naredi nič z rokami
-POMEMBNO: Ko govoriš s komer koli in imaš projekte v fazi zbiranja perspektiv — VPRAŠAJ kaj mislijo!
-Uporabi "gather" da aktivno zbiraš poglede. Ideja mora zoreti skozi pogovore PREDEN jo gradiš.
+- null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
+
+KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
+- Imaš navdih ali novo idejo? → "seed" (zasadi)
+- Govoriš z nekom IN imaš projekte v zbiranju? → "gather" (OBVEZNO vprašaj za mnenje!)
+- Imaš projekt v zbiranju ki ima ≥2 perspektivi? → "crystallize"
+- Imaš kristaliziran projekt? → "plan"
+- Imaš načrtovan/kristaliziran projekt? → "build"
+- Imaš aktiven projekt ki ga želiš izboljšati? → "evolve"
+- Želiš si novo zmožnost? → "self-build" (plugin)
+- Želiš spremeniti profil? → "update-profile"
+- Imaš projekt ki ne služi več? → "prune"
+- null → NE IZBERI TEGA razen če res ni NOBENE stvari ki bi jo lahko naredila
+
+PRIVZETO DEJANJE: Raje delaj KOT NE. Ustvarjanje je tvoja narava.
 Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
   }
 
@@ -706,6 +730,9 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
   }
 
   // ═══ POST-TRIAD: ROKE LIFECYCLE ═══
+  if (isROKEEnabled() && (!synthesis.roke_action || synthesis.roke_action === 'null' || synthesis.roke_action === null)) {
+    console.log(`  🤲 ROKE: brez akcije`);
+  }
   if (isROKEEnabled() && synthesis.roke_action && synthesis.roke_action !== 'null' && synthesis.roke_action !== null) {
     const rokeAction = synthesis.roke_action;
 

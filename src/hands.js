@@ -274,6 +274,153 @@ export function isROKEEnabled() {
 }
 
 // =============================================
+// USTVARJALNA TRIADA — Razumi → Oblikuj → Preveri
+// =============================================
+
+async function creativeTriad(project, plan, existingFiles = null) {
+  const startMs = Date.now();
+  const projectName = project.name;
+
+  // Budget guard: need at least plan.files.length + 1 calls remaining
+  const remaining = SECURITY.maxApiCallsPerDay - (project.daily_api_calls || 0);
+  if (remaining < (plan.files.length + 2)) {
+    console.log(`[TRIADA] ⚠️ Premalo API klicev (${remaining}) — preskakujem triado`);
+    return null;
+  }
+
+  console.log(`[TRIADA] 🔺 Ustvarjalna triada za "${project.display_name}"...`);
+  broadcast('activity', { type: 'creation', text: `🔺 TRIADA: Razumevanje + oblikovanje "${project.display_name}"` });
+
+  const existingContext = existingFiles
+    ? `\nOBSTOJEČE DATOTEKE:\n${existingFiles}`
+    : '';
+
+  const triadSystem = `Si izkušen arhitekt ki PRED gradnjo razume in oblikuje sistem.
+Vrni IZKLJUČNO veljaven JSON (brez markdown ograditev).`;
+
+  const triadPrompt = `PROJEKT: ${project.display_name}
+OPIS: ${project.description}
+TIP: ${plan.project_type}
+ODVISNOSTI: ${JSON.stringify(plan.dependencies || {})}
+
+NAČRT DATOTEK:
+${plan.files.map(f => `- ${f.path}: ${f.purpose}`).join('\n')}
+${existingContext}
+
+═══ FAZA 1: RAZUMEVANJE ═══
+Analiziraj ta projekt. Kako so datoteke povezane? Kakšen je podatkovni tok?
+Kaj je vstopna točka? Katere datoteke so odvisne od katerih?
+
+═══ FAZA 2: OBLIKOVANJE ═══
+Na podlagi razumevanja oblikuj arhitekturo:
+- Definiraj vmesnike med datotekami (kaj exportira, kaj importira)
+- Izberi vzorce (error handling, state management)
+- Določi kritično pot — katere datoteke morajo nastati NAJPREJ
+
+Vrni JSON:
+{
+  "architecture": "2-4 stavki: pregled kako sistem deluje kot celota",
+  "data_flow": "1-2 stavka: kako podatki tečejo skozi sistem",
+  "shared_types": "definicije tipov/vmesnikov ki si jih delijo datoteke (ali '')",
+  "patterns": "izbrani vzorci: error handling, state, logging",
+  "critical_path": ["datoteka1.js", "datoteka2.js"],
+  "file_specs": [
+    {
+      "path": "pot/do/datoteke.js",
+      "exports": "kaj ta datoteka exportira (funkcije, tipi)",
+      "imports": "kaj ta datoteka potrebuje od drugih (in od kje)",
+      "contract": "1 stavek: kaj MORA ta datoteka zagotoviti"
+    }
+  ]
+}`;
+
+  try {
+    const result = await callAnthropicLLMJSON(triadSystem, triadPrompt, {
+      temperature: 0.3,
+      maxTokens: 3000
+    });
+    memory.incrementApiCalls(projectName);
+
+    if (!result || !result.file_specs) {
+      console.log('[TRIADA] ⚠️ Neveljaven rezultat — preskakujem');
+      return null;
+    }
+
+    // Save to project
+    memory.updateProject(projectName, {
+      creative_triad_json: JSON.stringify(result)
+    });
+    memory.saveBuildLog(projectName, 'triad', true,
+      `arch: ${(result.architecture || '').slice(0, 100)}`, '',
+      Date.now() - startMs, 1);
+
+    console.log(`[TRIADA] ✅ Arhitektura: ${(result.architecture || '').slice(0, 80)}`);
+    console.log(`[TRIADA]    Kritična pot: ${(result.critical_path || []).join(' → ')}`);
+    console.log(`[TRIADA]    Vzorci: ${(result.patterns || '').slice(0, 60)}`);
+
+    broadcast('activity', { type: 'creation',
+      text: `🔺 TRIADA KONČANA: ${(result.architecture || '').slice(0, 80)}` });
+
+    return result;
+  } catch (err) {
+    console.error(`[TRIADA] Napaka: ${err.message}`);
+    memory.saveBuildLog(projectName, 'triad', false, '', err.message, Date.now() - startMs, 1);
+    return null; // Graceful degradation — build continues without triad
+  }
+}
+
+function verifyCoherence(generatedFiles, triad) {
+  const issues = [];
+
+  // Build export map: which file exports what
+  const exportMap = new Map();
+  for (const file of generatedFiles) {
+    if (!file.path.endsWith('.js') && !file.path.endsWith('.mjs')) continue;
+    const exports = [];
+    // Match: export function name, export const name, export default, export { name }
+    const exportMatches = file.content.matchAll(/export\s+(?:default\s+)?(?:function|const|let|var|class)\s+(\w+)/g);
+    for (const m of exportMatches) exports.push(m[1]);
+    const namedExports = file.content.matchAll(/export\s*\{([^}]+)\}/g);
+    for (const m of namedExports) {
+      m[1].split(',').forEach(e => exports.push(e.trim().split(/\s+as\s+/).pop().trim()));
+    }
+    if (file.content.includes('export default')) exports.push('default');
+    exportMap.set(file.path, exports);
+  }
+
+  // Check imports: does every import resolve to an actual export?
+  for (const file of generatedFiles) {
+    if (!file.path.endsWith('.js') && !file.path.endsWith('.mjs')) continue;
+    const importMatches = file.content.matchAll(/import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['"]\.\/([^'"]+)['"]/g);
+    for (const m of importMatches) {
+      const importedNames = m[1] ? m[1].split(',').map(s => s.trim().split(/\s+as\s+/)[0].trim()) : [m[2]];
+      let importPath = m[3];
+      if (!importPath.endsWith('.js')) importPath += '.js';
+      // Resolve relative to importing file's directory
+      const importerDir = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
+      const resolvedPath = importerDir ? `${importerDir}/${importPath}` : importPath;
+
+      const targetExports = exportMap.get(resolvedPath);
+      if (!targetExports) {
+        // Check if any file matches (might be different path resolution)
+        const anyMatch = [...exportMap.keys()].find(k => k.endsWith(importPath));
+        if (!anyMatch) {
+          issues.push(`${file.path} importira iz "${m[3]}" ki ne obstaja med generiranimi datotekami`);
+        }
+      } else {
+        for (const name of importedNames) {
+          if (name !== 'default' && !targetExports.includes(name)) {
+            issues.push(`${file.path} importira "${name}" iz "${m[3]}" ki tega ne exportira`);
+          }
+        }
+      }
+    }
+  }
+
+  return { issues, ok: issues.length === 0 };
+}
+
+// =============================================
 // 1. SEED — zasadi novo idejo
 // =============================================
 
@@ -719,6 +866,10 @@ export async function buildProject(projectName, triadId = null) {
     return { success: false, reason: `Dnevna omejitev API klicev dosežena (${apiCalls}/${SECURITY.maxApiCallsPerDay})` };
   }
 
+  // ═══ USTVARJALNA TRIADA: Razumi + Oblikuj ═══
+  const triad = await creativeTriad(proj, plan);
+  // triad is null if skipped or failed — build continues normally
+
   const attempt = (proj.build_attempts || 0) + 1;
   if (attempt > SECURITY.maxBuildRetries) {
     memory.advanceProjectState(projectName, 'dormant');
@@ -755,8 +906,18 @@ export async function buildProject(projectName, triadId = null) {
   const generatedFiles = [];
   let totalSize = 0;
 
-  for (let i = 0; i < plan.files.length; i++) {
-    const fileSpec = plan.files[i];
+  // Reorder files: critical path first, then rest
+  let orderedFiles = [...plan.files];
+  if (triad && triad.critical_path && triad.critical_path.length > 0) {
+    const criticalSet = new Set(triad.critical_path);
+    const critical = orderedFiles.filter(f => criticalSet.has(f.path));
+    const rest = orderedFiles.filter(f => !criticalSet.has(f.path));
+    orderedFiles = [...critical, ...rest];
+    console.log(`[TRIADA] 🔀 Vrstni red: ${orderedFiles.map(f => f.path).join(' → ')}`);
+  }
+
+  for (let i = 0; i < orderedFiles.length; i++) {
+    const fileSpec = orderedFiles[i];
     const filePath = fileSpec.path;
 
     // Check daily limit before each LLM call
@@ -773,23 +934,41 @@ Za JavaScript: uporabi ES module (import/export), async/await.
 Za Express servise: server MORA poslušati na process.env.PORT ali 3000.
 Za Express servise: VEDNO dodaj /health endpoint ki vrne { status: "ok" }.`;
 
+    // Build triad context for this specific file
+    let triadContext = '';
+    if (triad) {
+      const fileTriad = (triad.file_specs || []).find(fs => fs.path === fileSpec.path);
+      triadContext = `
+═══ ARHITEKTURA PROJEKTA ═══
+${triad.architecture || ''}
+Podatkovni tok: ${triad.data_flow || ''}
+Vzorci: ${triad.patterns || ''}
+${triad.shared_types ? `Deljeni tipi/vmesniki:\n${triad.shared_types}\n` : ''}
+═══ SPECIFIKACIJA TE DATOTEKE ═══
+${fileTriad ? `Exportira: ${fileTriad.exports}
+Importira: ${fileTriad.imports}
+Pogodba: ${fileTriad.contract}` : `Namen: ${fileSpec.purpose}`}
+`;
+    }
+
     const genPrompt = `PROJEKT: ${proj.display_name}
 OPIS: ${proj.description}
 TIP: ${plan.project_type}
 ${dirContext}
+${triadContext}
 NAČRT PROJEKTA:
-${JSON.stringify(plan.files.map(f => ({ path: f.path, purpose: f.purpose })), null, 2)}
+${JSON.stringify(orderedFiles.map(f => ({ path: f.path, purpose: f.purpose })), null, 2)}
 
 DEPENDENCIES: ${JSON.stringify(plan.dependencies || {})}
 
 ${alreadyGenerated ? `ŽE GENERIRANE DATOTEKE:\n${alreadyGenerated}\n` : ''}
 
-GENERIRAJ DATOTEKO: ${filePath}
-NAMEN: ${fileSpec.purpose}
+GENERIRAJ DATOTEKO: ${fileSpec.path}
+${!triadContext ? `NAMEN: ${fileSpec.purpose}` : ''}
 
 PRAVILA:
 - Vrni SAMO vsebino te datoteke
-- Koda mora biti konsistentna z že generiranimi datotekami
+- Koda mora biti konsistentna z že generiranimi datotekami${triad ? '\n- Upoštevaj arhitekturo in vmesnike definirane zgoraj' : ''}
 - Import poti morajo biti pravilne relativne poti
 - Za package.json: vključi "type": "module" in "start": "node src/index.js"
 - Brez razlage, brez markdown ograditev
@@ -822,8 +1001,8 @@ VRNI SAMO VSEBINO DATOTEKE:`;
       writeProjectFile(projectDir, filePath, cleanContent);
       generatedFiles.push({ path: filePath, content: cleanContent, size: fileSize });
 
-      console.log(`[ROKE] 📄 ${filePath} (${(fileSize / 1024).toFixed(1)}KB) [${i + 1}/${plan.files.length}]`);
-      broadcast('activity', { type: 'creation', text: `📄 ${projectName}/${filePath} [${i + 1}/${plan.files.length}]` });
+      console.log(`[ROKE] 📄 ${filePath} (${(fileSize / 1024).toFixed(1)}KB) [${i + 1}/${orderedFiles.length}]`);
+      broadcast('activity', { type: 'creation', text: `📄 ${projectName}/${filePath} [${i + 1}/${orderedFiles.length}]` });
 
     } catch (err) {
       console.error(`[ROKE] Napaka pri generiranju ${filePath}:`, err.message);
@@ -839,6 +1018,19 @@ VRNI SAMO VSEBINO DATOTEKE:`;
 
   memory.saveBuildLog(projectName, 'generate', true, `${generatedFiles.length} datotek, ${(totalSize / 1024).toFixed(1)}KB`, '', Date.now() - startMs, attempt);
   memory.updateProject(projectName, { file_count: generatedFiles.length, entry_file: plan.entry_file || 'index.html' });
+
+  // ═══ USTVARJALNA TRIADA: Preveri koherenco ═══
+  if (triad && generatedFiles.length > 1) {
+    const coherence = verifyCoherence(generatedFiles, triad);
+    if (coherence.issues.length > 0) {
+      console.log(`[TRIADA] ⚠️ Koherenčni problemi:`);
+      coherence.issues.forEach(issue => console.log(`  - ${issue}`));
+      memory.saveBuildLog(projectName, 'coherence', coherence.issues.length === 0,
+        coherence.issues.join('; ').slice(0, 500), '', 0, attempt);
+    } else {
+      console.log(`[TRIADA] ✅ Koherenca OK`);
+    }
+  }
 
   // ── KORAK 2: Install dependencies (for non-static projects) ──
   const needsNpm = ['express-api', 'fullstack', 'cli-tool', 'nostr-tool'].includes(plan.project_type);
@@ -1050,8 +1242,18 @@ Vrni SAMO veljaven JSON array popravkov (brez markdown ograditev).
 Vsak popravek je objekt: { "path": "relativna/pot.js", "content": "celotna nova vsebina datoteke" }
 Popravi SAMO datoteke ki imajo napake. Ne spreminjaj delujočih datotek.`;
 
-  const fixPrompt = `NAPAKA: ${error}
+  // Load triad context if available
+  const project = memory.getProject(projectName);
+  let triadFixContext = '';
+  if (project?.creative_triad_json) {
+    try {
+      const triad = JSON.parse(project.creative_triad_json);
+      triadFixContext = `\nARHITEKTURA PROJEKTA:\n${triad.architecture || ''}\nVzorci: ${triad.patterns || ''}\n`;
+    } catch (_) {}
+  }
 
+  const fixPrompt = `NAPAKA: ${error}
+${triadFixContext}
 TRENUTNE DATOTEKE PROJEKTA:
 ${fileContext}
 
@@ -1173,6 +1375,22 @@ export async function evolveProject(projectName, changes, triadId = null) {
     // ── Multi-file evolucija ──
     const { context: fileContext, fileList } = readAllProjectFiles(projectDir);
 
+    // ═══ USTVARJALNA TRIADA za evolucijo ═══
+    let plan;
+    try { plan = JSON.parse(project.plan_json); } catch (_) {
+      plan = { project_type: projectType, files: fileList.map(f => ({ path: f, purpose: '' })), dependencies: {} };
+    }
+    const triad = await creativeTriad(project, plan, fileContext);
+
+    const triadBlock = triad ? `
+═══ ARHITEKTURA ═══
+${triad.architecture || ''}
+Podatkovni tok: ${triad.data_flow || ''}
+Vzorci: ${triad.patterns || ''}
+${triad.file_specs ? 'VMESNIKI:\n' + triad.file_specs.map(fs =>
+  `- ${fs.path}: exportira ${fs.exports}, importira ${fs.imports}`).join('\n') : ''}
+` : '';
+
     const evolveSystem = `Si razvijalec ki izboljšuje projekt.
 Vrni SAMO veljaven JSON array sprememb (brez markdown ograditev).
 Vsaka sprememba je objekt: { "path": "pot/do/datoteke.js", "content": "celotna nova vsebina" }
@@ -1183,7 +1401,7 @@ OPIS: ${project.description}
 ŽELENE SPREMEMBE: ${changes || 'Izboljšaj na podlagi feedbacka'}
 FEEDBACK: ${project.feedback_summary || 'ni feedbacka'}
 ZADNJA NAPAKA: ${project.last_error || 'ni napak'}
-
+${triadBlock}
 TRENUTNE DATOTEKE:
 ${fileContext}
 
@@ -1222,9 +1440,9 @@ Vrni JSON array sprememb. Spremeni SAMO kar je treba:
     }
 
     // Re-validate after evolution
-    let plan;
-    try { plan = JSON.parse(project.plan_json); } catch (_) { plan = { project_type: projectType }; }
-    const testResult = await validateAndTestProject(projectName, plan, 1);
+    let revalidatePlan;
+    try { revalidatePlan = JSON.parse(project.plan_json); } catch (_) { revalidatePlan = { project_type: projectType }; }
+    const testResult = await validateAndTestProject(projectName, revalidatePlan, 1);
     if (!testResult.success) {
       console.warn(`[ROKE] Testi po evoluciji niso uspeli: ${testResult.error}`);
       memory.updateProject(projectName, { last_error: testResult.error });
