@@ -1309,6 +1309,19 @@ export async function shareProject(projectName) {
     return { success: false, reason: `Projekt ni aktiven (${project.lifecycle_state})` };
   }
 
+  // Guard: external/artistic projects must have been actually built
+  if (project.direction !== 'internal' && (project.build_attempts || 0) === 0) {
+    console.log(`[ROKE] 📤 Share preskočen — "${projectName}" ni bil zgrajen (0 buildov)`);
+    return { success: false, reason: 'Projekt še ni zgrajen' };
+  }
+
+  // Guard: project must have actual files
+  const projDir = getProjectDir(projectName);
+  if (!fs.existsSync(projDir) || fs.readdirSync(projDir).length === 0) {
+    console.log(`[ROKE] 📤 Share preskočen — "${projectName}" nima datotek`);
+    return { success: false, reason: 'Projekt nima datotek' };
+  }
+
   const url = `https://being2.enlightenedai.org${getProjectUrl(projectName)}`;
   console.log(`[ROKE] 📤 Delim projekt "${projectName}" — ${url}`);
 

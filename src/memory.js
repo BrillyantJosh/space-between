@@ -327,10 +327,20 @@ for (const [col, sql] of projectMigrations) {
   }
 }
 
-// Migrate existing active projects to lifecycle_state='active'
+// Migrate destroyed projects (one-time, safe)
 try {
-  db.prepare("UPDATE projects SET lifecycle_state = 'active', direction = 'external' WHERE status = 'active' AND lifecycle_state = 'seed'").run();
   db.prepare("UPDATE projects SET lifecycle_state = 'destroyed' WHERE status = 'destroyed' AND lifecycle_state = 'seed'").run();
+} catch (_) {}
+
+// Safety reset: projects that are 'active' lifecycle but never built (external/artistic only)
+// This catches projects that got promoted to active without going through build pipeline
+try {
+  const fixed = db.prepare(
+    "UPDATE projects SET lifecycle_state = 'seed' WHERE lifecycle_state = 'active' AND build_attempts = 0 AND direction != 'internal'"
+  ).run();
+  if (fixed.changes > 0) {
+    console.log(`[MEMORY] Reset ${fixed.changes} active projects with 0 builds back to seed`);
+  }
 } catch (_) {}
 
 // v4 migration: deliberating → gathering_perspectives

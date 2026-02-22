@@ -830,7 +830,7 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
         case 'plan':
           if (roke_target) {
             const projPlan = memory.getProject(roke_target);
-            if (projPlan && ['crystallized'].includes(projPlan.lifecycle_state)) {
+            if (projPlan && ['crystallized', 'gathering_perspectives'].includes(projPlan.lifecycle_state)) {
               await planProject(roke_target, triadId);
             }
           }
@@ -867,13 +867,29 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
           break;
         case 'share':
           if (roke_target) {
-            await shareProject(roke_target);
+            const shareProj = memory.getProject(roke_target);
+            if (shareProj?.lifecycle_state === 'active') {
+              const shareRes = await shareProject(roke_target);
+              if (!shareRes?.success) {
+                rokeResult.outcome = 'skipped';
+                rokeResult.detail = (shareRes?.reason || '').slice(0, 60);
+              }
+            } else {
+              console.log(`  🤲 ROKE: share preskočen — ${roke_target} ni aktiven (${shareProj?.lifecycle_state})`);
+              rokeResult.outcome = 'skipped';
+            }
           }
           break;
         case 'evolve':
           if (roke_target) {
-            const evolveRes = await evolveProject(roke_target, synthesis.roke_thought || '', triadId);
-            if (!evolveRes?.success) rokeResult.outcome = 'failed';
+            const evolveProj = memory.getProject(roke_target);
+            if (evolveProj?.lifecycle_state === 'active' && (evolveProj.build_attempts || 0) > 0) {
+              const evolveRes = await evolveProject(roke_target, synthesis.roke_thought || '', triadId);
+              if (!evolveRes?.success) rokeResult.outcome = 'failed';
+            } else {
+              console.log(`  🤲 ROKE: evolve preskočen — ${roke_target} ni zgrajen (builds:${evolveProj?.build_attempts || 0}, state:${evolveProj?.lifecycle_state})`);
+              rokeResult.outcome = 'skipped';
+            }
           }
           break;
         case 'prune':
