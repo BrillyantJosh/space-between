@@ -866,6 +866,12 @@ Ne vsiljuj tega — samo kadar je naravno.`;
   if (isROKEEnabled() && synthesis.roke_action && synthesis.roke_action !== 'null' && synthesis.roke_action !== null) {
     const rokeAction = synthesis.roke_action;
 
+    // Normaliziraj roke_concept — LLM včasih vrne objekt namesto stringa
+    let roke_concept = synthesis.roke_concept;
+    if (roke_concept && typeof roke_concept !== 'string') {
+      roke_concept = JSON.stringify(roke_concept);
+    }
+
     // Resolve roke_target: LLM pogosto vrne display_name namesto slug
     let roke_target = synthesis.roke_target;
     if (roke_target && roke_target !== 'null') {
@@ -878,7 +884,7 @@ Ne vsiljuj tega — samo kadar je naravno.`;
       }
     }
 
-    console.log(`  🤲 ROKE: ${rokeAction} ${roke_target ? `→ "${roke_target}"` : synthesis.roke_concept ? `→ "${(synthesis.roke_concept || '').slice(0, 60)}"` : ''}`);
+    console.log(`  🤲 ROKE: ${rokeAction} ${roke_target ? `→ "${roke_target}"` : roke_concept ? `→ "${roke_concept.slice(0, 60)}"` : ''}`);
 
     // ROKE Zavedanje: track action result for synapse creation
     let rokeResult = { action: rokeAction, target: roke_target, outcome: 'success', detail: '' };
@@ -886,10 +892,10 @@ Ne vsiljuj tega — samo kadar je naravno.`;
     try {
       switch (rokeAction) {
         case 'seed':
-          if (synthesis.roke_concept) {
-            const seedRes = await seedProject(synthesis.roke_concept, synthesis.roke_direction || 'artistic', triadId);
+          if (roke_concept) {
+            const seedRes = await seedProject(roke_concept, synthesis.roke_direction || 'artistic', triadId);
             if (!seedRes?.success) rokeResult.outcome = 'failed';
-            rokeResult.detail = synthesis.roke_concept.slice(0, 80);
+            rokeResult.detail = roke_concept.slice(0, 80);
           }
           break;
         case 'deliberate':
@@ -1011,21 +1017,21 @@ Ne vsiljuj tega — samo kadar je naravno.`;
           }
           break;
         case 'propose':
-          if (synthesis.roke_concept) {
-            await proposeImprovement(synthesis.roke_concept, triadId);
-            rokeResult.detail = synthesis.roke_concept.slice(0, 60);
+          if (roke_concept) {
+            await proposeImprovement(roke_concept, triadId);
+            rokeResult.detail = roke_concept.slice(0, 60);
           }
           break;
         case 'self-build':
-          if (synthesis.roke_concept) {
-            const sbRes = await selfBuildPlugin(synthesis.roke_concept, triadId);
+          if (roke_concept) {
+            const sbRes = await selfBuildPlugin(roke_concept, triadId);
             if (!sbRes?.success) rokeResult.outcome = 'failed';
-            rokeResult.detail = synthesis.roke_concept.slice(0, 60);
+            rokeResult.detail = roke_concept.slice(0, 60);
           }
           break;
         case 'update-profile':
-          if (synthesis.roke_concept) {
-            await updateEntityProfile(synthesis.roke_concept);
+          if (roke_concept) {
+            await updateEntityProfile(roke_concept);
           }
           break;
       }
