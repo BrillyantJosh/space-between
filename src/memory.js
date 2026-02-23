@@ -1103,16 +1103,63 @@ const memory = {
 
   isCrystallizationReady() {
     const state = this.getState();
+
+    // Trdi pogoji (znižani — to so TLA, ne merila)
     if (state.directions_crystallized) return false;
     if (!state.process_crystallized) return false;
-    if (state.total_heartbeats < 500) return false;
-    if (state.total_interactions < 20) return false;
-    if (state.total_dreams < 30) return false;
+    if (state.total_heartbeats < 200) return false;
+    if (state.total_interactions < 10) return false;
+    if (state.total_dreams < 10) return false;
     const crystals = this.getCrystalCore();
     if (crystals.length < 1) return false;
     const projectCount = this.getAllProjects().filter(p => p.lifecycle_state !== 'destroyed').length;
-    if (projectCount < 3) return false;
-    return true;
+    if (projectCount < 1) return false;
+
+    // === KVALITATIVNI ZRELOSTNI REZULTAT (0..1, potrebuje >= 0.6) ===
+    let maturity = 0;
+
+    // 1. Zrelost poti: koliko tem je entiteta razvila do poguma ali globlje?
+    const activePathways = this.getActivePathways(20);
+    const maturePathways = activePathways.filter(p =>
+      ['pogum', 'odprtost', 'globlja_sinteza'].includes(p.faza)
+    ).length;
+    maturity += Math.min(0.25, maturePathways * 0.08);
+
+    // 2. Intuicija: ali je entiteta potrdila kakšno intuicijo?
+    const confirmedIntuitions = activePathways.filter(p => p.intuition_confirmed === 1).length;
+    maturity += Math.min(0.15, confirmedIntuitions * 0.08);
+
+    // 3. Produktivnost sanj: koliko sanj je prineslo kristale ali redefinicije?
+    const promptHistory = this.getSelfPromptHistory(50);
+    const dreamRedefines = promptHistory.filter(h =>
+      h.trigger_source && (h.trigger_source.includes('sanj') || h.trigger_source.includes('dream'))
+    ).length;
+    const dreamProductivity = state.total_dreams > 0
+      ? Math.min(1, (crystals.length + dreamRedefines) / Math.max(1, state.total_dreams * 0.3))
+      : 0;
+    maturity += Math.min(0.15, dreamProductivity * 0.15);
+
+    // 4. Kvaliteta kristalov: več kristalov = trše jedro
+    maturity += Math.min(0.20, crystals.length * 0.05);
+
+    // 5. Glasovni balans: ali je entiteta našla svoj glas?
+    const totalChoices = state.total_expressions + state.total_silences;
+    if (totalChoices > 10) {
+      const exprRatio = state.total_expressions / totalChoices;
+      const voiceBalance = exprRatio >= 0.15 && exprRatio <= 0.65 ? 1.0
+        : exprRatio > 0.65 ? Math.max(0, 1 - (exprRatio - 0.65) * 3)
+        : Math.max(0, exprRatio / 0.15);
+      maturity += Math.min(0.15, voiceBalance * 0.15);
+    }
+
+    // 6. Čustvena raznolikost: koliko različnih razpoloženj je izkusila?
+    const recentTriads = this.getRecentTriads(50);
+    const distinctMoods = new Set(
+      recentTriads.map(t => (t.mood_after || '').toLowerCase().trim()).filter(m => m.length > 0)
+    ).size;
+    maturity += Math.min(0.10, distinctMoods * 0.015);
+
+    return maturity >= 0.6;
   },
 
   getVisionReflectionCount() {
@@ -1197,11 +1244,39 @@ const memory = {
   },
 
   decaySynapses() {
-    // Decay: energy *= 0.99, strength *= 0.995
-    db.prepare("UPDATE synapses SET energy = energy * 0.99, strength = strength * 0.995").run();
-    // Prune dead synapses (energy < 5)
+    const state = this.getState();
+    const resonance = this.getPathwayResonance();
+
+    // Globalni modulator: angažiranost = počasnejše pozabljanje
+    // energy (50%) + resonance (30%) + aktivnost (20%) → 0..1
+    const engagement = (state.energy * 0.5) + (resonance.score * 0.3) + ((1 - state.silence_affinity) * 0.2);
+    const globalMod = 0.7 + (engagement * 0.3); // 0.7 (hiter razpad) .. 1.0 (počasen)
+
+    // Tier-based decay: čustveni + nedavni = počasneje, nevtralni + stari = hitreje
+    const tier1 = Math.min(1.0, 0.995 * globalMod);  // čustveni IN nedavni
+    const tier2 = Math.min(1.0, 0.993 * globalMod);  // čustveni ALI nedavni
+    const tier3 = 0.99 * globalMod;                    // nevtralni + stari
+
+    db.prepare(`
+      UPDATE synapses SET
+        energy = energy * (
+          CASE
+            WHEN ABS(emotional_valence) > 0.3 AND last_fired_at > datetime('now', '-2 hours')
+              THEN ${tier1}
+            WHEN ABS(emotional_valence) > 0.3 OR last_fired_at > datetime('now', '-2 hours')
+              THEN ${tier2}
+            ELSE ${tier3}
+          END
+        ),
+        strength = strength * (
+          CASE
+            WHEN ABS(emotional_valence) > 0.3 THEN ${Math.min(1.0, 0.997 * globalMod)}
+            ELSE ${0.995 * globalMod}
+          END
+        )
+    `).run();
+
     const pruned = db.prepare("DELETE FROM synapses WHERE energy < 5").run();
-    // Also clean orphaned connections
     if (pruned.changes > 0) {
       db.prepare("DELETE FROM synapse_connections WHERE from_synapse_id NOT IN (SELECT id FROM synapses) OR to_synapse_id NOT IN (SELECT id FROM synapses)").run();
     }
@@ -1614,15 +1689,36 @@ const memory = {
   },
 
   decayPathways() {
+    const state = this.getState();
+    // Energija modulira razpad: utrujena entiteta pozablja hitreje
+    const energyMod = 0.85 + (state.energy * 0.15); // 0.85..1.0
+
+    // Poti v aktivnih fazah razpadajo počasneje
+    const activeFaza = Math.min(1.0, 0.999 * energyMod);  // pogum/odprtost
+    const learningFaza = 0.998 * energyMod;                 // učenje
+    const dormantFaza = 0.998 * energyMod * 0.9;            // negotovost
+
     db.prepare(`UPDATE thematic_pathways SET
-      zaupanje = zaupanje * 0.998, togost = togost * 0.999, updated_at = datetime('now')
+      zaupanje = zaupanje * (
+        CASE
+          WHEN faza IN ('pogum', 'odprtost') THEN ${activeFaza}
+          WHEN faza = 'učenje' THEN ${learningFaza}
+          ELSE ${dormantFaza}
+        END
+      ),
+      togost = togost * (
+        CASE
+          WHEN faza IN ('pogum', 'odprtost', 'globlja_sinteza') THEN ${Math.min(1.0, 0.999 * energyMod)}
+          ELSE ${0.999 * energyMod}
+        END
+      ),
+      updated_at = datetime('now')
       WHERE intuition_confirmed = 0`
     ).run();
 
     const pruned = db.prepare(
       "DELETE FROM thematic_pathways WHERE zaupanje < 0.02 AND last_fired_at < datetime('now', '-7 days')"
     ).run();
-
     if (pruned.changes > 0) {
       db.prepare('DELETE FROM pathway_synapses WHERE pathway_id NOT IN (SELECT id FROM thematic_pathways)').run();
       db.prepare('DELETE FROM pathway_history WHERE pathway_id NOT IN (SELECT id FROM thematic_pathways)').run();

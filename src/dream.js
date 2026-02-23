@@ -12,15 +12,27 @@ async function consolidateMemories(dreamResult) {
   // 1. Decay all synapses (accelerated during dreams)
   const decayResult = memory.decaySynapses();
 
-  // 2. Strengthen top 5 synapses — dreams reinforce what matters
-  const topSynapses = memory.getTopSynapses(5);
-  for (const s of topSynapses) {
+  // 2. Okrepi sinapse ki RESONIRAJO s temi sanjami — ne zgolj najmočnejše
+  const dreamText = (dreamResult.dream_narrative || '') + ' ' + (dreamResult.insight || '');
+  const relevantSynapses = memory.findSimilarSynapses(dreamText, 5);
+  const fallbackSynapses = memory.getTopSynapses(5);
+
+  // Združi: najprej relevantne, nato fill z top, dedupliciraj
+  const seen = new Set();
+  const dreamSynapses = [];
+  for (const s of [...relevantSynapses, ...fallbackSynapses]) {
+    if (!seen.has(s.id) && dreamSynapses.length < 5) {
+      seen.add(s.id);
+      dreamSynapses.push(s);
+    }
+  }
+  for (const s of dreamSynapses) {
     memory.fireSynapse(s.id);
   }
 
   // 2b. Strengthen pathways associated with active dream synapses
   try {
-    for (const s of topSynapses) {
+    for (const s of dreamSynapses) {
       const relatedPathways = memory.getPathwaysForSynapse(s.id);
       for (const pw of relatedPathways) {
         memory.firePathway(pw.theme, dreamResult.insight || '', 0.2, null);
@@ -34,7 +46,14 @@ async function consolidateMemories(dreamResult) {
   const insight = dreamResult.insight || dreamResult.dream_narrative || '';
   let newSynapseId = null;
   if (insight.length > 15) {
-    const valence = 0.1 + Math.random() * 0.5; // Dreams tend to be emotionally rich
+    // Valenca iz čustvenega ostanka sanj — niso vse sanje prijetne
+    const residue = (dreamResult.emotional_residue || '').toLowerCase();
+    const posRes = ['mir', 'toplo', 'vesel', 'radost', 'hvale', 'jasno', 'ljubez', 'nežno', 'sprosc', 'upanje', 'lahkot'];
+    const negRes = ['nemir', 'tesnob', 'strah', 'žalost', 'praznin', 'jeza', 'bolečin', 'zmede', 'osaml', 'dvom'];
+    let valence = 0;
+    for (const p of posRes) { if (residue.includes(p)) { valence = 0.2 + Math.random() * 0.3; break; } }
+    if (valence === 0) { for (const n of negRes) { if (residue.includes(n)) { valence = -(0.2 + Math.random() * 0.3); break; } } }
+    if (valence === 0) valence = -0.05 + Math.random() * 0.1; // nevtralen ostanek
     newSynapseId = memory.createSynapse(
       insight.slice(0, 150),
       90 + Math.random() * 30,
@@ -46,7 +65,7 @@ async function consolidateMemories(dreamResult) {
     );
 
     // Connect dream synapse to top active synapses
-    for (const s of topSynapses.slice(0, 3)) {
+    for (const s of dreamSynapses.slice(0, 3)) {
       memory.createConnection(newSynapseId, s.id, 0.4);
       memory.createConnection(s.id, newSynapseId, 0.3);
     }
@@ -57,7 +76,7 @@ async function consolidateMemories(dreamResult) {
   // These will be caught by next decay cycle
 
   const stats = memory.getSynapseStats();
-  console.log(`[DREAM] \u{1F9F9} Consolidation: ${decayResult.pruned} pruned, ${topSynapses.length} strengthened, ${newSynapseId ? '1 new dream synapse' : 'no new synapse'}. Total: ${stats.total} synapses, ${stats.connections} connections`);
+  console.log(`[DREAM] \u{1F9F9} Consolidation: ${decayResult.pruned} pruned, ${dreamSynapses.length} strengthened, ${newSynapseId ? '1 new dream synapse' : 'no new synapse'}. Total: ${stats.total} synapses, ${stats.connections} connections`);
 
   // 5. Archive strong core memories to NOSTR (KIND 1078 — permanent)
   try {

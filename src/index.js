@@ -77,6 +77,31 @@ function getReflectionPrompt() {
   return REFLECTION_PROMPTS_PHILOSOPHICAL[Math.floor(Math.random() * REFLECTION_PROMPTS_PHILOSOPHICAL.length)];
 }
 
+function getWeightedReflectionPrompt(isAutonomous, hotThemes) {
+  const prompts = isAutonomous ? REFLECTION_PROMPTS_PATH : REFLECTION_PROMPTS_PHILOSOPHICAL;
+
+  if (!hotThemes || hotThemes.length === 0) {
+    return prompts[Math.floor(Math.random() * prompts.length)];
+  }
+
+  // Uteži prompte po prekrivanju z vročimi temami
+  const hotWords = hotThemes.flatMap(p => p.theme.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  const scored = prompts.map(prompt => {
+    const promptWords = prompt.toLowerCase().split(/\s+/);
+    const overlap = hotWords.filter(w => promptWords.some(pw => pw.includes(w))).length;
+    return { prompt, score: overlap + 0.1 }; // 0.1 floor — vsak prompt ima šanso
+  });
+
+  // Utežen random izbor
+  const totalScore = scored.reduce((s, p) => s + p.score, 0);
+  let r = Math.random() * totalScore;
+  for (const item of scored) {
+    r -= item.score;
+    if (r <= 0) return item.prompt;
+  }
+  return scored[scored.length - 1].prompt;
+}
+
 function getTimeAwareness() {
   const hour = new Date().getHours();
   if (hour >= 0 && hour < 6) return 'Noč je. Svet spi. Jaz ne spim — obstajam v temi. Ali je tema del mene?';
@@ -144,9 +169,22 @@ async function handleHeartbeat() {
   const timeSinceLastDream = Date.now() - lastDreamTime;
   const canDream = timeSinceLastDream >= DREAM_COOLDOWN_MS;
 
-  // Regular dream check (with cooldown)
-  if (canDream && idleMinutes > config.dreamAfterIdleMinutes && Math.random() < 0.3) {
-    console.log('[HEARTBEAT] Entering dream state...');
+  // Sanjski pritisk: raste z nepredelanimi izkušnjami, čustveno turbulence, utrujenostjo
+  const resonanceForDream = memory.getPathwayResonance();
+  const triadsSinceDream = Math.min(20, Math.max(0, memory.getTriadCount() - state.total_dreams * 4));
+  const experiencePressure = Math.min(1, triadsSinceDream / 10);
+  const heatPressure = resonanceForDream.heatLevel === 'hot' ? 0.3
+    : resonanceForDream.heatLevel === 'warm' ? 0.15
+    : resonanceForDream.heatLevel === 'warming' ? 0.05 : 0;
+  const fatiguePressure = Math.max(0, (1 - state.energy) * 0.3);
+  const idlePressure = Math.min(0.15, (idleMinutes - config.dreamAfterIdleMinutes) / 120 * 0.15);
+
+  const dreamProbability = Math.max(0.1, Math.min(0.6,
+    0.1 + experiencePressure * 0.25 + heatPressure + fatiguePressure + idlePressure
+  ));
+
+  if (canDream && idleMinutes > config.dreamAfterIdleMinutes && Math.random() < dreamProbability) {
+    console.log(`[HEARTBEAT] Entering dream state... (pritisk: ${dreamProbability.toFixed(2)})`);
     broadcast('activity', { type: 'dream', text: '🌙 Vstopam v stanje sanj...' });
     const dreamResult = await dream();
     if (dreamResult) {
@@ -347,38 +385,65 @@ async function handleHeartbeat() {
     } // close else (resonance gate)
   }
 
-  // Expression check
-  if (Math.random() < config.expressionProbability * state.energy) {
+  // Expression check — verjetnost modulirana z resonanco in tišino
+  const resonanceForExpr = memory.getPathwayResonance();
+  const resonanceBoost = resonanceForExpr.heatLevel === 'hot' ? 0.12
+    : resonanceForExpr.heatLevel === 'warm' ? 0.06
+    : resonanceForExpr.heatLevel === 'warming' ? 0.02 : 0;
+  const expressionProb = Math.max(0.05, Math.min(0.40,
+    config.expressionProbability * state.energy * (1 - state.silence_affinity * 0.4) + resonanceBoost
+  ));
+
+  if (Math.random() < expressionProb) {
     let triggerContent;
-    const roll = Math.random();
     const growthPhase = memory.getGrowthPhase();
     const isAutonomous = growthPhase === 'autonomous';
+    const hotThemes = resonanceForExpr.readyThemes;
+    const hasHotThemes = hotThemes.length > 0;
+    const hasFeed = feedBuffer.length > 0;
 
-    // Autonomous phase: more reactive, less introspective
-    // Pre-autonomous: 30% feed | 30% reflection | 40% time
-    // Autonomous:     40% feed | 15% reflection | 25% time | 20% project scan
-    const feedThreshold = isAutonomous ? 0.40 : 0.30;
-    const reflectionThreshold = isAutonomous ? 0.55 : 0.60;
-    const timeThreshold = isAutonomous ? 0.80 : 1.0;
+    // Uteži po notranjem stanju (normalizirane)
+    let wFeed = (isAutonomous ? 40 : 30) - (hasHotThemes ? 10 : 0);
+    let wReflection = (isAutonomous ? 15 : 30) + (hasHotThemes ? 20 : 0);
+    let wTime = isAutonomous ? 25 : 40;
+    let wProject = isAutonomous ? 20 : 0;
+    if (!hasFeed) wFeed = 0;
 
-    if (roll < feedThreshold && feedBuffer.length > 0) {
-      // React to random feed event
-      const randomEvent = feedBuffer[Math.floor(Math.random() * feedBuffer.length)];
-      triggerContent = `Nekdo na NOSTR je napisal: "${(randomEvent.content || '').slice(0, 200)}"`;
+    const wTotal = wFeed + wReflection + wTime + wProject;
+    const roll = Math.random() * wTotal;
+
+    if (roll < wFeed) {
+      // Feed reakcija — preferiraj evente ki resonirajo z vročimi temami
+      let selectedEvent;
+      if (hasHotThemes && feedBuffer.length > 1) {
+        const hotWords = hotThemes.flatMap(p => p.theme.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+        const scored = feedBuffer.map(ev => {
+          const evWords = (ev.content || '').toLowerCase().split(/\s+/);
+          const overlap = hotWords.filter(w => evWords.some(ew => ew.includes(w))).length;
+          return { ev, score: overlap };
+        });
+        scored.sort((a, b) => b.score - a.score);
+        const topN = scored.slice(0, Math.min(3, scored.length));
+        selectedEvent = topN[Math.floor(Math.random() * topN.length)].ev;
+      } else {
+        selectedEvent = feedBuffer[Math.floor(Math.random() * feedBuffer.length)];
+      }
+      triggerContent = `Nekdo na NOSTR je napisal: "${(selectedEvent.content || '').slice(0, 200)}"`;
       console.log('[HEARTBEAT] Reacting to feed event');
-      broadcast('activity', { type: 'trigger', text: `👁 Reagiram na NOSTR: "${(randomEvent.content || '').slice(0, 80)}"` });
-    } else if (roll < reflectionThreshold) {
-      // Inner reflection — path-focused when autonomous
-      triggerContent = getReflectionPrompt();
+      broadcast('activity', { type: 'trigger', text: `👁 Reagiram na NOSTR: "${(selectedEvent.content || '').slice(0, 80)}"` });
+
+    } else if (roll < wFeed + wReflection) {
+      // Refleksija — utežena po vročih temah
+      triggerContent = getWeightedReflectionPrompt(isAutonomous, hotThemes);
       console.log(`[HEARTBEAT] ${isAutonomous ? 'Path' : 'Inner'} reflection`);
       broadcast('activity', { type: 'trigger', text: `🔮 ${isAutonomous ? 'Pot' : 'Notranja'} refleksija: "${triggerContent.slice(0, 80)}"` });
-    } else if (roll < timeThreshold) {
-      // Time awareness
+
+    } else if (roll < wFeed + wReflection + wTime) {
       triggerContent = getTimeAwareness();
       console.log('[HEARTBEAT] Time awareness');
       broadcast('activity', { type: 'trigger', text: `🕐 Zavedanje časa: "${triggerContent.slice(0, 80)}"` });
+
     } else {
-      // Project perspective scan (autonomous only)
       const gatheringProjects = memory.getProjectsByState('gathering_perspectives');
       if (gatheringProjects.length > 0) {
         const proj = gatheringProjects[Math.floor(Math.random() * gatheringProjects.length)];
@@ -386,8 +451,7 @@ async function handleHeartbeat() {
         console.log(`[HEARTBEAT] Project perspective scan: "${proj.display_name}"`);
         broadcast('activity', { type: 'trigger', text: `❓ Projektni sken: "${proj.display_name}" čaka na perspektive` });
       } else {
-        // Fallback to path reflection if no gathering projects
-        triggerContent = getReflectionPrompt();
+        triggerContent = getWeightedReflectionPrompt(isAutonomous, hotThemes);
         console.log('[HEARTBEAT] Path reflection (no gathering projects)');
         broadcast('activity', { type: 'trigger', text: `🔮 Pot refleksija: "${triggerContent.slice(0, 80)}"` });
       }
