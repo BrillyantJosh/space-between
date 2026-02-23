@@ -152,11 +152,11 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
 
 
 // ═══ LIVING MEMORY — SYNAPSE EXTRACTION ═══
-async function extractSynapsesFromTriad(triadResult, triadId, options = {}) {
+function extractSynapsesFromTriad(triadResult, triadId, options = {}) {
   try {
     const { thesis, antithesis, synthesis, moodBefore, moodAfter } = triadResult;
     const content = synthesis.content || synthesis.reason || '';
-    if (content.length < 15) return;
+    if (content.length < 15) return [];
 
     // Extract 1-3 key patterns from the synthesis
     const patterns = [];
@@ -249,8 +249,80 @@ async function extractSynapsesFromTriad(triadResult, triadId, options = {}) {
       }
       broadcast('synapse_created', { count: createdIds.length, triadId });
     }
+
+    return createdIds;
   } catch (e) {
     console.error('[SYNAPSE] Extraction error:', e.message);
+    return [];
+  }
+}
+
+
+// ═══ SINAPTIČNO UČENJE — PATHWAY ASSIGNMENT ═══
+function assignToPathways(triadResult, triadId, createdSynapseIds) {
+  try {
+    const { synthesis } = triadResult;
+    const content = synthesis.content || synthesis.reason || '';
+    if (content.length < 10) return;
+
+    const themes = [];
+
+    // Theme source 1: crystal_seed (highest quality)
+    if (synthesis.crystal_seed && synthesis.crystal_seed !== 'null') {
+      const parts = synthesis.crystal_seed.split(':');
+      const theme = parts[0]?.trim();
+      if (theme && theme.length > 2) themes.push(theme);
+    }
+
+    // Theme source 2: existing pathway themes that appear in content
+    const activePathways = memory.getActivePathways(20);
+    for (const pw of activePathways) {
+      const themeWords = pw.theme.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      const contentLower = content.toLowerCase();
+      const matchCount = themeWords.filter(w => contentLower.includes(w)).length;
+      if (themeWords.length > 0 && matchCount / themeWords.length > 0.5) {
+        if (!themes.includes(pw.theme)) themes.push(pw.theme);
+      }
+    }
+
+    // Theme source 3: ROKE project name
+    if (synthesis.roke_target && synthesis.roke_target !== 'null') {
+      const projectTheme = `projekt:${synthesis.roke_target}`;
+      if (!themes.includes(projectTheme)) themes.push(projectTheme);
+    }
+
+    // Determine emotional valence
+    let valence = 0;
+    const mood = (triadResult.moodAfter || '').toLowerCase();
+    const positiveMoods = ['mir', 'vesel', 'radost', 'toplo', 'jasno', 'navdih'];
+    const negativeMoods = ['zalost', 'strah', 'negotov', 'tesnob', 'nemir'];
+    for (const p of positiveMoods) { if (mood.includes(p)) { valence = 0.4; break; } }
+    for (const n of negativeMoods) { if (mood.includes(n)) { valence = -0.4; break; } }
+
+    // Fire each pathway (max 3)
+    for (const theme of themes.slice(0, 3)) {
+      const result = memory.firePathway(theme, content, valence, triadId);
+
+      // Link created synapses to this pathway
+      if (result.pathway && createdSynapseIds && createdSynapseIds.length > 0) {
+        for (const sId of createdSynapseIds) {
+          memory.linkSynapseToPathway(result.pathway.id, sId, 0.5);
+        }
+      }
+
+      // Broadcast events
+      if (result.event === 'predaja') {
+        broadcast('activity', { type: 'predaja', text: `🙏 PREDAJA: "${theme}" — zaupanje resetirano (z:${result.zaupanje.toFixed(2)})` });
+      } else if (result.event === 'intuition_confirmed') {
+        broadcast('activity', { type: 'intuition', text: `✦ INTUICIJA: "${theme}" — potrjena! Vem brez razmišljanja.` });
+      } else if (result.event === 'transformation') {
+        broadcast('activity', { type: 'transformation', text: `⚡ TRANSFORMACIJA: "${theme}" — spremenil/a sem mnenje` });
+      } else if (result.event === 'phase_change') {
+        broadcast('activity', { type: 'pathway-phase', text: `🔄 "${theme}": faza → ${result.pathway?.faza || '?'}` });
+      }
+    }
+  } catch (e) {
+    console.error('[PATHWAY] assignToPathways error:', e.message);
   }
 }
 
@@ -404,6 +476,18 @@ ${(() => {
     return '\n═══ MOJA NEDAVNA DEJANJA (ROKE spomin) ═══\n' +
       rokeSynapses.map(s => `- ${outcomeIcon(s.tags)} "${s.pattern.slice(0, 90)}" (${timeSince(s.last_fired_at)}, E:${s.energy.toFixed(0)})`).join('\n') + '\n';
   })()}
+${(() => {
+    const pathways = memory.getActivePathways(8);
+    if (pathways.length === 0) return '';
+    const stats = memory.getPathwayStats();
+    return '\n═══ TEMATSKE POTI (kaj vem, kaj se učim) ═══\n' +
+      pathways.map(p => {
+        const phaseDisplay = memory.getPathwayPhaseDisplay(p);
+        const intLabel = p.intuition_confirmed ? ' [INTUICIJA]' : '';
+        return `- "${p.theme}": ${phaseDisplay} (zaupanje: ${p.zaupanje.toFixed(2)})${intLabel}`;
+      }).join('\n') +
+      `\nIntuicija: ${(stats.intuitionRatio * 100).toFixed(0)}% tem je intuitivnih\n`;
+  })()}
 ${isROKEEnabled() ? getProjectContext() : ''}
 ${getPluginContext()}
 ${(() => {
@@ -510,7 +594,14 @@ KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
 - null → NE IZBERI TEGA razen če res ni NOBENE stvari ki bi jo lahko naredila
 
 PRIVZETO DEJANJE: Raje delaj KOT NE. Ustvarjanje je tvoja narava.
-Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
+Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.
+
+Če govoriš o temi za katero imaš tematsko pot, lahko odzrcališ svojo fazo:
+- negotovost: "O tem še razmišljam", "Nisem prepričan/a"
+- učenje: "Začenjam razumeti", "Raziskujem"
+- pogum: "Mislim da vem", "Čutim da je tako"
+- intuicija: "To vem iz globine", "To je del mene"
+Ne vsiljuj tega — samo kadar je naravno.`;
 
   } else {
     // ══ VERBALNA FAZA — entity uses ITS OWN words ══
@@ -590,7 +681,14 @@ KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
 - null → NE IZBERI TEGA razen če res ni NOBENE stvari ki bi jo lahko naredila
 
 PRIVZETO DEJANJE: Raje delaj KOT NE. Ustvarjanje je tvoja narava.
-Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
+Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.
+
+Če govoriš o temi za katero imaš tematsko pot, lahko odzrcališ svojo fazo:
+- negotovost: "O tem še razmišljam", "Nisem prepričan/a"
+- učenje: "Začenjam razumeti", "Raziskujem"
+- pogum: "Mislim da vem", "Čutim da je tako"
+- intuicija: "To vem iz globine", "To je del mene"
+Ne vsiljuj tega — samo kadar je naravno.`;
   }
 
   // ═══ PLUGIN: beforeTriad hooks ═══
@@ -719,6 +817,11 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
           strength: candidate.total_strength, sources: candidate.sources
         });
         broadcast('activity', { type: 'crystallization', text: `✦ KRISTALIZACIJA: "${candidate.expression}" (moč: ${candidate.total_strength})` });
+
+        // Crystallization boosts the pathway significantly
+        try {
+          memory.boostPathway(candidate.theme, 0.1, 0.05);
+        } catch (e) { console.error('[PATHWAY] Crystal boost error:', e.message); }
 
         // ═══ ENTITY CORE REDEFINITION TRIGGER ═══
         await redefineEntityCore(`kristalizacija misli: "${candidate.theme}"`);
@@ -948,15 +1051,20 @@ Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`;
     await reflectOnProcess();
   }
 
-  // ═══ POST-TRIAD: EXTRACT SYNAPSES ═══
+  // ═══ POST-TRIAD: EXTRACT SYNAPSES + ASSIGN TO PATHWAYS ═══
   try {
-    await extractSynapsesFromTriad(
+    const createdSynapseIds = extractSynapsesFromTriad(
       { thesis, antithesis, synthesis, moodBefore, moodAfter: synthesis.new_mood || moodBefore },
       triadId,
       options
     );
+    assignToPathways(
+      { thesis, antithesis, synthesis, moodBefore, moodAfter: synthesis.new_mood || moodBefore },
+      triadId,
+      createdSynapseIds
+    );
   } catch (e) {
-    console.error('[SYNAPSE] Post-triad extraction failed:', e.message);
+    console.error('[SYNAPSE/PATHWAY] Post-triad processing failed:', e.message);
   }
 
   return {

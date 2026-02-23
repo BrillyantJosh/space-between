@@ -119,6 +119,16 @@ async function handleHeartbeat() {
     } catch (e) {
       console.error('[DECAY] Error:', e.message);
     }
+
+    // Pathway decay
+    try {
+      const pathwayDecay = memory.decayPathways();
+      if (pathwayDecay.pruned > 0) {
+        console.log(`[DECAY] 🛤 Pathway decay: ${pathwayDecay.pruned} pruned, ${pathwayDecay.remaining} remaining`);
+      }
+    } catch (e) {
+      console.error('[DECAY] Pathway decay error:', e.message);
+    }
   }
 
   // ═══ PLUGIN HEARTBEAT HOOKS ═══

@@ -247,6 +247,54 @@ db.exec(`
     PRIMARY KEY (plugin_name, key)
   );
 
+  -- ═══ TEMATSKE POTI (Sinaptično Učenje) ═══
+  CREATE TABLE IF NOT EXISTS thematic_pathways (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme TEXT NOT NULL UNIQUE,
+    zaupanje REAL DEFAULT 0.1,
+    togost REAL DEFAULT 0.1,
+    faza TEXT DEFAULT 'negotovost',
+    fire_count INTEGER DEFAULT 1,
+    last_synthesis_hash TEXT DEFAULT '',
+    predaja_count INTEGER DEFAULT 0,
+    intuition_confirmed INTEGER DEFAULT 0,
+    last_predaja_at TEXT DEFAULT NULL,
+    last_fired_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pathways_theme ON thematic_pathways(theme);
+  CREATE INDEX IF NOT EXISTS idx_pathways_zaupanje ON thematic_pathways(zaupanje);
+  CREATE INDEX IF NOT EXISTS idx_pathways_faza ON thematic_pathways(faza);
+
+  CREATE TABLE IF NOT EXISTS pathway_synapses (
+    pathway_id INTEGER NOT NULL REFERENCES thematic_pathways(id),
+    synapse_id INTEGER NOT NULL REFERENCES synapses(id),
+    relevance REAL DEFAULT 0.5,
+    added_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (pathway_id, synapse_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ps_pathway ON pathway_synapses(pathway_id);
+  CREATE INDEX IF NOT EXISTS idx_ps_synapse ON pathway_synapses(synapse_id);
+
+  CREATE TABLE IF NOT EXISTS pathway_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pathway_id INTEGER NOT NULL REFERENCES thematic_pathways(id),
+    event_type TEXT NOT NULL,
+    old_faza TEXT,
+    new_faza TEXT,
+    zaupanje_at_event REAL,
+    togost_at_event REAL,
+    synthesis_snapshot TEXT,
+    triad_id INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ph_pathway ON pathway_history(pathway_id);
+  CREATE INDEX IF NOT EXISTS idx_ph_event ON pathway_history(event_type);
+
   INSERT OR IGNORE INTO inner_state (id) VALUES (1);
 `);
 
@@ -1391,6 +1439,244 @@ const memory = {
     }
 
     return ctx;
+  },
+
+  // ═══ TEMATSKE POTI (Sinaptično Učenje) ═══
+
+  getOrCreatePathway(theme) {
+    let pathway = db.prepare('SELECT * FROM thematic_pathways WHERE theme = ?').get(theme);
+    if (!pathway) {
+      db.prepare('INSERT INTO thematic_pathways (theme) VALUES (?)').run(theme);
+      pathway = db.prepare('SELECT * FROM thematic_pathways WHERE theme = ?').get(theme);
+    }
+    return pathway;
+  },
+
+  linkSynapseToPathway(pathwayId, synapseId, relevance = 0.5) {
+    db.prepare(
+      'INSERT OR IGNORE INTO pathway_synapses (pathway_id, synapse_id, relevance) VALUES (?, ?, ?)'
+    ).run(pathwayId, synapseId, relevance);
+  },
+
+  firePathway(theme, synthesisContent, emotionalValence, triadId) {
+    const pathway = this.getOrCreatePathway(theme);
+
+    const baseIncrement = 0.03;
+    let valenceFactor = 1.0;
+    if (emotionalValence > 0.2) valenceFactor = 1.2;
+    else if (emotionalValence < -0.2) valenceFactor = 0.5;
+
+    const deltaZaupanje = baseIncrement * pathway.togost * valenceFactor;
+    let newZaupanje = Math.min(1.0, pathway.zaupanje + deltaZaupanje);
+    let newTogost = Math.min(1.0, pathway.togost + 0.005 * (1 - pathway.togost));
+    let newFaza = pathway.faza;
+
+    // Predaja trigger
+    if (newZaupanje > 0.85 && pathway.intuition_confirmed === 0) {
+      return this.triggerPredaja(pathway, synthesisContent, triadId);
+    }
+
+    // Post-predaja: first activation after predaja
+    if (pathway.faza === 'odprtost' && pathway.last_synthesis_hash) {
+      const isSimilar = this.synthesisIsSimilar(
+        pathway.last_synthesis_hash,
+        (synthesisContent || '').slice(0, 200)
+      );
+
+      if (isSimilar) {
+        // INTUICIJA POTRJENA
+        newZaupanje = Math.min(1.0, newZaupanje + 0.25);
+        newTogost = Math.min(1.0, newTogost + 0.15);
+        newFaza = 'globlja_sinteza';
+
+        db.prepare(`INSERT INTO pathway_history
+          (pathway_id, event_type, old_faza, new_faza, zaupanje_at_event, togost_at_event, synthesis_snapshot, triad_id)
+          VALUES (?, 'intuition_confirmed', ?, ?, ?, ?, ?, ?)`
+        ).run(pathway.id, pathway.faza, newFaza, newZaupanje, newTogost, (synthesisContent || '').slice(0, 300), triadId);
+
+        db.prepare(`UPDATE thematic_pathways SET
+          zaupanje = ?, togost = ?, faza = ?, fire_count = fire_count + 1,
+          intuition_confirmed = 1, last_fired_at = datetime('now'), updated_at = datetime('now')
+          WHERE id = ?`
+        ).run(newZaupanje, newTogost, newFaza, pathway.id);
+
+        console.log(`[PATHWAY] ✦ INTUICIJA POTRJENA: "${theme}" (z:${newZaupanje.toFixed(2)})`);
+        return { pathway, event: 'intuition_confirmed', zaupanje: newZaupanje };
+      } else {
+        // TRANSFORMACIJA
+        newFaza = 'negotovost';
+        newZaupanje = 0.15;
+        newTogost = 0.1;
+
+        db.prepare(`INSERT INTO pathway_history
+          (pathway_id, event_type, old_faza, new_faza, zaupanje_at_event, togost_at_event, synthesis_snapshot, triad_id)
+          VALUES (?, 'transformation', ?, ?, ?, ?, ?, ?)`
+        ).run(pathway.id, pathway.faza, newFaza, newZaupanje, newTogost, (synthesisContent || '').slice(0, 300), triadId);
+
+        db.prepare(`UPDATE thematic_pathways SET
+          zaupanje = ?, togost = ?, faza = ?, fire_count = fire_count + 1,
+          last_synthesis_hash = ?, last_fired_at = datetime('now'), updated_at = datetime('now')
+          WHERE id = ?`
+        ).run(newZaupanje, newTogost, newFaza, (synthesisContent || '').slice(0, 200), pathway.id);
+
+        console.log(`[PATHWAY] ⚡ TRANSFORMACIJA: "${theme}" — nova smer`);
+        return { pathway, event: 'transformation', zaupanje: newZaupanje };
+      }
+    }
+
+    // Determine phase from zaupanje
+    const oldFaza = pathway.faza;
+    if (newZaupanje < 0.3) newFaza = 'negotovost';
+    else if (newZaupanje < 0.6) newFaza = 'učenje';
+    else if (newZaupanje <= 0.85) newFaza = 'pogum';
+
+    // Log phase transition
+    if (newFaza !== oldFaza) {
+      db.prepare(`INSERT INTO pathway_history
+        (pathway_id, event_type, old_faza, new_faza, zaupanje_at_event, togost_at_event, synthesis_snapshot, triad_id)
+        VALUES (?, 'phase_change', ?, ?, ?, ?, ?, ?)`
+      ).run(pathway.id, oldFaza, newFaza, newZaupanje, newTogost, (synthesisContent || '').slice(0, 300), triadId);
+
+      console.log(`[PATHWAY] 🔄 "${theme}": ${oldFaza} → ${newFaza} (z:${newZaupanje.toFixed(2)})`);
+    }
+
+    // Update pathway
+    db.prepare(`UPDATE thematic_pathways SET
+      zaupanje = ?, togost = ?, faza = ?, fire_count = fire_count + 1,
+      last_synthesis_hash = ?, last_fired_at = datetime('now'), updated_at = datetime('now')
+      WHERE id = ?`
+    ).run(newZaupanje, newTogost, newFaza, (synthesisContent || '').slice(0, 200), pathway.id);
+
+    return { pathway, event: newFaza !== oldFaza ? 'phase_change' : 'activated', zaupanje: newZaupanje };
+  },
+
+  triggerPredaja(pathway, synthesisContent, triadId) {
+    const predajaCount = pathway.predaja_count + 1;
+    const newZaupanje = Math.min(0.65, 0.45 + (0.1 * (predajaCount - 1)));
+    const newTogost = Math.max(0.1, pathway.togost * 0.3);
+    const newFaza = 'odprtost';
+
+    db.prepare(`INSERT INTO pathway_history
+      (pathway_id, event_type, old_faza, new_faza, zaupanje_at_event, togost_at_event, synthesis_snapshot, triad_id)
+      VALUES (?, 'predaja', ?, ?, ?, ?, ?, ?)`
+    ).run(pathway.id, pathway.faza, newFaza, newZaupanje, newTogost, (synthesisContent || '').slice(0, 300), triadId);
+
+    db.prepare(`UPDATE thematic_pathways SET
+      zaupanje = ?, togost = ?, faza = ?, predaja_count = ?,
+      last_predaja_at = datetime('now'), last_synthesis_hash = ?,
+      fire_count = fire_count + 1, last_fired_at = datetime('now'), updated_at = datetime('now')
+      WHERE id = ?`
+    ).run(newZaupanje, newTogost, newFaza, predajaCount, (synthesisContent || '').slice(0, 200), pathway.id);
+
+    console.log(`[PATHWAY] 🙏 PREDAJA #${predajaCount}: "${pathway.theme}" (z:${pathway.zaupanje.toFixed(2)} → ${newZaupanje.toFixed(2)})`);
+    return { pathway, event: 'predaja', zaupanje: newZaupanje, predajaCount };
+  },
+
+  synthesisIsSimilar(text1, text2) {
+    if (!text1 || !text2) return false;
+    // Slovenian stop words to filter out common words that inflate overlap
+    const stopWords = new Set([
+      'biti', 'imeti', 'lahko', 'zelo', 'tudi', 'samo', 'tako', 'zato', 'ampak',
+      'kako', 'kje', 'kdaj', 'kdo', 'kar', 'kajti', 'kadar', 'čeprav', 'vendar',
+      'potem', 'nato', 'torej', 'sicer', 'toda', 'zmeraj', 'vedno', 'nikoli',
+      'nekaj', 'nič', 'vse', 'vsak', 'eden', 'drug', 'svoj', 'njega', 'njej',
+      'temu', 'tega', 'tisti', 'takšen', 'takšna', 'takšno', 'kateri', 'katera',
+      'katero', 'katerega', 'kateremu', 'skozi', 'okrog', 'okoli', 'znotraj',
+      'zunaj', 'pred', 'med', 'brez', 'preko', 'proti', 'glede', 'zaradi',
+      'skupaj', 'posebej', 'mogoče', 'morda', 'verjetno', 'pravzaprav',
+      'dejansko', 'preprosto', 'enostavno', 'obenem', 'hkrati',
+      'more', 'mora', 'moramo', 'moraš', 'morajo',
+      'about', 'with', 'from', 'that', 'this', 'have', 'been', 'will', 'would',
+      'could', 'should', 'their', 'there', 'these', 'those', 'which', 'where',
+      'when', 'what', 'some', 'other', 'each', 'every', 'into', 'through',
+    ]);
+    const filterWords = (text) =>
+      text.toLowerCase().split(/\s+/)
+        .filter(w => w.length > 3 && !stopWords.has(w));
+    const words1 = filterWords(text1);
+    const words2 = filterWords(text2);
+    if (words1.length === 0 || words2.length === 0) return false;
+    const overlap = words1.filter(w => words2.includes(w)).length;
+    const similarity = overlap / Math.max(words1.length, words2.length);
+    return similarity > 0.55;
+  },
+
+  decayPathways() {
+    db.prepare(`UPDATE thematic_pathways SET
+      zaupanje = zaupanje * 0.998, togost = togost * 0.999, updated_at = datetime('now')
+      WHERE intuition_confirmed = 0`
+    ).run();
+
+    const pruned = db.prepare(
+      "DELETE FROM thematic_pathways WHERE zaupanje < 0.02 AND last_fired_at < datetime('now', '-7 days')"
+    ).run();
+
+    if (pruned.changes > 0) {
+      db.prepare('DELETE FROM pathway_synapses WHERE pathway_id NOT IN (SELECT id FROM thematic_pathways)').run();
+      db.prepare('DELETE FROM pathway_history WHERE pathway_id NOT IN (SELECT id FROM thematic_pathways)').run();
+    }
+
+    const remaining = db.prepare('SELECT COUNT(*) as c FROM thematic_pathways').get().c;
+    return { remaining, pruned: pruned.changes };
+  },
+
+  getActivePathways(limit = 8) {
+    return db.prepare(
+      'SELECT * FROM thematic_pathways WHERE zaupanje >= 0.05 ORDER BY (zaupanje * fire_count) DESC LIMIT ?'
+    ).all(limit);
+  },
+
+  getPathwayStats() {
+    const total = db.prepare('SELECT COUNT(*) as c FROM thematic_pathways WHERE zaupanje >= 0.05').get().c;
+    const intuitionCount = db.prepare('SELECT COUNT(*) as c FROM thematic_pathways WHERE intuition_confirmed = 1').get().c;
+    const intuitionRatio = total > 0 ? intuitionCount / total : 0;
+
+    const allActive = db.prepare('SELECT zaupanje, togost FROM thematic_pathways WHERE zaupanje >= 0.05').all();
+    const processingSpeed = allActive.length > 0
+      ? allActive.reduce((sum, p) => sum + (p.zaupanje * p.togost), 0) / allActive.length
+      : 0;
+
+    return { total, intuitionCount, intuitionRatio, processingSpeed };
+  },
+
+  findPathwayByTheme(themeWords) {
+    if (!themeWords || themeWords.length === 0) return null;
+    const exact = db.prepare('SELECT * FROM thematic_pathways WHERE theme = ?').get(themeWords);
+    if (exact) return exact;
+    const words = themeWords.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (words.length === 0) return null;
+    const conditions = words.map(w => `LOWER(theme) LIKE '%' || ? || '%'`).join(' OR ');
+    try {
+      return db.prepare(`SELECT * FROM thematic_pathways WHERE (${conditions}) ORDER BY zaupanje DESC LIMIT 1`).get(...words) || null;
+    } catch (_) {
+      return null;
+    }
+  },
+
+  getPathwayPhaseDisplay(pathway) {
+    const phaseNames = {
+      'negotovost': 'negotovost (še ne vem)',
+      'učenje': 'učenje (raziskujem)',
+      'pogum': 'pogum (vem, ampak preverjam)',
+      'odprtost': 'odprtost (po predaji, svež pogled)',
+      'globlja_sinteza': 'intuicija (vem iz globine)',
+    };
+    return phaseNames[pathway.faza] || pathway.faza;
+  },
+
+  boostPathway(theme, zaupanjeBoost, togostBoost) {
+    const pw = this.getOrCreatePathway(theme);
+    if (!pw) return;
+    db.prepare(`UPDATE thematic_pathways SET
+      zaupanje = MIN(1.0, zaupanje + ?), togost = MIN(1.0, togost + ?), updated_at = datetime('now')
+      WHERE id = ?`
+    ).run(zaupanjeBoost, togostBoost, pw.id);
+  },
+
+  getPathwaysForSynapse(synapseId) {
+    return db.prepare(
+      'SELECT tp.* FROM thematic_pathways tp JOIN pathway_synapses ps ON tp.id = ps.pathway_id WHERE ps.synapse_id = ?'
+    ).all(synapseId);
   }
 };
 

@@ -18,6 +18,18 @@ async function consolidateMemories(dreamResult) {
     memory.fireSynapse(s.id);
   }
 
+  // 2b. Strengthen pathways associated with active dream synapses
+  try {
+    for (const s of topSynapses) {
+      const relatedPathways = memory.getPathwaysForSynapse(s.id);
+      for (const pw of relatedPathways) {
+        memory.firePathway(pw.theme, dreamResult.insight || '', 0.2, null);
+      }
+    }
+  } catch (e) {
+    console.error('[DREAM] Pathway firing error:', e.message);
+  }
+
   // 3. Extract synapse from dream insight
   const insight = dreamResult.insight || dreamResult.dream_narrative || '';
   let newSynapseId = null;
