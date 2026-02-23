@@ -3,12 +3,51 @@ import { broadcast } from './dashboard.js';
 import config from './config.js';
 import memory from './memory.js';
 import { runTriad } from './triad.js';
+import { verifyEvent } from 'nostr-tools/pure';
+import { getIdentity } from './nostr.js';
+
+// ═══ NIP-98 NOSTR avtentikacija ═══
+function verifyNostrAuth(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Nostr ')) {
+    req.nostrPubkey = null;
+    req.nostrVerified = false;
+    return next();
+  }
+  try {
+    const eventJson = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+    const event = JSON.parse(eventJson);
+    if (event.kind !== 27235) {
+      req.nostrPubkey = null;
+      req.nostrVerified = false;
+      return next();
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - event.created_at) > 60) {
+      req.nostrPubkey = null;
+      req.nostrVerified = false;
+      return next();
+    }
+    const isValid = verifyEvent(event);
+    req.nostrPubkey = isValid ? event.pubkey : null;
+    req.nostrVerified = isValid;
+    next();
+  } catch (e) {
+    console.error('[API] Auth error:', e.message);
+    req.nostrPubkey = null;
+    req.nostrVerified = false;
+    next();
+  }
+}
+
+// Registriraj na vse /api routes
+app.use('/api', verifyNostrAuth);
 
 // ═══ CORS middleware za Mejmo se Fajn ═══
 function cors(req, res, next) {
   res.header('Access-Control-Allow-Origin', config.apiCorsOrigin || '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 }
@@ -17,6 +56,7 @@ app.use('/api/message', cors);
 app.use('/api/listen', cors);
 app.use('/api/mode', cors);
 app.use('/api/state/live', cors);
+app.use('/api/auth/challenge', cors);
 
 // ═══ Rate limiting (simple in-memory) ═══
 const rateLimit = { count: 0, resetAt: 0 };
@@ -41,14 +81,22 @@ const listenBuffers = {}; // sessId → [chunks]
 // ═══════════════════════════════════════════════════════════════════════
 app.post('/api/message', checkRateLimit, async (req, res) => {
   try {
-    const { content, pubkey, mode, speaker_label } = req.body;
+    const { content, mode, speaker_label } = req.body;
     if (!content) return res.status(400).json({ error: 'content required' });
 
+    const pubkey = req.nostrPubkey || 'guest_' + Date.now();
+    const isVerified = req.nostrVerified;
+
     const effectiveMode = mode || activeMode;
-    const effectivePubkey = pubkey || 'api-anonymous';
+    const effectivePubkey = pubkey;
 
     memory.touchInteraction();
-    if (effectivePubkey !== 'api-anonymous') memory.touchIdentity(effectivePubkey);
+    if (isVerified) {
+      memory.touchIdentity(pubkey);
+      console.log(`[API] \u2713 Verified: ${pubkey.slice(0, 12)}...`);
+    } else {
+      console.log(`[API] ? Unverified guest`);
+    }
 
     // ─── LISTENING: samo kristaliziraj, ne odgovarjaj ───
     if (effectiveMode === 'listening') {
@@ -103,12 +151,14 @@ app.post('/api/message', checkRateLimit, async (req, res) => {
     const history = memory.getConversation(effectivePubkey, config.maxConversationHistory);
     let conversationContext;
 
+    const guestPrefix = !isVerified ? '(Gost brez NOSTR verifikacije \u2014 identiteta ni zanesljiva)\n\n' : '';
+
     if (effectiveMode === 'group') {
       // GROUP mode: dodaj kontekst skupine
-      conversationContext = `=== SKUPINSKI POGOVOR ===\n${identityInfo}\nGovore\u010D: ${speaker_label || 'neznanec'}\nSi v skupinskem pogovoru. Odzivaj se ko je primerno, ne na vsako sporo\u010Dilo.\n\n` +
+      conversationContext = guestPrefix + `=== SKUPINSKI POGOVOR ===\n${identityInfo}\nGovore\u010D: ${speaker_label || 'neznanec'}\nSi v skupinskem pogovoru. Odzivaj se ko je primerno, ne na vsako sporo\u010Dilo.\n\n` +
         history.map(m => `${m.role === 'user' ? (speaker_label || 'neznanec') : 'jaz'}: ${m.content}`).join('\n');
     } else {
-      conversationContext = `=== SOGOVORNIK ===\n${identityInfo}\n\n` +
+      conversationContext = guestPrefix + `=== SOGOVORNIK ===\n${identityInfo}\n\n` +
         history.map(m => `${m.role === 'user' ? (identity?.name || speaker_label || 'neznanec') : 'jaz'}: ${m.content}`).join('\n');
     }
 
@@ -165,6 +215,7 @@ app.post('/api/message', checkRateLimit, async (req, res) => {
 app.post('/api/listen', checkRateLimit, async (req, res) => {
   try {
     const { chunk, speaker_label, session_id, silence_detected } = req.body;
+    const pubkey = req.nostrPubkey || null;
     if (!chunk) return res.status(400).json({ error: 'chunk required' });
 
     const sessId = session_id || 'default';
@@ -185,9 +236,14 @@ app.post('/api/listen', checkRateLimit, async (req, res) => {
       return res.json({ received: true, crystallized: false, synapse_id: null });
     }
 
+    const tags = [
+      'source:voice',
+      `session:${sessId}`,
+      pubkey ? `person:${pubkey}` : 'person:anonymous',
+      req.nostrVerified ? 'verified:true' : 'verified:false'
+    ];
     const synapseId = memory.createSynapse(
-      fullText.slice(0, 300), 80, 0.4, 0, 'listening', null,
-      ['source:voice', `session:${sessId}`, `speaker:${speaker_label || 'unknown'}`]
+      fullText.slice(0, 300), 80, 0.4, 0, 'listening', null, tags
     );
 
     broadcast('activity', { type: 'listen', text: `\u{1F3A4} Sli\u0161al: "${fullText.slice(0, 100)}" [${speaker_label || '?'}]` });
@@ -248,9 +304,21 @@ app.post('/api/mode', checkRateLimit, (req, res) => {
 });
 
 
+// ═══════════════════════════════════════════════════════════════════════
+// GET /api/auth/challenge — NIP-98 challenge za klienta
+// ═══════════════════════════════════════════════════════════════════════
+app.get('/api/auth/challenge', (req, res) => {
+  res.json({
+    timestamp: Math.floor(Date.now() / 1000),
+    pubkey: getIdentity().pubkey
+  });
+});
+
+
 // ═══ Export ═══
 export function startAPI() {
   console.log(`[API] REST API endpoints registered on port ${config.dashboardPort}`);
   console.log(`[API] CORS: ${config.apiCorsOrigin || '*'}`);
-  console.log(`[API] Endpoints: POST /api/message, POST /api/listen, GET /api/state/live, POST /api/mode`);
+  console.log(`[API] Endpoints: POST /api/message, POST /api/listen, GET /api/state/live, POST /api/mode, GET /api/auth/challenge`);
+  console.log(`[API] NIP-98 NOSTR auth: active`);
 }
