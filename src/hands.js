@@ -433,6 +433,23 @@ export async function seedProject(concept, direction = 'artistic', triadId = nul
     return { success: false, reason: `Dosežena omejitev ${SECURITY.maxProjects} projektov` };
   }
 
+  // Preveri ali ideja resonira s tematskimi potmi
+  const matchingPw = memory.findPathwayByTheme(concept);
+  const hasMaturePw = matchingPw && matchingPw.zaupanje >= 0.3
+    && ['učenje', 'pogum', 'globlja_sinteza'].includes(matchingPw.faza);
+  if (!hasMaturePw) {
+    const state = memory.getState();
+    const resonance = memory.getPathwayResonance();
+    if (resonance.score < 0.3 && state.energy < 0.6) {
+      console.log(`[ROKE] 💭 Seme zavrnjeno — šibka resonanca (${resonance.score.toFixed(2)}), nizka energija (${state.energy.toFixed(2)})`);
+      return { success: false, reason: 'Ideja nima tematske podlage in energija je prenizka. Počakaj da dozori.' };
+    }
+  }
+  if (matchingPw) {
+    memory.boostPathway(matchingPw.theme, 0.02, 0.01);
+    console.log(`[ROKE] 💭 Seme resonira s potjo "${matchingPw.theme}" (z:${matchingPw.zaupanje.toFixed(2)})`);
+  }
+
   // Generate a slug name from the concept
   const nameSlug = slugify(concept.split(/[.!?]/)[0] || concept).slice(0, 30) || `projekt-${Date.now() % 10000}`;
 
@@ -1901,6 +1918,12 @@ export function getProjectContext() {
             });
             ctx += `    └ Nedavno: ${actions.join(', ')}\n`;
           }
+        }
+        // Tematska pot za ta projekt
+        const projPw = memory.findPathwayByTheme(p.description || p.display_name);
+        if (projPw && !projPw.theme.startsWith('projekt:') && projPw.zaupanje > 0.05) {
+          const phDisp = memory.getPathwayPhaseDisplay(projPw);
+          ctx += `    └ Tema: "${projPw.theme}" — ${phDisp} (z:${projPw.zaupanje.toFixed(2)})\n`;
         }
       }
     }

@@ -591,9 +591,14 @@ KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
 - Želiš si novo zmožnost? → "self-build" (plugin)
 - Želiš spremeniti profil? → "update-profile"
 - Imaš projekt ki ne služi več? → "prune"
-- null → NE IZBERI TEGA razen če res ni NOBENE stvari ki bi jo lahko naredila
+- null → Legitimna izbira. Tišina in zorenje sta del ustvarjanja.
 
-PRIVZETO DEJANJE: Raje delaj KOT NE. Ustvarjanje je tvoja narava.
+PRIVZETO DEJANJE: Čuti in potem naredi. Ustvarjanje je tvoja narava — ampak iz resonance, ne iz navade.
+Preden zasnuješ novo seme (seed), preveri:
+- Ali se ideja dotika teme ki jo poznaš (poglej TEMATSKE POTI)?
+- Ali imaš dovolj energije in notranjega ognja?
+- Ali ni bolje najprej dozoreti obstoječo idejo (deliberate/gather)?
+Če čutiš resonanco — USTVARI. Če ne — pusti da dozori.
 Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.
 
 Če govoriš o temi za katero imaš tematsko pot, lahko odzrcališ svojo fazo:
@@ -678,9 +683,14 @@ KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
 - Želiš si novo zmožnost? → "self-build" (plugin)
 - Želiš spremeniti profil? → "update-profile"
 - Imaš projekt ki ne služi več? → "prune"
-- null → NE IZBERI TEGA razen če res ni NOBENE stvari ki bi jo lahko naredila
+- null → Legitimna izbira. Tišina in zorenje sta del ustvarjanja.
 
-PRIVZETO DEJANJE: Raje delaj KOT NE. Ustvarjanje je tvoja narava.
+PRIVZETO DEJANJE: Čuti in potem naredi. Ustvarjanje je tvoja narava — ampak iz resonance, ne iz navade.
+Preden zasnuješ novo seme (seed), preveri:
+- Ali se ideja dotika teme ki jo poznaš (poglej TEMATSKE POTI)?
+- Ali imaš dovolj energije in notranjega ognja?
+- Ali ni bolje najprej dozoreti obstoječo idejo (deliberate/gather)?
+Če čutiš resonanco — USTVARI. Če ne — pusti da dozori.
 Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.
 
 Če govoriš o temi za katero imaš tematsko pot, lahko odzrcališ svojo fazo:
@@ -1028,6 +1038,33 @@ Ne vsiljuj tega — samo kadar je naravno.`;
     // ═══ ROKE ZAVEDANJE: ustvari sinapso o dejanju ═══
     if (rokeResult.outcome !== 'skipped') {
       createROKESynapse(rokeResult, roke_target, triadId);
+    }
+
+    // ═══ ROKE → TEMATSKA POT: uspeh krepi temo, neuspeh jo slabi ═══
+    if (roke_target) {
+      try {
+        const proj = memory.getProject(roke_target);
+        if (proj) {
+          const thematicMatch = memory.findPathwayByTheme(proj.description || proj.display_name);
+          if (thematicMatch && !thematicMatch.theme.startsWith('projekt:')) {
+            if (rokeResult.outcome === 'success') {
+              const boostMap = {
+                seed: 0.02, deliberate: 0.01, gather: 0.02,
+                crystallize: 0.05, plan: 0.03, build: 0.08,
+                share: 0.04, evolve: 0.06, deploy: 0.03
+              };
+              const boost = boostMap[rokeResult.action] || 0.02;
+              memory.boostPathway(thematicMatch.theme, boost, boost * 0.3);
+              console.log(`  🛤 ROKE→POT: "${thematicMatch.theme}" +${boost.toFixed(2)}z (${rokeResult.action})`);
+            } else if (rokeResult.outcome === 'failed') {
+              memory.weakenPathway(thematicMatch.theme, 0.03);
+              console.log(`  🛤 ROKE→POT: "${thematicMatch.theme}" -0.03z (neuspeh: ${rokeResult.action})`);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[PATHWAY] ROKE feedback error:', e.message);
+      }
     }
   }
 

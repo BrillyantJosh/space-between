@@ -1038,6 +1038,18 @@ const memory = {
     // Fallback: 5+ self-deliberations with no external input (nobody to ask)
     if (selfDelibs >= 5 && uniqueExternal === 0) return true;
 
+    // Pathway maturity bonus: zrela tematska pot znižuje prag
+    const thematicMatch = this.findPathwayByTheme(project.description || project.display_name);
+    if (thematicMatch && !thematicMatch.theme.startsWith('projekt:')) {
+      if (thematicMatch.faza === 'pogum' || thematicMatch.faza === 'globlja_sinteza') {
+        if (uniqueExternal >= 1) return true;
+        if (selfDelibs >= 3) return true;
+      }
+      if (thematicMatch.faza === 'učenje' && thematicMatch.zaupanje > 0.4) {
+        if (uniqueExternal >= 1 && selfDelibs >= 2) return true;
+      }
+    }
+
     return false;
   },
 
@@ -1637,6 +1649,35 @@ const memory = {
       : 0;
 
     return { total, intuitionCount, intuitionRatio, processingSpeed };
+  },
+
+  getPathwayResonance() {
+    const active = this.getActivePathways(10);
+    if (active.length === 0) return { score: 0.5, heatLevel: 'warming', readyThemes: [] };
+    const top5 = active.slice(0, 5);
+    const avgZ = top5.reduce((s, p) => s + p.zaupanje, 0) / top5.length;
+    const hasCourage = active.some(p => ['pogum', 'globlja_sinteza'].includes(p.faza));
+    const hasIntuition = active.some(p => p.intuition_confirmed === 1);
+    const mostUncertain = active.filter(p => p.faza === 'negotovost').length > active.length * 0.7;
+    let score = avgZ;
+    if (hasCourage) score += 0.15;
+    if (hasIntuition) score += 0.1;
+    if (mostUncertain) score -= 0.15;
+    score = Math.max(0, Math.min(1, score));
+    const recentFires = db.prepare(
+      "SELECT COUNT(*) as c FROM thematic_pathways WHERE last_fired_at > datetime('now', '-1 hour')"
+    ).get().c;
+    const heatLevel = recentFires <= 1 ? 'cold' : recentFires <= 3 ? 'warming' : recentFires <= 6 ? 'warm' : 'hot';
+    const readyThemes = active.filter(p => p.zaupanje >= 0.3 && p.faza !== 'negotovost');
+    return { score, heatLevel, readyThemes, recentFires };
+  },
+
+  weakenPathway(theme, amount) {
+    const pw = db.prepare('SELECT * FROM thematic_pathways WHERE theme = ?').get(theme);
+    if (!pw) return;
+    const newZ = Math.max(0.02, pw.zaupanje - amount);
+    db.prepare("UPDATE thematic_pathways SET zaupanje = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(newZ, pw.id);
   },
 
   findPathwayByTheme(themeWords) {

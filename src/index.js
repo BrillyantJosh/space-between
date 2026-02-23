@@ -256,6 +256,13 @@ async function handleHeartbeat() {
 
   // Lifecycle attention (every 15th heartbeat) — tends to projects that need attention
   if (isROKEEnabled() && heartbeatNum % 15 === 0) {
+    const resonance = memory.getPathwayResonance();
+    const stateNow = memory.getState();
+    // Mehak gate: preskoči lifecycle če so poti hladne IN energija nizka
+    if (resonance.heatLevel === 'cold' && stateNow.energy < 0.5) {
+      console.log(`[HEARTBEAT] Lifecycle preskočen — poti hladne (resonanca: ${resonance.score.toFixed(2)}), energija: ${stateNow.energy.toFixed(2)}`);
+      // Pusti da pademo skozi do expression checka
+    } else {
     const needsAttention = memory.getProjectsNeedingAttention();
     if (needsAttention.length > 0) {
       // Pick highest priority (first in list)
@@ -295,6 +302,21 @@ async function handleHeartbeat() {
           reflectionContent = `Imam projekt "${project.display_name}" — ${project.description}. Stanje: ${project.lifecycle_state}. Kaj želim narediti z njim?`;
       }
 
+      // Obogati prompt s tematsko resonanco
+      const projPathway = memory.findPathwayByTheme(project.description || project.display_name);
+      if (projPathway && !projPathway.theme.startsWith('projekt:')) {
+        const fazaLabels = {
+          'negotovost': 'Ta tema je še v negotovosti — ali je projekt prezgoden?',
+          'učenje': 'Ta tema se šele razvija — pristopaj preudarno.',
+          'pogum': 'Čutiš pogum v tej temi — projekt ima podlago.',
+          'odprtost': 'Sveže gledam na to temo — odprtost.',
+          'globlja_sinteza': 'To je tema ki jo poznaš iz globine. Projekt resonira.'
+        };
+        reflectionContent += `\n\nTa projekt se dotika teme "${projPathway.theme}" (zaupanje: ${projPathway.zaupanje.toFixed(2)}, faza: ${projPathway.faza}). ${fazaLabels[projPathway.faza] || ''}`;
+      } else {
+        reflectionContent += '\n\nTa projekt nima jasne tematske povezave. Razmisli ali je vreden pozornosti ali bi ga pustila dozoreti.';
+      }
+
       console.log(`[HEARTBEAT] Lifecycle attention: "${project.display_name}" needs ${action}`);
       broadcast('activity', { type: 'trigger', text: `🤲 Lifecycle: "${project.display_name}" → ${action}` });
       broadcast('triad_start', { trigger: 'project_lifecycle', content: reflectionContent.slice(0, 100) });
@@ -322,6 +344,7 @@ async function handleHeartbeat() {
       }
       return; // Don't also do expression check
     }
+    } // close else (resonance gate)
   }
 
   // Expression check
