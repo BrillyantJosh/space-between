@@ -3789,6 +3789,8 @@ app.get('/', (req, res) => {
   res.send(DASHBOARD_HTML);
 });
 
+export { app };
+
 export function startDashboard() {
   return new Promise((resolve) => {
     app.listen(config.dashboardPort, '0.0.0.0', () => {

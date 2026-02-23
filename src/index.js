@@ -10,6 +10,7 @@ import { startDashboard, broadcast } from './dashboard.js';
 import { isROKEEnabled, receiveProjectFeedback, deployService, checkService, crystallizeProject } from './hands.js';
 import { getRunningServices, healthCheck as sandboxHealthCheck } from './sandbox.js';
 import { loadAllPlugins, runHeartbeatHooks, getPluginCount } from './plugins.js';
+import { startAPI } from './api.js';
 
 // Feed buffer for world sensing
 const feedBuffer = [];
@@ -638,6 +639,9 @@ async function main() {
 
   // Start dashboard
   await startDashboard();
+
+  // Start REST API (endpoints on same Express app)
+  await startAPI();
 
   // Connect to NOSTR
   await connectRelays();
