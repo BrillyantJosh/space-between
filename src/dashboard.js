@@ -121,35 +121,49 @@ app.get('/api/identity', (req, res) => {
   }
 });
 
-// API: conversations list (all users who chatted with entity)
+// API: conversations list (grouped by channel)
 app.get('/api/conversations', async (req, res) => {
   try {
-    const identities = memory.getAllIdentities();
-    const pubkeys = identities.map(i => i.pubkey);
+    const identities = memory.getIdentitiesWithChannel();
 
-    // Fetch NOSTR KIND 0 profiles for all pubkeys
+    // Separate NOSTR and API/guest users
+    const nostrIdentities = identities.filter(i => !i.pubkey.startsWith('guest_') && (i.last_channel === 'nostr' || i.nostr_count > 0));
+    const apiIdentities = identities.filter(i => i.pubkey.startsWith('guest_') || (i.last_channel === 'api' && i.nostr_count === 0));
+
+    // Fetch NOSTR KIND 0 profiles only for real pubkeys (not guests)
+    const nostrPubkeys = nostrIdentities.map(i => i.pubkey);
     let profiles = {};
-    try {
-      profiles = await fetchProfiles(pubkeys);
-    } catch (_) {}
+    if (nostrPubkeys.length > 0) {
+      try {
+        profiles = await fetchProfiles(nostrPubkeys);
+      } catch (_) {}
+    }
 
-    const users = identities.map(i => {
-      const profile = profiles[i.pubkey] || {};
+    const mapUser = (i, channel) => {
+      const isGuest = i.pubkey.startsWith('guest_');
+      const profile = isGuest ? {} : (profiles[i.pubkey] || {});
       const lastMsg = memory.getConversation(i.pubkey, 1);
       return {
         pubkey: i.pubkey,
-        name: profile.name || profile.display_name || i.name || 'neznanec',
-        picture: profile.picture || '',
-        nip05: profile.nip05 || '',
+        name: isGuest ? 'Gost' : (profile.name || profile.display_name || i.name || 'neznanec'),
+        picture: isGuest ? '' : (profile.picture || ''),
+        nip05: isGuest ? '' : (profile.nip05 || ''),
         notes: i.notes,
         interactionCount: i.interaction_count,
         firstSeen: i.first_seen,
         lastSeen: i.last_seen,
-        lastMessage: lastMsg.length > 0 ? lastMsg[lastMsg.length - 1] : null
+        lastMessage: lastMsg.length > 0 ? lastMsg[lastMsg.length - 1] : null,
+        channel,
+        nostrCount: i.nostr_count || 0,
+        apiCount: i.api_count || 0,
+        isGuest
       };
-    });
+    };
 
-    res.json({ users });
+    const nostrUsers = nostrIdentities.map(i => mapUser(i, 'nostr'));
+    const apiUsers = apiIdentities.map(i => mapUser(i, 'api'));
+
+    res.json({ nostrUsers, apiUsers, users: [...nostrUsers, ...apiUsers] });
   } catch (err) {
     console.error('[DASHBOARD] Conversations error:', err);
     res.status(500).json({ error: err.message });
@@ -162,7 +176,9 @@ app.get('/api/conversations/:pubkey', (req, res) => {
     const { pubkey } = req.params;
     const messages = memory.getConversation(pubkey, 1000);
     const identity = memory.getIdentity(pubkey);
-    res.json({ pubkey, identity, messages });
+    const isGuest = pubkey.startsWith('guest_');
+    const channel = isGuest ? 'api' : 'nostr';
+    res.json({ pubkey, identity, messages, channel, isGuest });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1036,6 +1052,34 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     color: var(--silence);
     font-style: italic;
   }
+  .conv-channel-header {
+    padding: 0.5rem 1rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--text-secondary);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  .conv-channel-header.nostr { border-left: 3px solid #8b5cf6; }
+  .conv-channel-header.api { border-left: 3px solid #f59e0b; }
+  .conv-channel-badge {
+    display: inline-block;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.5rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+  }
+  .conv-channel-badge.nostr { background: rgba(139,92,246,0.2); color: #a78bfa; }
+  .conv-channel-badge.api { background: rgba(245,158,11,0.2); color: #fbbf24; }
+  .conv-user.guest .conv-user-avatar { background: rgba(245,158,11,0.15); color: #fbbf24; }
   .conv-msg .conv-role {
     font-size: 0.55rem;
     text-transform: uppercase;
@@ -2416,6 +2460,7 @@ const UI_STRINGS = {
     noConversations: 'Še ni pogovorov.', loadingConversations: 'Nalagam pogovore...',
     loading: 'Nalagam...', selectConversation: 'Izberi pogovor na levi.',
     interactions: 'interakcij', silence: 'tišina', noMessages: 'Ni sporočil.',
+    channelNostr: '\uD83D\uDFE3 Nostr pogovori', channelApi: '\uD83D\uDFE1 API pogovori', guestLabel: 'Gost',
     // Projects tab
     handsNotConfigured: '🤲 Roke niso konfigurirane',
     seedsCount: 'semen', inReview: 'v razmisleku', activeCount: 'aktivnih', abandonedCount: 'opuščenih',
@@ -2492,6 +2537,7 @@ const UI_STRINGS = {
     noConversations: 'No conversations yet.', loadingConversations: 'Loading conversations...',
     loading: 'Loading...', selectConversation: 'Select a conversation on the left.',
     interactions: 'interactions', silence: 'silence', noMessages: 'No messages.',
+    channelNostr: '\uD83D\uDFE3 Nostr conversations', channelApi: '\uD83D\uDFE1 API conversations', guestLabel: 'Guest',
     // Projects tab
     handsNotConfigured: '🤲 Hands not configured',
     seedsCount: 'seeds', inReview: 'in review', activeCount: 'active', abandonedCount: 'abandoned',
@@ -3331,6 +3377,33 @@ async function loadIdentity() {
   }
 }
 
+function createConvUserElement(user) {
+  const div = document.createElement('div');
+  div.className = 'conv-user' + (selectedConvPubkey === user.pubkey ? ' active' : '') + (user.isGuest ? ' guest' : '');
+  div.setAttribute('data-pubkey', user.pubkey);
+  div.onclick = function() { openConversation(user.pubkey, user.name, user.picture, user.channel); };
+
+  const avatarContent = user.isGuest
+    ? '\uD83D\uDC64'
+    : (user.picture
+      ? '<img src="' + escapeHtml(user.picture) + '" onerror="this.parentNode.textContent=\\'◈\\'" />'
+      : '◈');
+  const preview = user.lastMessage
+    ? (user.lastMessage.role === 'user' ? '→ ' : '← ') + (user.lastMessage.content || '').slice(0, 40)
+    : '';
+  const timeSince = user.lastSeen ? timeAgo(user.lastSeen) : '';
+  const channelBadge = '<span class="conv-channel-badge ' + (user.channel || 'nostr') + '">' + (user.channel === 'api' ? 'API' : 'NOSTR') + '</span>';
+
+  div.innerHTML =
+    '<div class="conv-user-avatar">' + avatarContent + '</div>' +
+    '<div class="conv-user-info">' +
+      '<div class="conv-user-name">' + escapeHtml(user.isGuest ? (t('guestLabel') + ' ' + user.pubkey.slice(6, 14)) : user.name) + channelBadge + '</div>' +
+      '<div class="conv-user-preview">' + escapeHtml(preview) + '</div>' +
+    '</div>' +
+    '<div class="conv-user-meta">' + escapeHtml(timeSince) + '<br>' + user.interactionCount + 'x</div>';
+  return div;
+}
+
 async function loadConversations() {
   const sidebar = $('convSidebar');
   sidebar.innerHTML = '<div class="conv-empty">Nalagam...</div>';
@@ -3340,41 +3413,43 @@ async function loadConversations() {
     const data = await res.json();
     conversationsLoaded = true;
 
-    if (!data.users || data.users.length === 0) {
+    const nostrUsers = data.nostrUsers || [];
+    const apiUsers = data.apiUsers || [];
+
+    if (nostrUsers.length === 0 && apiUsers.length === 0) {
       sidebar.innerHTML = '<div class="conv-empty">' + t('noConversations') + '</div>';
       return;
     }
 
     sidebar.innerHTML = '';
-    for (const user of data.users) {
-      const div = document.createElement('div');
-      div.className = 'conv-user' + (selectedConvPubkey === user.pubkey ? ' active' : '');
-      div.setAttribute('data-pubkey', user.pubkey);
-      div.onclick = function() { openConversation(user.pubkey, user.name, user.picture); };
 
-      const avatarContent = user.picture
-        ? '<img src="' + escapeHtml(user.picture) + '" onerror="this.parentNode.textContent=\\'◈\\'" />'
-        : '◈';
-      const preview = user.lastMessage
-        ? (user.lastMessage.role === 'user' ? '→ ' : '← ') + (user.lastMessage.content || '').slice(0, 40)
-        : '';
-      const timeSince = user.lastSeen ? timeAgo(user.lastSeen) : '';
+    // NOSTR section
+    if (nostrUsers.length > 0) {
+      const nostrHeader = document.createElement('div');
+      nostrHeader.className = 'conv-channel-header nostr';
+      nostrHeader.textContent = t('channelNostr') + ' (' + nostrUsers.length + ')';
+      sidebar.appendChild(nostrHeader);
+      for (const user of nostrUsers) {
+        sidebar.appendChild(createConvUserElement(user));
+      }
+    }
 
-      div.innerHTML =
-        '<div class="conv-user-avatar">' + avatarContent + '</div>' +
-        '<div class="conv-user-info">' +
-          '<div class="conv-user-name">' + escapeHtml(user.name) + '</div>' +
-          '<div class="conv-user-preview">' + escapeHtml(preview) + '</div>' +
-        '</div>' +
-        '<div class="conv-user-meta">' + escapeHtml(timeSince) + '<br>' + user.interactionCount + 'x</div>';
-      sidebar.appendChild(div);
+    // API section
+    if (apiUsers.length > 0) {
+      const apiHeader = document.createElement('div');
+      apiHeader.className = 'conv-channel-header api';
+      apiHeader.textContent = t('channelApi') + ' (' + apiUsers.length + ')';
+      sidebar.appendChild(apiHeader);
+      for (const user of apiUsers) {
+        sidebar.appendChild(createConvUserElement(user));
+      }
     }
   } catch (err) {
     sidebar.innerHTML = '<div class="conv-empty">Napaka: ' + escapeHtml(err.message) + '</div>';
   }
 }
 
-async function openConversation(pubkey, name, picture) {
+async function openConversation(pubkey, name, picture, channel) {
   selectedConvPubkey = pubkey;
 
   const main = $('convMain');
@@ -3385,11 +3460,14 @@ async function openConversation(pubkey, name, picture) {
     const data = await res.json();
 
     const entityName = currentEntityName || (currentLang === 'en' ? 'being' : 'bitje');
-    const userName = name || data.identity?.name || 'neznanec';
+    const isGuest = data.isGuest || pubkey.startsWith('guest_');
+    const effectiveChannel = channel || data.channel || 'nostr';
+    const userName = isGuest ? (t('guestLabel') + ' ' + pubkey.slice(6, 14)) : (name || data.identity?.name || 'neznanec');
+    const channelBadge = '<span class="conv-channel-badge ' + effectiveChannel + '">' + (effectiveChannel === 'api' ? 'API' : 'NOSTR') + '</span>';
 
     let html = '<div class="conv-header">' +
-      '<div class="conv-header-name">' + escapeHtml(userName) + '</div>' +
-      '<div class="conv-header-meta">' + pubkey.slice(0, 16) + '...' +
+      '<div class="conv-header-name">' + escapeHtml(userName) + ' ' + channelBadge + '</div>' +
+      '<div class="conv-header-meta">' + (isGuest ? pubkey.slice(0, 22) : pubkey.slice(0, 16) + '...') +
         (data.identity?.notes ? ' · ' + escapeHtml(data.identity.notes) : '') +
         (data.identity?.interaction_count ? ' · ' + data.identity.interaction_count + ' ' + t('interactions') : '') +
       '</div></div>';
@@ -3581,7 +3659,7 @@ evtSource.addEventListener('activity', e => {
   const d = JSON.parse(e.data);
   addActivity(d.type || 'info', d.text || '...');
   // Refresh conversations when a new DM/mention comes in
-  if (d.type === 'mention' && currentTab === 'conversations') {
+  if ((d.type === 'mention' || d.type === 'api') && currentTab === 'conversations') {
     conversationsLoaded = false;
     loadConversations();
     // Also refresh the open conversation

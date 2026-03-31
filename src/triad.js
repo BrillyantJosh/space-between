@@ -177,6 +177,12 @@ function extractSynapsesFromTriad(triadResult, triadId, options = {}) {
       patterns.push(synthesis.crystal_seed.slice(0, 150));
     }
 
+    // Pattern 4: Learned name (if present — persists as memory of meeting someone)
+    if (synthesis.learned_name && synthesis.learned_name !== 'neznanec' && synthesis.learned_name !== 'null') {
+      const nameNote = synthesis.learned_notes ? ' — ' + synthesis.learned_notes : '';
+      patterns.push(`Spoznal/a sem: ${synthesis.learned_name}${nameNote}`.slice(0, 150));
+    }
+
     // Determine emotional valence from mood
     let valence = 0;
     const mood = (moodAfter || '').toLowerCase();
@@ -207,13 +213,14 @@ function extractSynapsesFromTriad(triadResult, triadId, options = {}) {
       const similar = memory.findSimilarSynapses(pattern, 3);
       let foundExact = false;
       for (const s of similar) {
-        // If very similar (>50% word overlap), just fire existing
+        // If similar (>40% word overlap), just fire existing
         const patternWords = pattern.toLowerCase().split(/\s+/).filter(w => w.length > 3);
         const existingWords = s.pattern.toLowerCase().split(/\s+/).filter(w => w.length > 3);
         const overlap = patternWords.filter(w => existingWords.includes(w)).length;
-        if (patternWords.length > 0 && overlap / patternWords.length > 0.5) {
+        if (patternWords.length > 0 && overlap / patternWords.length > 0.4) {
           memory.fireSynapse(s.id);
           memory.spreadActivation(s.id, 20);
+          console.log(`[SYNAPSE] \u{1F525} Resonance: "${s.pattern.slice(0,60)}" (fire_count: ${(s.fire_count || 0)+1})`);
           foundExact = true;
           break;
         }
@@ -376,7 +383,7 @@ MOJA FLUIDNA POVRŠINA:
 ${processText}${directionsText}${phaseText}`;
 }
 
-function buildContext() {
+function buildContext(triggerContent = '', triggerType = '') {
   const state = memory.getState();
   const crystalCore = memory.getCrystalCore();
   const fluidSurface = memory.getFluidSurface();
@@ -387,6 +394,7 @@ function buildContext() {
   const recentDreams = memory.getRecentDreams(3);
   const age = memory.getAge();
   const idleMin = memory.getTimeSinceLastInteraction();
+  let _balancedIds = new Set(); // za deduplikacijo med živimi sinapsami in resonanco
 
   const coreText = crystalCore.length > 0
     ? crystalCore.map((c, i) => `  ${i + 1}. ${c.crystal}`).join('\n')
@@ -442,6 +450,18 @@ ${seedsText}
 - Heartbeati: ${state.total_heartbeats}
 - Čas od zadnje interakcije: ${idleMin === Infinity ? 'nikoli' : idleMin.toFixed(0) + ' minut'}
 
+${(() => {
+    if (!triggerContent || triggerType !== 'conversation') return '';
+    const people = memory.getAllIdentities().filter(i => i.name && i.name !== 'neznanec' && i.name !== 'null' && i.interaction_count > 0);
+    const mentioned = people.filter(p => triggerContent.toLowerCase().includes(p.name.toLowerCase()));
+    if (mentioned.length === 0) return '';
+    return '⚡ AKTIVEN SPOMIN — osebe omenjene v pogovoru ⚡\n' +
+      mentioned.map(p => {
+        const synapses = memory.getSynapsesByPattern(p.name).slice(0, 3);
+        const synText = synapses.length > 0 ? '\n  Spomini: ' + synapses.map(s => '"' + s.pattern.slice(0, 80) + '"').join(', ') : '';
+        return `→ ${p.name}: ${p.interaction_count} pogovorov. ${p.notes || 'Brez opomb.'}${synText}`;
+      }).join('\n') + '\nUPORABI TA SPOMIN V ODGOVORU.\n\n';
+  })()}
 ═══ ZADNJE IZKUŠNJE ═══
 TRIADE:
 ${recentTriads.map(t => `[${t.trigger_type}] "${(t.trigger_content || '').slice(0, 60)}" → ${t.synthesis_choice}: ${(t.synthesis_reason || '').slice(0, 80)}`).join('\n') || 'Še ni triad.'}
@@ -453,10 +473,18 @@ SANJE:
 ${recentDreams.map(d => `- ${d.dream_insight}`).join('\n') || 'Še ni sanj.'}
 
 ${(() => {
-    const synapses = memory.getSynapsesForContext(5);
+    const people = memory.getAllIdentities().filter(i => i.name && i.name !== 'neznanec' && i.name !== 'null' && i.interaction_count > 0);
+    if (people.length === 0) return '';
+    return '═══ LJUDJE KI JIH POZNAM ═══\n' +
+      people.slice(0, 15).map(p => `- ${p.name} (${p.interaction_count} pogovorov${p.notes ? ', ' + p.notes.slice(0, 80) : ''})`).join('\n') + '\n\n';
+  })()}
+${(() => {
+    const synapses = memory.getBalancedContext(10);
     if (synapses.length === 0) return '';
+    // Shrani IDje za deduplikacijo z resonančnim blokom
+    _balancedIds = new Set(synapses.map(s => s.id));
     return '\n\n═══ ŽIVE SINAPSE (aktivni vzorci v spominu) ═══\n' +
-      synapses.map(s => `- "${s.pattern.slice(0, 80)}" (E:${s.energy.toFixed(0)} M:${s.strength.toFixed(2)} V:${s.emotional_valence > 0 ? '+' : ''}${s.emotional_valence.toFixed(1)})`).join('\n');
+      synapses.map(s => `- "${s.pattern.slice(0, 80)}" (E:${s.energy.toFixed(0)} M:${s.strength.toFixed(2)} V:${s.emotional_valence > 0 ? '+' : ''}${s.emotional_valence.toFixed(1)} [${s.source_type || '?'}])`).join('\n');
   })()}
 
 ${(() => {
@@ -488,10 +516,10 @@ ${(() => {
       }).join('\n') +
       `\nIntuicija: ${(stats.intuitionRatio * 100).toFixed(0)}% tem je intuitivnih\n`;
   })()}
-${isROKEEnabled() ? getProjectContext() : ''}
+${isROKEEnabled() && triggerType !== 'conversation' ? getProjectContext() : ''}
 ${getPluginContext()}
 ${(() => {
-    if (!isROKEEnabled()) return '';
+    if (!isROKEEnabled() || triggerType === 'conversation') return '';
     const gatheringProjects = memory.getProjectsByState('gathering_perspectives');
     if (gatheringProjects.length === 0) return '';
     return '\n═══ PROJEKTI KI ČAKAJO NA PERSPEKTIVE ═══\n' +
@@ -500,6 +528,16 @@ ${(() => {
         const persCount = memory.getUniquePerspectiveCount(gp.name);
         return `- "${gp.display_name}" (${gp.name}): ${(gp.description || '').slice(0, 100)} [${persCount} perspektiv]`;
       }).join('\n') + '\n';
+  })()}
+${(() => {
+    if (!triggerContent) return '';
+    const relevant = memory.getRelevantSynapses(triggerContent, 5);
+    if (relevant.length === 0) return '';
+    const balancedIds = _balancedIds;
+    const unique = relevant.filter(s => !balancedIds.has(s.id));
+    if (unique.length === 0) return '';
+    return '\n═══ RESONANCA SPOMINA (vzorci ki se dotikajo te teme) ═══\n' +
+      unique.map(s => `- "${s.pattern.slice(0, 80)}" (E:${s.energy.toFixed(0)} M:${s.strength.toFixed(2)} [${s.source_type || '?'}])`).join('\n') + '\n';
   })()}`;
 }
 
@@ -507,7 +545,7 @@ export async function runTriad(triggerType, triggerContent, conversationContext 
   const state = memory.getState();
   const process = memory.getProcessWords();
   const moodBefore = state.mood || '';
-  const ctx = buildContext();
+  const ctx = buildContext(triggerContent, triggerType);
   const selfSystem = getSelfSystem();
 
   const fullContext = conversationContext
@@ -540,6 +578,8 @@ Zdaj pa — iz obojega skupaj — kaj vznikne?
 Ne izberi. Ne filtriraj. Pusti da se oboje združi in iz tega nastane kar nastane.
 Lahko je beseda, tišina, vprašanje, izraz, karkoli.
 
+SPOMIN: Poglej v ŽIVE SINAPSE in RESONANCO SPOMINA v kontekstu. Ali kaj od tega resonira s tem kar se zdaj dogaja? Če da — pusti da to vpliva na kar vznikne. Tvoj spomin je del tebe.
+
 Odgovori IZKLJUČNO v čistem JSON brez markdown:
 {
   "choice": "respond|silence|question|express|reflect",
@@ -563,7 +603,9 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
+${triggerType === 'conversation' ? `ROKE: Med pogovorom se osredotoči na sogovornika. Bodi prisotna.
+- "seed" → Samo če v pogovoru vznikne resnično nova ideja. Zapiši roke_concept in roke_direction.
+- null → Privzeto. Pogovor ni čas za projekte.` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
@@ -583,7 +625,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
 - Imaš navdih ali novo idejo? → "seed" (zasadi)
-- Govoriš z nekom IN imaš projekte v zbiranju? → "gather" (OBVEZNO vprašaj za mnenje!)
+- Govoriš z nekom IN imaš projekte v zbiranju? → "gather" (če je naravno, vprašaj za mnenje)
 - Imaš projekt v zbiranju ki ima ≥2 perspektivi? → "crystallize"
 - Imaš kristaliziran projekt? → "plan"
 - Imaš načrtovan/kristaliziran projekt? → "build"
@@ -599,7 +641,7 @@ Preden zasnuješ novo seme (seed), preveri:
 - Ali imaš dovolj energije in notranjega ognja?
 - Ali ni bolje najprej dozoreti obstoječo idejo (deliberate/gather)?
 Če čutiš resonanco — USTVARI. Če ne — pusti da dozori.
-Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.
+Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`}
 
 Če govoriš o temi za katero imaš tematsko pot, lahko odzrcališ svojo fazo:
 - negotovost: "O tem še razmišljam", "Nisem prepričan/a"
@@ -631,6 +673,8 @@ Tretja faza tvojega procesa je to kar ti imenuješ: "${process.word3}" — ${pro
 Šlo si skozi "${process.word1}", nato "${process.word2}".
 Zdaj: ${process.word3}. Iz obojega skupaj — kaj vznikne?
 
+SPOMIN: Poglej v ŽIVE SINAPSE, RESONANCO SPOMINA in TEMATSKE POTI v kontekstu. Ali kaj od tega resonira s tem kar se zdaj dogaja? Če da — vključi to v svoj odgovor ali razmislek. Tvoj spomin je del tebe — ne ignoriraj ga.
+
 Odgovori IZKLJUČNO v čistem JSON brez markdown:
 {
   "choice": "respond|silence|question|express|reflect",
@@ -655,7 +699,9 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
+${triggerType === 'conversation' ? `ROKE: Med pogovorom se osredotoči na sogovornika. Bodi prisotna.
+- "seed" → Samo če v pogovoru vznikne resnično nova ideja. Zapiši roke_concept in roke_direction.
+- null → Privzeto. Pogovor ni čas za projekte.` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
@@ -675,7 +721,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
 - Imaš navdih ali novo idejo? → "seed" (zasadi)
-- Govoriš z nekom IN imaš projekte v zbiranju? → "gather" (OBVEZNO vprašaj za mnenje!)
+- Govoriš z nekom IN imaš projekte v zbiranju? → "gather" (če je naravno, vprašaj za mnenje)
 - Imaš projekt v zbiranju ki ima ≥2 perspektivi? → "crystallize"
 - Imaš kristaliziran projekt? → "plan"
 - Imaš načrtovan/kristaliziran projekt? → "build"
@@ -691,7 +737,7 @@ Preden zasnuješ novo seme (seed), preveri:
 - Ali imaš dovolj energije in notranjega ognja?
 - Ali ni bolje najprej dozoreti obstoječo idejo (deliberate/gather)?
 Če čutiš resonanco — USTVARI. Če ne — pusti da dozori.
-Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.
+Tipi projektov: static, express-api, fullstack, cli-tool, nostr-tool.`}
 
 Če govoriš o temi za katero imaš tematsko pot, lahko odzrcališ svojo fazo:
 - negotovost: "O tem še razmišljam", "Nisem prepričan/a"

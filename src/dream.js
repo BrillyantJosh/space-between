@@ -107,7 +107,7 @@ async function consolidateMemories(dreamResult) {
 
   broadcast('memory_consolidated', {
     pruned: decayResult.pruned,
-    strengthened: topSynapses.length,
+    strengthened: dreamSynapses.length,
     newSynapse: newSynapseId ? true : false,
     total: stats.total,
     connections: stats.connections

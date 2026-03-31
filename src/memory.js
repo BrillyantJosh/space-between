@@ -375,6 +375,25 @@ for (const [col, sql] of projectMigrations) {
   }
 }
 
+// ─── Conversation channel migration ───
+const conversationMigrations = [
+  ['channel', "ALTER TABLE conversations ADD COLUMN channel TEXT DEFAULT 'nostr'"],
+];
+for (const [col, sql] of conversationMigrations) {
+  try {
+    db.prepare(`SELECT ${col} FROM conversations LIMIT 1`).get();
+  } catch (_) {
+    db.exec(sql);
+    console.log(`[MEMORY] Migrated conversations: added ${col} column`);
+  }
+}
+
+// Backfill: obstoječi guest_ zapisi → channel 'api'
+try {
+  const bf = db.prepare("UPDATE conversations SET channel = 'api' WHERE pubkey LIKE 'guest_%' AND channel = 'nostr'").run();
+  if (bf.changes > 0) console.log(`[MEMORY] Backfilled ${bf.changes} guest conversations → channel=api`);
+} catch (_) {}
+
 // Migrate destroyed projects (one-time, safe)
 try {
   db.prepare("UPDATE projects SET lifecycle_state = 'destroyed' WHERE status = 'destroyed' AND lifecycle_state = 'seed'").run();
@@ -416,6 +435,33 @@ try {
     console.log(`[MEMORY] Reset ${reset.changes} building/planned projects to deliberating`);
   }
 } catch (_) {}
+
+// ─── Synapse energy_floor migration (organic memory v2) ───
+try {
+  db.prepare('SELECT energy_floor FROM synapses LIMIT 1').get();
+} catch (_) {
+  try {
+    db.exec("ALTER TABLE synapses ADD COLUMN energy_floor REAL DEFAULT 0");
+    console.log('[MEMORY] Added energy_floor column to synapses');
+    // Set floor based on fire_count — sinapse z veliko vžigi dobijo permanentno zaščito
+    const floored = db.prepare(`
+      UPDATE synapses SET energy_floor = MIN(80, fire_count * 0.5)
+      WHERE fire_count > 1
+    `).run();
+    console.log(`[MEMORY] Set energy_floor for ${floored.changes} synapses based on fire_count`);
+    // Oživi mrtve sinapse z visokim fire_count
+    const revived = db.prepare(`
+      UPDATE synapses
+      SET energy = MAX(energy, MIN(80, fire_count * 0.5))
+      WHERE fire_count > 5 AND energy < 10
+    `).run();
+    if (revived.changes > 0) {
+      console.log(`[MEMORY] 🧬 Revived ${revived.changes} dead synapses with high fire_count`);
+    }
+  } catch (e) {
+    console.error('[MEMORY] energy_floor migration error:', e.message);
+  }
+}
 
 const memory = {
   getState() {
@@ -506,8 +552,8 @@ const memory = {
     return db.prepare('SELECT * FROM observations WHERE source = ? ORDER BY id DESC LIMIT ?').all(source, n).reverse();
   },
 
-  saveMessage(pubkey, role, content) {
-    db.prepare('INSERT INTO conversations (pubkey, role, content) VALUES (?, ?, ?)').run(pubkey, role, content);
+  saveMessage(pubkey, role, content, channel = 'nostr') {
+    db.prepare('INSERT INTO conversations (pubkey, role, content, channel) VALUES (?, ?, ?, ?)').run(pubkey, role, content, channel);
   },
 
   getConversation(pubkey, n = 20) {
@@ -552,6 +598,17 @@ const memory = {
 
   getAllIdentities() {
     return db.prepare('SELECT * FROM known_identities ORDER BY last_seen DESC').all();
+  },
+
+  getIdentitiesWithChannel() {
+    return db.prepare(`
+      SELECT ki.*,
+        (SELECT c.channel FROM conversations c WHERE c.pubkey = ki.pubkey ORDER BY c.id DESC LIMIT 1) as last_channel,
+        (SELECT COUNT(*) FROM conversations c WHERE c.pubkey = ki.pubkey AND c.channel = 'nostr') as nostr_count,
+        (SELECT COUNT(*) FROM conversations c WHERE c.pubkey = ki.pubkey AND c.channel = 'api') as api_count
+      FROM known_identities ki
+      ORDER BY ki.last_seen DESC
+    `).all();
   },
 
   getSelfPrompt() {
@@ -1193,7 +1250,8 @@ const memory = {
         energy = MIN(200, energy + 10),
         strength = MIN(1.0, strength + 0.05),
         fire_count = fire_count + 1,
-        last_fired_at = datetime('now')
+        last_fired_at = datetime('now'),
+        energy_floor = MIN(80, energy_floor + 0.5)
       WHERE id = ?
     `).run(id);
   },
@@ -1243,45 +1301,133 @@ const memory = {
     return db.prepare('SELECT * FROM synapses WHERE energy >= 10 ORDER BY (energy * strength) DESC LIMIT ?').all(limit);
   },
 
+  // Uravnotežen kontekst — proporcionalno iz vsakega vira
+  getBalancedContext(totalLimit = 10) {
+    const sources = db.prepare(`
+      SELECT source_type, COUNT(*) as c
+      FROM synapses WHERE energy >= 10
+      GROUP BY source_type ORDER BY c DESC
+    `).all();
+    const total = sources.reduce((s, r) => s + r.c, 0) || 1;
+    const result = [];
+    for (const src of sources) {
+      const slots = Math.max(1, Math.round((src.c / total) * totalLimit));
+      const synapses = db.prepare(
+        'SELECT * FROM synapses WHERE energy >= 10 AND source_type = ? ORDER BY (energy * strength) DESC LIMIT ?'
+      ).all(src.source_type, slots);
+      result.push(...synapses);
+    }
+    // Dedupliciraj in razvrsti po ranku
+    const seen = new Set();
+    return result
+      .filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; })
+      .sort((a, b) => (b.energy * b.strength) - (a.energy * a.strength))
+      .slice(0, totalLimit);
+  },
+
+  // Semantični recall — sinapse ki resonirajo s trenutno temo
+  getRelevantSynapses(query, limit = 5) {
+    if (!query || typeof query !== 'string') return [];
+    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 3).slice(0, 8);
+    if (words.length === 0) return [];
+    const conditions = words
+      .map(w => `LOWER(pattern) LIKE '%${w.replace(/'/g, "''")}%'`)
+      .join(' OR ');
+    try {
+      return db.prepare(`
+        SELECT *, (energy * strength) as score FROM synapses
+        WHERE energy >= 5 AND (${conditions})
+        ORDER BY score DESC LIMIT ?
+      `).all(limit);
+    } catch (e) {
+      console.error('[SYNAPSE] getRelevantSynapses error:', e.message);
+      return [];
+    }
+  },
+
   decaySynapses() {
-    const state = this.getState();
-    const resonance = this.getPathwayResonance();
+    // ═══ ORGANSKI SPOMIN v2 — kapacitetno zavedanje ═══
+    // 3 osi: polnost glave × čustveno/časovno × aktivnostni profil
 
-    // Globalni modulator: angažiranost = počasnejše pozabljanje
-    // energy (50%) + resonance (30%) + aktivnost (20%) → 0..1
-    const engagement = (state.energy * 0.5) + (resonance.score * 0.3) + ((1 - state.silence_affinity) * 0.2);
-    const globalMod = 0.7 + (engagement * 0.3); // 0.7 (hiter razpad) .. 1.0 (počasen)
+    // 1. Polnost glave — prazna → počasen razpad, polna → selektiven
+    const aliveCount = db.prepare(
+      'SELECT COUNT(*) as c FROM synapses WHERE energy >= 10'
+    ).get().c;
+    const CAPACITY = 500;
+    const memoryLoad = Math.min(1.0, aliveCount / CAPACITY);
+    const fullnessFactor = 1.0 - (memoryLoad * 0.02);
+    // prazna (0) → 1.0, polna (1) → 0.98
 
-    // Tier-based decay: čustveni + nedavni = počasneje, nevtralni + stari = hitreje
-    const tier1 = Math.min(1.0, 0.995 * globalMod);  // čustveni IN nedavni
-    const tier2 = Math.min(1.0, 0.993 * globalMod);  // čustveni ALI nedavni
-    const tier3 = 0.99 * globalMod;                    // nevtralni + stari
+    // 2. Aktivnostni profil — kaj entiteta zdaj počne (zadnjih 6 ur)
+    const recentActivity = db.prepare(`
+      SELECT trigger_type, COUNT(*) as c
+      FROM triads WHERE timestamp > datetime('now', '-6 hours')
+      GROUP BY trigger_type
+    `).all();
+    const totalAct = recentActivity.reduce((s, r) => s + r.c, 0) || 1;
+    const convShare = (recentActivity.find(r => r.trigger_type === 'conversation')?.c || 0) / totalAct;
+    const idleShare = 1 - convShare;
 
+    // Per-source zaščitni faktorji — aktivnost ščiti relevantne sinapse
+    const convProtect = 1.0 - (convShare * 0.005);   // pogovori → conv sinapse razpadajo počasneje
+    const triadProtect = 1.0 - (0.5 * 0.005);        // triad vedno delno zaščiten
+    const rokeProtect = 1.0 - (idleShare * 0.003);    // ROKE zaščiten v tihem času
+    const dreamProtect = 1.0 - (idleShare * 0.003);   // sanje zaščitene v tihem času
+    const defaultProtect = 1.0;
+
+    // 3. Osnovne stopnje — bistveno počasnejše od prej
+    const t1 = 0.998 * fullnessFactor;  // čustvena + nedavna (4h)
+    const t2 = 0.996 * fullnessFactor;  // čustvena ALI nedavna
+    const t3 = 0.993 * fullnessFactor;  // nevtralna + stara
+
+    // 4. Strength — zelo počasen razpad
+    const s1 = 0.999;  // čustvene
+    const s2 = 0.998;  // ostale
+
+    // 5. SQL z energy_floor zaščito + per-source relevanco
     db.prepare(`
       UPDATE synapses SET
-        energy = energy * (
+        energy = MAX(energy_floor, energy * (
           CASE
-            WHEN ABS(emotional_valence) > 0.3 AND last_fired_at > datetime('now', '-2 hours')
-              THEN ${tier1}
-            WHEN ABS(emotional_valence) > 0.3 OR last_fired_at > datetime('now', '-2 hours')
-              THEN ${tier2}
-            ELSE ${tier3}
+            WHEN ABS(emotional_valence) > 0.3
+              AND last_fired_at > datetime('now', '-4 hours')
+              THEN ${t1}
+            WHEN ABS(emotional_valence) > 0.3
+              OR last_fired_at > datetime('now', '-4 hours')
+              THEN ${t2}
+            ELSE ${t3}
           END
-        ),
-        strength = strength * (
+          *
+          CASE source_type
+            WHEN 'conversation' THEN ${Math.max(0.997, convProtect)}
+            WHEN 'triad' THEN ${triadProtect}
+            WHEN 'roke' THEN ${rokeProtect}
+            WHEN 'dream' THEN ${dreamProtect}
+            ELSE ${defaultProtect}
+          END
+        )),
+        strength = MAX(0.01, strength * (
           CASE
-            WHEN ABS(emotional_valence) > 0.3 THEN ${Math.min(1.0, 0.997 * globalMod)}
-            ELSE ${0.995 * globalMod}
+            WHEN ABS(emotional_valence) > 0.3 THEN ${s1}
+            ELSE ${s2}
           END
-        )
+        ))
     `).run();
 
-    const pruned = db.prepare("DELETE FROM synapses WHERE energy < 5").run();
-    if (pruned.changes > 0) {
-      db.prepare("DELETE FROM synapse_connections WHERE from_synapse_id NOT IN (SELECT id FROM synapses) OR to_synapse_id NOT IN (SELECT id FROM synapses)").run();
+    // 6. Mehko čiščenje — FK-safe: najprej otroke, potem starše
+    const toDelete = db.prepare(
+      "SELECT id FROM synapses WHERE energy < 3 AND energy_floor < 1"
+    ).all();
+    let pruned = { changes: 0 };
+    if (toDelete.length > 0) {
+      const ids = toDelete.map(r => r.id);
+      const ph = ids.map(() => '?').join(',');
+      db.prepare(`DELETE FROM synapse_connections WHERE from_synapse_id IN (${ph}) OR to_synapse_id IN (${ph})`).run(...ids, ...ids);
+      db.prepare(`DELETE FROM pathway_synapses WHERE synapse_id IN (${ph})`).run(...ids);
+      pruned = db.prepare(`DELETE FROM synapses WHERE id IN (${ph})`).run(...ids);
     }
-    const remaining = db.prepare('SELECT COUNT(*) as c FROM synapses').get().c;
-    return { decayed: remaining, pruned: pruned.changes };
+    const remaining = db.prepare('SELECT COUNT(*) as c FROM synapses WHERE energy >= 10').get().c;
+    return { decayed: remaining, pruned: pruned.changes, memoryLoad: memoryLoad.toFixed(2) };
   },
 
   createConnection(fromId, toId, weight = 0.5) {
@@ -1332,7 +1478,7 @@ const memory = {
     return db.prepare('SELECT * FROM synapses WHERE energy < ? ORDER BY energy ASC LIMIT 20').all(maxEnergy);
   },
 
-  getStrongSynapses(minValence = 0.7, minEnergy = 150) {
+  getStrongSynapses(minValence = 0.4, minEnergy = 80) {
     return db.prepare(
       'SELECT * FROM synapses WHERE (ABS(emotional_valence) > ? OR energy > ?) AND archived_to_nostr = 0 ORDER BY (energy * strength) DESC LIMIT 10'
     ).all(minValence, minEnergy);

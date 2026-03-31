@@ -14,6 +14,12 @@ console.log(`[NOSTR] Identity: ${npub}`);
 console.log(`[NOSTR] Pubkey: ${pubkey}`);
 
 const relays = new Map(); // url -> Relay instance
+let _onRelayConnect = null;
+const _seenEvents = new Set(); // global dedup across relays + reconnects
+
+export function onRelayConnect(callback) {
+  _onRelayConnect = callback;
+}
 
 async function connectRelay(url) {
   try {
@@ -28,6 +34,15 @@ async function connectRelay(url) {
       // Reconnect after 15s
       setTimeout(() => connectRelay(url), 15000);
     };
+
+    // Resubscribe after (re)connect
+    if (_onRelayConnect) {
+      try {
+        _onRelayConnect(url, relay);
+      } catch (err) {
+        console.error(`[NOSTR] onRelayConnect callback error:`, err.message);
+      }
+    }
 
     return relay;
   } catch (err) {
@@ -143,12 +158,11 @@ export async function decryptDM(event) {
   }
 }
 
-export function subscribeToMentions(callback) {
-  // Use 5 min window to catch DMs sent during restarts
+export function subscribeToMentions(callback, singleUrl = null, singleRelay = null) {
   const since = Math.floor(Date.now() / 1000) - 300;
-  const seen = new Set(); // dedup across relays
+  const targets = singleUrl ? [[singleUrl, singleRelay]] : [...relays];
 
-  for (const [url, relay] of relays) {
+  for (const [url, relay] of targets) {
     try {
       // Subscribe to KIND 1 mentions (tagged with our pubkey)
       relay.subscribe(
@@ -158,8 +172,8 @@ export function subscribeToMentions(callback) {
         {
           onevent(event) {
             if (event.pubkey === pubkey) return;
-            if (seen.has(event.id)) return;
-            seen.add(event.id);
+            if (_seenEvents.has(event.id)) return;
+            _seenEvents.add(event.id);
             console.log(`[NOSTR] KIND ${event.kind} from ${event.pubkey.slice(0, 12)}... on ${url}`);
             callback(event);
           }
@@ -174,8 +188,8 @@ export function subscribeToMentions(callback) {
         {
           onevent(event) {
             if (event.pubkey === pubkey) return;
-            if (seen.has(event.id)) return;
-            seen.add(event.id);
+            if (_seenEvents.has(event.id)) return;
+            _seenEvents.add(event.id);
             console.log(`[NOSTR] DM (KIND 4) from ${event.pubkey.slice(0, 12)}... on ${url}`);
             callback(event);
           }
@@ -189,9 +203,11 @@ export function subscribeToMentions(callback) {
   }
 }
 
-export function subscribeToFeed(callback, limit = 20) {
+export function subscribeToFeed(callback, limit = 20, singleUrl = null, singleRelay = null) {
   const since = Math.floor(Date.now() / 1000) - 300;
-  for (const [url, relay] of relays) {
+  const targets = singleUrl ? [[singleUrl, singleRelay]] : [...relays];
+
+  for (const [url, relay] of targets) {
     try {
       relay.subscribe(
         [{ kinds: [1], since, limit }],

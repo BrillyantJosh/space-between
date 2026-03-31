@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { app } from './dashboard.js';
 import { broadcast } from './dashboard.js';
 import config from './config.js';
@@ -84,7 +85,9 @@ app.post('/api/message', checkRateLimit, async (req, res) => {
     const { content, mode, speaker_label } = req.body;
     if (!content) return res.status(400).json({ error: 'content required' });
 
-    const pubkey = req.nostrPubkey || 'guest_' + Date.now();
+    const pubkey = req.nostrPubkey || 'guest_' + crypto.createHash('sha256')
+      .update((req.ip || 'unknown') + '|' + (req.headers['user-agent'] || ''))
+      .digest('hex').slice(0, 16);
     const isVerified = req.nostrVerified;
 
     const effectiveMode = mode || activeMode;
@@ -134,7 +137,7 @@ app.post('/api/message', checkRateLimit, async (req, res) => {
     }
 
     // ─── CONVERSATION / GROUP: polna triada ───
-    memory.saveMessage(effectivePubkey, 'user', content);
+    memory.saveMessage(effectivePubkey, 'user', content, 'api');
 
     // Zgradi conversation context z identiteto
     const identity = memory.getIdentity(effectivePubkey);
@@ -185,9 +188,9 @@ app.post('/api/message', checkRateLimit, async (req, res) => {
     let response = null;
     if (result.synthesis.choice !== 'silence' && result.synthesis.content) {
       response = result.synthesis.content;
-      memory.saveMessage(effectivePubkey, 'entity', response);
+      memory.saveMessage(effectivePubkey, 'entity', response, 'api');
     } else {
-      memory.saveMessage(effectivePubkey, 'silence', result.synthesis.content || '(ti\u0161ina)');
+      memory.saveMessage(effectivePubkey, 'silence', result.synthesis.content || '(ti\u0161ina)', 'api');
     }
 
     broadcast('triad_complete', {

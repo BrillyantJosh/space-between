@@ -4,7 +4,7 @@ import { runTriad, crystallizeDirections, finalizeDirections, reflectOnFathersVi
 import { dream } from './dream.js';
 import {
   connectRelays, publishProfile, publishNote, publishReply,
-  sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity
+  sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity, onRelayConnect
 } from './nostr.js';
 import { startDashboard, broadcast } from './dashboard.js';
 import { isROKEEnabled, receiveProjectFeedback, deployService, checkService, crystallizeProject } from './hands.js';
@@ -136,8 +136,8 @@ async function handleHeartbeat() {
     memory.updateState({ energy: Math.min(1, state.energy + 0.02) });
   }
 
-  // ═══ LIVING MEMORY — HOURLY DECAY ═══
-  if (heartbeatNum % 60 === 0) {
+  // ═══ LIVING MEMORY — DAILY DECAY (vsak 24h) ═══
+  if (heartbeatNum % 1440 === 0) {
     try {
       const decayResult = memory.decaySynapses();
       console.log(`[DECAY] \u{1F551} Hourly decay: ${decayResult.decayed} synapses remaining, ${decayResult.pruned} pruned`);
@@ -509,7 +509,7 @@ async function handleMention(event) {
   }
 
   // Save incoming message
-  memory.saveMessage(event.pubkey, 'user', content);
+  memory.saveMessage(event.pubkey, 'user', content, 'nostr');
 
   // Direction crystallization — if father responds during crystallizing phase, reconsider with father's input
   if (config.creatorPubkey && event.pubkey === config.creatorPubkey) {
@@ -583,7 +583,7 @@ async function handleMention(event) {
 
   if (result.synthesis.choice !== 'silence' && result.synthesis.content) {
     // Save response
-    memory.saveMessage(event.pubkey, 'entity', result.synthesis.content);
+    memory.saveMessage(event.pubkey, 'entity', result.synthesis.content, 'nostr');
 
     if (event.kind === 4) {
       await sendDM(event.pubkey, result.synthesis.content);
@@ -592,7 +592,7 @@ async function handleMention(event) {
     }
     console.log(`[MENTION] Responded: ${result.synthesis.content.slice(0, 60)}...`);
   } else {
-    memory.saveMessage(event.pubkey, 'silence', result.synthesis.content || '(tišina)');
+    memory.saveMessage(event.pubkey, 'silence', result.synthesis.content || '(tišina)', 'nostr');
     console.log('[MENTION] Chose silence');
   }
 
@@ -656,6 +656,16 @@ async function main() {
   subscribeToFeed((event) => {
     feedBuffer.push(event);
     if (feedBuffer.length > MAX_FEED) feedBuffer.shift();
+  });
+
+  // Resubscribe after relay reconnect
+  onRelayConnect((url, relay) => {
+    console.log(`[NOSTR] Resubscribing on reconnected ${url}`);
+    subscribeToMentions(handleMention, url, relay);
+    subscribeToFeed((event) => {
+      feedBuffer.push(event);
+      if (feedBuffer.length > MAX_FEED) feedBuffer.shift();
+    }, 20, url, relay);
   });
 
   // Birth triad
