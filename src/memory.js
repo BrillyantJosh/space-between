@@ -487,15 +487,61 @@ try {
   }
 }
 
-// Slovenska stop words za resonance_field builder
+// Slovenska + NOSTR stop words za resonance_field builder
 const STOP_WORDS_SL = new Set([
+  // Slovenščina — slovnične besede
   'sem', 'ima', 'ima', 'je', 'da', 'ali', 'ker', 'kot', 'pri', 'za', 'na', 'po',
   'med', 'nad', 'pod', 'pred', 'brez', 'skozi', 'tudi', 'samo', 'kar', 'kaj',
   'kdo', 'kdaj', 'kako', 'kjer', 'koliko', 'kateri', 'tega', 'temu', 'tem',
   'biti', 'imeti', 'moči', 'biti', 'nisem', 'nima', 'ni', 'ne', 'več', 'že',
+  'tebe', 'mene', 'njega', 'njej', 'njim', 'sebe', 'sebi', 'vsak', 'vsem',
+  'torej', 'potem', 'ampak', 'vendar', 'čeprav', 'dokler', 'kadar', 'nekdo',
+  'nekaj', 'nihče', 'nič', 'vedno', 'nikoli', 'pogosto', 'malo', 'zelo',
+  // Angleščina — slovnične besede
   'this', 'that', 'with', 'from', 'have', 'been', 'will', 'would', 'could',
-  'should', 'their', 'there', 'here', 'when', 'where', 'what', 'which', 'about'
+  'should', 'their', 'there', 'here', 'when', 'where', 'what', 'which', 'about',
+  'just', 'like', 'also', 'into', 'than', 'then', 'some', 'your', 'they',
+  'were', 'said', 'each', 'does', 'over', 'such', 'very', 'even', 'most',
+  // NOSTR / tehniški šum
+  'relay', 'event', 'note', 'pubkey', 'npub', 'nsec', 'kind', 'tags',
+  'content', 'nostr', 'zap', 'like', 'reply', 'boost', 'repost', 'follow',
+  'https', 'http', 'wss', 'null', 'true', 'false', 'undefined', 'json',
+  'created', 'signed', 'verified', 'broadcast', 'subscribe', 'filter'
 ]);
+
+// Levenshtein razdalja — za mehko ujemanje v getResonantField
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+// Mehka podobnost med dvema besedama (0.0 – 1.0)
+function fuzzySim(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.includes(b) || b.includes(a)) return 0.85;
+  const dist = levenshtein(a, b);
+  const maxLen = Math.max(a.length, b.length);
+  return Math.max(0, 1 - dist / maxLen);
+}
 
 const memory = {
   getState() {
@@ -1294,32 +1340,52 @@ const memory = {
   // === LIVING MEMORY — SYNAPSES ===
 
   buildResonanceField(pattern, tags = [], pubkey = null) {
-    const words = (pattern || '')
-      .toLowerCase()
-      .split(/[\s,\.;:"'—\-\(\)\[\]\/\\]+/)
-      .filter(w => w.length > 3 && !STOP_WORDS_SL.has(w));
+    // Utežen sistem: vsak vir ima prioriteto — višja → beseda se ponovi v polju
+    // Ponavljanje v JSON arrayu deluje z LIKE (SQL ga najde), poleg tega pa
+    // spreadActivation's overlap štetje da večjo težo pogostejšim besedam.
+    //   - Identitetno ime (pubkey lookup): teža 3 → 3× v polju
+    //   - Tags (person:, topic:):          teža 2 → 2× v polju
+    //   - Pattern besede:                  teža 1 → 1×
 
-    const fields = new Set(words);
+    const weighted = []; // [{ word, weight }]
 
-    // Dodaj ime iz known_identities če je pubkey znan
+    // Vir 1 — ime iz known_identities (največja teža)
     if (pubkey) {
       try {
         const identity = db.prepare('SELECT name FROM known_identities WHERE pubkey = ?').get(pubkey);
         if (identity?.name && identity.name !== 'neznanec') {
-          fields.add(identity.name.toLowerCase());
+          weighted.push({ word: identity.name.toLowerCase(), weight: 3 });
         }
       } catch (_) {}
     }
 
-    // Dodaj iz tags (person:ime, topic:tema ...)
+    // Vir 2 — tags (person:ime, topic:tema ...)
     for (const tag of (tags || [])) {
       if (typeof tag === 'string' && tag.includes(':')) {
         const val = tag.split(':')[1];
-        if (val && val.length > 2) fields.add(val.toLowerCase());
+        if (val && val.length > 2) weighted.push({ word: val.toLowerCase(), weight: 2 });
       }
     }
 
-    return JSON.stringify([...fields].slice(0, 25));
+    // Vir 3 — pattern besede (osnovna teža)
+    const patternWords = (pattern || '')
+      .toLowerCase()
+      .split(/[\s,\.;:"'—\-\(\)\[\]\/\\]+/)
+      .filter(w => w.length > 3 && !STOP_WORDS_SL.has(w));
+    for (const w of patternWords) weighted.push({ word: w, weight: 1 });
+
+    // Razporedi v array z ponavljanjem (dedup po besedi — obdrži max weight)
+    const seen = new Map();
+    for (const { word, weight } of weighted) {
+      if (!seen.has(word) || seen.get(word) < weight) seen.set(word, weight);
+    }
+
+    const result = [];
+    for (const [word, weight] of seen) {
+      for (let i = 0; i < weight; i++) result.push(word);
+    }
+
+    return JSON.stringify(result.slice(0, 40)); // max 40 za varnost
   },
 
   createSynapse(pattern, energy = 100, strength = 0.5, valence = 0, sourceType = null, sourceId = null, tags = [], pubkey = null) {
@@ -1433,6 +1499,7 @@ const memory = {
   },
 
   // Asociativno iskanje po semantičnih poljih — gravitacija namesto lookup
+  // Dvofazno: SQL LIKE (široko) → JS fuzzy re-ranking (natančno)
   getResonantField(query, limit = 7) {
     if (!query || typeof query !== 'string') return [];
     const words = query.toLowerCase()
@@ -1445,18 +1512,41 @@ const memory = {
       .map(w => `(LOWER(pattern) LIKE '%${w.replace(/'/g, "''")}%' OR LOWER(resonance_field) LIKE '%${w.replace(/'/g, "''")}%')`)
       .join(' OR ');
 
+    let candidates = [];
     try {
-      return db.prepare(`
+      // Faza 1: SQL — zajame točna ujemanja, vrne 2× limit za JS re-ranking
+      candidates = db.prepare(`
         SELECT *,
           (energy * strength * (1.0 + ABS(emotional_valence) * 0.3)) as resonance_score
         FROM synapses
         WHERE energy >= 5 AND (${conditions})
         ORDER BY resonance_score DESC LIMIT ?
-      `).all(limit);
+      `).all(limit * 2);
     } catch (e) {
-      console.error('[SYNAPSE] getResonantField error:', e.message);
+      console.error('[SYNAPSE] getResonantField SQL error:', e.message);
       return this.getRelevantSynapses(query, limit);
     }
+
+    // Faza 2: JS fuzzy re-ranking — vsaka kandidatna sinapse dobi fuzzy bonus
+    const scored = candidates.map(s => {
+      let fuzzyBonus = 0;
+      try {
+        const fields = JSON.parse(s.resonance_field || '[]');
+        // Dedupliciraj polje za fuzzy (ne kaznuj duplikatov)
+        const uniqueFields = [...new Set(fields)];
+        for (const qWord of words) {
+          for (const field of uniqueFields) {
+            const sim = fuzzySim(qWord, field);
+            if (sim > 0.7) fuzzyBonus += sim * 0.2; // max ~0.2 per match
+          }
+        }
+      } catch (_) {}
+      return { ...s, resonance_score: (s.resonance_score || 0) * (1 + fuzzyBonus) };
+    });
+
+    // Re-sortiraj po popravljenem scoreu in vrni top limit
+    scored.sort((a, b) => b.resonance_score - a.resonance_score);
+    return scored.slice(0, limit);
   },
 
   decaySynapses() {
