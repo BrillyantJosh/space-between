@@ -409,6 +409,55 @@ export function getIdentity() {
   return { pubkey, npub };
 }
 
+// === HISTORY FETCH — prebere stare pogovore z relayjev ===
+export async function fetchConversationHistory(options = {}) {
+  const {
+    limit = 100,
+    since = null,
+    targetPubkeys = null,
+  } = options;
+
+  const firstRelay = [...relays.values()][0];
+  if (!firstRelay) {
+    console.warn('[NOSTR] fetchConversationHistory: no relay connected');
+    return [];
+  }
+
+  const events = [];
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      console.log(`[NOSTR] fetchConversationHistory timeout, got ${events.length} events`);
+      resolve(events);
+    }, 15000);
+
+    try {
+      const filter = { kinds: [4], '#p': [pubkey], limit };
+      if (since) filter.since = since;
+      if (targetPubkeys?.length) filter.authors = targetPubkeys;
+
+      firstRelay.subscribe([filter], {
+        onevent(event) { events.push(event); },
+        oneose() { clearTimeout(timeout); resolve(events); }
+      });
+    } catch (err) {
+      console.error('[NOSTR] fetchConversationHistory error:', err.message);
+      clearTimeout(timeout);
+      resolve(events);
+    }
+  });
+}
+
+// Helper — nsec → hex private key
+export function hexPrivKeyFromNsec(nsecOrHex) {
+  if (!nsecOrHex) throw new Error('No nsec provided');
+  if (nsecOrHex.startsWith('nsec')) {
+    const { data } = nip19.decode(nsecOrHex);
+    return Buffer.from(data).toString('hex');
+  }
+  return nsecOrHex;
+}
+
 export function getRelayStatus() {
   return config.relays.map(url => ({
     url,

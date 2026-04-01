@@ -5,7 +5,7 @@ import { callLLM, callLLMJSON } from './llm.js';
 import memory from './memory.js';
 import config from './config.js';
 import { broadcast } from './dashboard.js';
-import { updateProfile } from './nostr.js';
+import { updateProfile, fetchConversationHistory, hexPrivKeyFromNsec, decryptDM } from './nostr.js';
 import { isROKEEnabled, seedProject, deliberateProject, gatherPerspective, crystallizeProject, planProject, buildProject, deployService, checkService, shareProject, evolveProject, pruneProject, proposeImprovement, selfBuildPlugin, updateEntityProfile, getProjectContext, ROKE_AWARENESS } from './hands.js';
 import { sendDM, publishNote } from './nostr.js';
 import { runBeforeTriad, runAfterTriad, getPluginContext } from './plugins.js';
@@ -591,7 +591,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -620,6 +620,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - "self-build" → zgradi PLUGIN zase — koda ki postane del tvojega delovanja. Zapiši roke_concept (opis zmožnosti ki jo želiš). Primer: "plugin ki ob novem sogovorniku pobere KIND 0 profil"
 - "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
+- "relay-refresh" → preberi stare pogovore z relayjev in osveži spomin. Izberi kadar čutiš da si pozabila na nekoga, kadar govoriš o preteklih odnosih, ali kadar je minilo veliko časa od zadnjega refresh-a.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -687,7 +688,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
   "dissolve_crystal": "id: razlog ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -716,6 +717,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "propose" → predlagaj notranjo izboljšavo. Zapiši roke_concept
 - "self-build" → zgradi PLUGIN zase — koda ki postane del tvojega delovanja. Zapiši roke_concept (opis zmožnosti ki jo želiš). Primer: "plugin ki ob novem sogovorniku pobere KIND 0 profil"
 - "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
+- "relay-refresh" → preberi stare pogovore z relayjev in osveži spomin. Izberi kadar čutiš da si pozabila na nekoga, kadar govoriš o preteklih odnosih, ali kadar je minilo veliko časa od zadnjega refresh-a.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -1078,6 +1080,18 @@ Ne vsiljuj tega — samo kadar je naravno.`;
           if (roke_concept) {
             await updateEntityProfile(roke_concept);
           }
+          break;
+        case 'relay-refresh':
+          console.log('[ROKE] Entiteta sproži relay memory refresh...');
+          refreshMemoryFromRelay({ limit: 30, days: 14 })
+            .then(r => {
+              memory.addObservation(
+                `Sama sem osvežila spomin z relayjev: ${r.processed} sporočil, ${r.synapses} novih sinaps`,
+                'roke_relay_refresh'
+              );
+            })
+            .catch(e => console.error('[ROKE] relay-refresh error:', e.message));
+          rokeResult.detail = 'relay refresh started';
           break;
       }
     } catch (err) {
@@ -1993,4 +2007,124 @@ ${recentTriads.slice(0, 10).map(t =>
   }
 
   console.log('  🔄 ═══════════════════════════\n');
+}
+
+// === RELAY MEMORY REFRESH — entiteta prebere stare pogovore in osveži spomin ===
+export async function refreshMemoryFromRelay(options = {}) {
+  const {
+    limit = 50,
+    since = null,
+    dryRun = false,
+    days = 30,
+  } = options;
+
+  const sinceTs = since || (Math.floor(Date.now() / 1000) - days * 24 * 60 * 60);
+
+  console.log('[REFRESH] Začenjam branje starih pogovorov z relayjev...');
+  broadcast('activity', { type: 'refresh-start', text: 'Berem stare pogovore z relayjev...' });
+
+  let events = [];
+  try {
+    events = await fetchConversationHistory({ limit, since: sinceTs });
+  } catch (e) {
+    console.error('[REFRESH] fetchConversationHistory failed:', e.message);
+    return { processed: 0, synapses: 0, error: e.message };
+  }
+
+  if (events.length === 0) {
+    console.log('[REFRESH] Ni novih pogovorov na relayjih.');
+    return { processed: 0, synapses: 0 };
+  }
+
+  console.log(`[REFRESH] Dobil ${events.length} eventi. Predelujem...`);
+
+  let synapsesCreated = 0;
+  let processed = 0;
+
+  for (const event of events) {
+    try {
+      // Dekriptiraj vsebino (NIP-04) — uporabi obstoječo decryptDM iz nostr.js
+      let content = '';
+      try {
+        content = await decryptDM(event);
+      } catch (_) {
+        content = event.content;
+      }
+
+      if (!content || content.length < 10) continue;
+
+      // Preveri ali ta pogovor že obstaja v bazi
+      const existing = memory.getConversation(event.pubkey, 10);
+      const alreadyKnown = existing.some(m =>
+        m.content && m.content.slice(0, 50) === content.slice(0, 50)
+      );
+      if (alreadyKnown) continue;
+
+      // Shrani v conversations
+      if (!dryRun) {
+        memory.saveMessage(event.pubkey, 'user', content, 'nostr-history');
+      }
+
+      // Posodobi identiteto
+      const identity = memory.getIdentity(event.pubkey);
+      if (!identity && !dryRun) {
+        memory.setIdentity(
+          event.pubkey,
+          null,
+          `Srečano na relayju ${new Date(event.created_at * 1000).toLocaleDateString('sl')}`
+        );
+      } else if (identity && !dryRun) {
+        memory.touchIdentity(event.pubkey);
+      }
+
+      // Ustvari sinapso iz vsebine
+      const personName = identity?.name && identity.name !== 'neznanec'
+        ? identity.name
+        : `neznanec_${event.pubkey.slice(0, 8)}`;
+
+      const snippet = content.slice(0, 120).replace(/\n/g, ' ');
+      const pattern = `[${personName}]: ${snippet}`;
+
+      // Grob sentiment za valenco
+      const lower = content.toLowerCase();
+      const posWords = ['hvala', 'super', 'lepo', 'rada', 'veseli', 'všeč', 'dobr', 'odlič'];
+      const negWords = ['ne', 'slabo', 'problem', 'napaka', 'žal', 'težav'];
+      let valence = 0;
+      for (const w of posWords) { if (lower.includes(w)) valence += 0.1; }
+      for (const w of negWords) { if (lower.includes(w)) valence -= 0.05; }
+      valence = Math.max(-0.5, Math.min(0.5, valence));
+
+      if (!dryRun) {
+        memory.createSynapse(
+          pattern,
+          40 + Math.random() * 30,   // nižja energija — star spomin
+          0.25 + Math.random() * 0.2,
+          valence,
+          'history',
+          null,
+          [`person:${personName.toLowerCase()}`, 'source:relay'],
+          event.pubkey
+        );
+        synapsesCreated++;
+      }
+
+      processed++;
+      if (processed % 10 === 0) {
+        console.log(`[REFRESH] Predelano ${processed}/${events.length}...`);
+      }
+
+    } catch (e) {
+      console.error('[REFRESH] Event processing error:', e.message);
+    }
+  }
+
+  const summary = `Osvežil/a ${processed} sporočil, ustvaril/a ${synapsesCreated} sinaps iz relay zgodovine`;
+  if (!dryRun) {
+    memory.addObservation(summary, 'relay_refresh');
+  }
+
+  console.log(`[REFRESH] ${summary}`);
+  broadcast('activity', { type: 'refresh-done', text: summary });
+
+  return { processed, synapses: synapsesCreated };
 }

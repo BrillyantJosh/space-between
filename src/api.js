@@ -3,7 +3,7 @@ import { app } from './dashboard.js';
 import { broadcast } from './dashboard.js';
 import config from './config.js';
 import memory from './memory.js';
-import { runTriad } from './triad.js';
+import { runTriad, refreshMemoryFromRelay } from './triad.js';
 import { verifyEvent } from 'nostr-tools/pure';
 import { getIdentity } from './nostr.js';
 
@@ -315,6 +315,30 @@ app.get('/api/auth/challenge', (req, res) => {
     timestamp: Math.floor(Date.now() / 1000),
     pubkey: getIdentity().pubkey
   });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// POST /api/refresh-memory — sproži branje starih pogovorov z relayjev
+// ═══════════════════════════════════════════════════════════════════════
+app.post('/api/refresh-memory', async (req, res) => {
+  try {
+    const { limit = 50, days = 30, dryRun = false } = req.body || {};
+    const since = Math.floor(Date.now() / 1000) - (days * 24 * 60 * 60);
+
+    refreshMemoryFromRelay({ limit, since, dryRun })
+      .then(result => {
+        broadcast('activity', {
+          type: 'refresh-complete',
+          text: `Refresh končan: ${result.processed} sporočil, ${result.synapses} sinaps`
+        });
+      })
+      .catch(e => console.error('[REFRESH] Error:', e.message));
+
+    res.json({ status: 'started', message: 'Osvežujem spomin z relayjev...' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 
