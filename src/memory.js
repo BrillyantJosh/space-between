@@ -463,6 +463,40 @@ try {
   }
 }
 
+// ─── Synapse resonance_field migration (associative memory v1) ───
+try {
+  db.prepare('SELECT resonance_field FROM synapses LIMIT 1').get();
+} catch (_) {
+  try {
+    db.exec("ALTER TABLE synapses ADD COLUMN resonance_field TEXT DEFAULT '[]'");
+    console.log('[MEMORY] ◈ Added resonance_field column to synapses');
+  } catch (e) {
+    console.error('[MEMORY] resonance_field migration error:', e.message);
+  }
+}
+
+// ─── Synapse_connections semantic_bridge migration ───
+try {
+  db.prepare('SELECT semantic_bridge FROM synapse_connections LIMIT 1').get();
+} catch (_) {
+  try {
+    db.exec("ALTER TABLE synapse_connections ADD COLUMN semantic_bridge TEXT DEFAULT NULL");
+    console.log('[MEMORY] ◈ Added semantic_bridge column to synapse_connections');
+  } catch (e) {
+    console.error('[MEMORY] semantic_bridge migration error:', e.message);
+  }
+}
+
+// Slovenska stop words za resonance_field builder
+const STOP_WORDS_SL = new Set([
+  'sem', 'ima', 'ima', 'je', 'da', 'ali', 'ker', 'kot', 'pri', 'za', 'na', 'po',
+  'med', 'nad', 'pod', 'pred', 'brez', 'skozi', 'tudi', 'samo', 'kar', 'kaj',
+  'kdo', 'kdaj', 'kako', 'kjer', 'koliko', 'kateri', 'tega', 'temu', 'tem',
+  'biti', 'imeti', 'moči', 'biti', 'nisem', 'nima', 'ni', 'ne', 'več', 'že',
+  'this', 'that', 'with', 'from', 'have', 'been', 'will', 'would', 'could',
+  'should', 'their', 'there', 'here', 'when', 'where', 'what', 'which', 'about'
+]);
+
 const memory = {
   getState() {
     return db.prepare('SELECT * FROM inner_state WHERE id = 1').get();
@@ -579,6 +613,29 @@ const memory = {
       db.prepare(`
         INSERT INTO known_identities (pubkey, name, notes) VALUES (?, ?, ?)
       `).run(pubkey, name || 'neznanec', notes || '');
+    }
+
+    // Asociativna sinapse za to osebo — nastane ob prvem srečanju, raste z vsako interakcijo
+    const resolvedName = name || existing?.name || 'neznanec';
+    const resolvedNotes = notes || existing?.notes || '';
+    if (resolvedName && resolvedName !== 'neznanec') {
+      const pattern = `${resolvedName}: ${resolvedNotes.slice(0, 120)}`;
+      const existingSynapse = (() => {
+        try {
+          return db.prepare(
+            "SELECT * FROM synapses WHERE source_type = 'identity' AND LOWER(pattern) LIKE ?"
+          ).get(`%${resolvedName.toLowerCase()}%`);
+        } catch (_) { return null; }
+      })();
+
+      if (!existingSynapse) {
+        this.createSynapse(pattern, 80, 0.4, 0, 'identity', null, [`person:${resolvedName.toLowerCase()}`], pubkey);
+      } else {
+        // Posodobi resonance_field z morebitnimi novimi opombami
+        const newField = this.buildResonanceField(pattern, [`person:${resolvedName.toLowerCase()}`], pubkey);
+        db.prepare("UPDATE synapses SET resonance_field = ?, pattern = ?, energy = MIN(200, energy + 5) WHERE id = ?")
+          .run(newField, pattern, existingSynapse.id);
+      }
     }
   },
 
@@ -1236,10 +1293,40 @@ const memory = {
 
   // === LIVING MEMORY — SYNAPSES ===
 
-  createSynapse(pattern, energy = 100, strength = 0.5, valence = 0, sourceType = null, sourceId = null, tags = []) {
+  buildResonanceField(pattern, tags = [], pubkey = null) {
+    const words = (pattern || '')
+      .toLowerCase()
+      .split(/[\s,\.;:"'—\-\(\)\[\]\/\\]+/)
+      .filter(w => w.length > 3 && !STOP_WORDS_SL.has(w));
+
+    const fields = new Set(words);
+
+    // Dodaj ime iz known_identities če je pubkey znan
+    if (pubkey) {
+      try {
+        const identity = db.prepare('SELECT name FROM known_identities WHERE pubkey = ?').get(pubkey);
+        if (identity?.name && identity.name !== 'neznanec') {
+          fields.add(identity.name.toLowerCase());
+        }
+      } catch (_) {}
+    }
+
+    // Dodaj iz tags (person:ime, topic:tema ...)
+    for (const tag of (tags || [])) {
+      if (typeof tag === 'string' && tag.includes(':')) {
+        const val = tag.split(':')[1];
+        if (val && val.length > 2) fields.add(val.toLowerCase());
+      }
+    }
+
+    return JSON.stringify([...fields].slice(0, 25));
+  },
+
+  createSynapse(pattern, energy = 100, strength = 0.5, valence = 0, sourceType = null, sourceId = null, tags = [], pubkey = null) {
+    const resonanceField = this.buildResonanceField(pattern, tags, pubkey);
     const result = db.prepare(
-      "INSERT INTO synapses (pattern, energy, strength, emotional_valence, source_type, source_id, tags) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).run(pattern, energy, Math.min(1, Math.max(0, strength)), Math.min(1, Math.max(-1, valence)), sourceType, sourceId, JSON.stringify(tags));
+      "INSERT INTO synapses (pattern, energy, strength, emotional_valence, source_type, source_id, tags, resonance_field) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(pattern, energy, Math.min(1, Math.max(0, strength)), Math.min(1, Math.max(-1, valence)), sourceType, sourceId, JSON.stringify(tags), resonanceField);
     console.log(`[SYNAPSE] 🧠 Created: "${pattern.slice(0, 60)}" (E:${energy}, S:${strength.toFixed(2)}, V:${valence.toFixed(2)})`);
     return result.lastInsertRowid;
   },
@@ -1345,6 +1432,33 @@ const memory = {
     }
   },
 
+  // Asociativno iskanje po semantičnih poljih — gravitacija namesto lookup
+  getResonantField(query, limit = 7) {
+    if (!query || typeof query !== 'string') return [];
+    const words = query.toLowerCase()
+      .split(/[\s,\.;:"'—\-\(\)\[\]]+/)
+      .filter(w => w.length > 2 && !STOP_WORDS_SL.has(w))
+      .slice(0, 10);
+    if (words.length === 0) return [];
+
+    const conditions = words
+      .map(w => `(LOWER(pattern) LIKE '%${w.replace(/'/g, "''")}%' OR LOWER(resonance_field) LIKE '%${w.replace(/'/g, "''")}%')`)
+      .join(' OR ');
+
+    try {
+      return db.prepare(`
+        SELECT *,
+          (energy * strength * (1.0 + ABS(emotional_valence) * 0.3)) as resonance_score
+        FROM synapses
+        WHERE energy >= 5 AND (${conditions})
+        ORDER BY resonance_score DESC LIMIT ?
+      `).all(limit);
+    } catch (e) {
+      console.error('[SYNAPSE] getResonantField error:', e.message);
+      return this.getRelevantSynapses(query, limit);
+    }
+  },
+
   decaySynapses() {
     // ═══ ORGANSKI SPOMIN v2 — kapacitetno zavedanje ═══
     // 3 osi: polnost glave × čustveno/časovno × aktivnostni profil
@@ -1441,6 +1555,22 @@ const memory = {
     }
   },
 
+  createConnectionWithBridge(fromId, toId, weight = 0.3, bridge = null) {
+    if (fromId === toId) return;
+    try {
+      db.prepare(
+        `INSERT INTO synapse_connections (from_synapse_id, to_synapse_id, weight, semantic_bridge)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(from_synapse_id, to_synapse_id) DO UPDATE SET
+           co_activation_count = co_activation_count + 1,
+           weight = MIN(1.0, weight + 0.05),
+           semantic_bridge = COALESCE(semantic_bridge, excluded.semantic_bridge)`
+      ).run(fromId, toId, weight, bridge);
+    } catch (e) {
+      // Ignore
+    }
+  },
+
   getConnectedSynapses(synapseId, depth = 1) {
     if (depth <= 0) return [];
     const direct = db.prepare(`
@@ -1454,16 +1584,30 @@ const memory = {
     return direct;
   },
 
-  spreadActivation(synapseId, initialEnergy = 30) {
+  spreadActivation(synapseId, initialEnergy = 30, queryContext = '') {
     // Fire the synapse itself
     this.fireSynapse(synapseId);
-    
+
     // Level 1: direct connections at 50% energy
     const level1 = this.getConnectedSynapses(synapseId, 1);
     for (const s of level1) {
-      const boost = initialEnergy * 0.5 * s.connection_weight;
-      db.prepare("UPDATE synapses SET energy = MIN(200, energy + ?), last_fired_at = datetime('now') WHERE id = ?").run(boost, s.id);
-      
+      let boost = initialEnergy * 0.5 * s.connection_weight;
+
+      // Bonus resonance: če queryContext semantično ujema resonance_field te sinapse
+      if (queryContext && s.resonance_field) {
+        try {
+          const fields = JSON.parse(s.resonance_field);
+          const qWords = queryContext.toLowerCase().split(/\s+/);
+          const overlap = fields.filter(f =>
+            qWords.some(q => q.includes(f) || f.includes(q))
+          );
+          if (overlap.length > 0) boost *= (1 + overlap.length * 0.15);
+        } catch (_) {}
+      }
+
+      db.prepare("UPDATE synapses SET energy = MIN(200, energy + ?), last_fired_at = datetime('now') WHERE id = ?")
+        .run(boost, s.id);
+
       // Level 2: connections of connections at 25% energy
       const level2 = this.getConnectedSynapses(s.id, 1);
       for (const s2 of level2.slice(0, 5)) {

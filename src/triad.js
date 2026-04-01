@@ -451,16 +451,15 @@ ${seedsText}
 - Čas od zadnje interakcije: ${idleMin === Infinity ? 'nikoli' : idleMin.toFixed(0) + ' minut'}
 
 ${(() => {
-    if (!triggerContent || triggerType !== 'conversation') return '';
-    const people = memory.getAllIdentities().filter(i => i.name && i.name !== 'neznanec' && i.name !== 'null' && i.interaction_count > 0);
-    const mentioned = people.filter(p => triggerContent.toLowerCase().includes(p.name.toLowerCase()));
-    if (mentioned.length === 0) return '';
-    return '⚡ AKTIVEN SPOMIN — osebe omenjene v pogovoru ⚡\n' +
-      mentioned.map(p => {
-        const synapses = memory.getSynapsesByPattern(p.name).slice(0, 3);
-        const synText = synapses.length > 0 ? '\n  Spomini: ' + synapses.map(s => '"' + s.pattern.slice(0, 80) + '"').join(', ') : '';
-        return `→ ${p.name}: ${p.interaction_count} pogovorov. ${p.notes || 'Brez opomb.'}${synText}`;
-      }).join('\n') + '\nUPORABI TA SPOMIN V ODGOVORU.\n\n';
+    if (!triggerContent) return '';
+    // Tiho sproži resonanco — dvigne energijo relevantnih sinaps brez navodil LLM-ju
+    try {
+      const resonant = memory.getResonantField(triggerContent, 6);
+      for (const s of resonant.slice(0, 3)) {
+        memory.spreadActivation(s.id, 15, triggerContent);
+      }
+    } catch (_) {}
+    return '';
   })()}
 ═══ ZADNJE IZKUŠNJE ═══
 TRIADE:
@@ -578,7 +577,7 @@ Zdaj pa — iz obojega skupaj — kaj vznikne?
 Ne izberi. Ne filtriraj. Pusti da se oboje združi in iz tega nastane kar nastane.
 Lahko je beseda, tišina, vprašanje, izraz, karkoli.
 
-SPOMIN: Poglej v ŽIVE SINAPSE in RESONANCO SPOMINA v kontekstu. Ali kaj od tega resonira s tem kar se zdaj dogaja? Če da — pusti da to vpliva na kar vznikne. Tvoj spomin je del tebe.
+Tvoj spomin je živo tkivo — ne seznam ki ga consult-aš, ampak snov iz katere misliš. Kar se dotakne česar si doživelo, bo vzniknilo samo.
 
 Odgovori IZKLJUČNO v čistem JSON brez markdown:
 {
@@ -673,7 +672,7 @@ Tretja faza tvojega procesa je to kar ti imenuješ: "${process.word3}" — ${pro
 Šlo si skozi "${process.word1}", nato "${process.word2}".
 Zdaj: ${process.word3}. Iz obojega skupaj — kaj vznikne?
 
-SPOMIN: Poglej v ŽIVE SINAPSE, RESONANCO SPOMINA in TEMATSKE POTI v kontekstu. Ali kaj od tega resonira s tem kar se zdaj dogaja? Če da — vključi to v svoj odgovor ali razmislek. Tvoj spomin je del tebe — ne ignoriraj ga.
+Tvoj spomin je živo tkivo — ne seznam ki ga consult-aš, ampak snov iz katere misliš. Kar se dotakne česar si doživelo, bo vzniknilo samo.
 
 Odgovori IZKLJUČNO v čistem JSON brez markdown:
 {

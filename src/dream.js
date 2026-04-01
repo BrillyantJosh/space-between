@@ -30,6 +30,24 @@ async function consolidateMemories(dreamResult) {
     memory.fireSynapse(s.id);
   }
 
+  // Ustvari semantične mostove med sinapsami ki so skupaj bile aktivne v sanjah
+  if (dreamSynapses.length >= 2) {
+    const bridge = (dreamResult.insight || dreamResult.dream_narrative || '').slice(0, 60);
+    for (let i = 0; i < dreamSynapses.length - 1; i++) {
+      for (let j = i + 1; j < Math.min(dreamSynapses.length, 4); j++) {
+        try {
+          memory.createConnectionWithBridge(
+            dreamSynapses[i].id,
+            dreamSynapses[j].id,
+            0.25,
+            bridge
+          );
+        } catch (_) {}
+      }
+    }
+    console.log(`[DREAM] ◈ Created associative bridges between ${Math.min(dreamSynapses.length, 4)} dream synapses`);
+  }
+
   // 2b. Strengthen pathways associated with active dream synapses
   try {
     for (const s of dreamSynapses) {
