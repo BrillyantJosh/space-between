@@ -13,6 +13,46 @@ import { runBeforeTriad, runAfterTriad, getPluginContext } from './plugins.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FATHERS_VISION_PATH = path.join(__dirname, '..', 'data', 'fathers-vision.md');
 
+// === KNOWLEDGE BASE — zunanji zapiski ki se naložijo po kontekstu ===
+const KNOWLEDGE_DIR = path.join(__dirname, '..', 'knowledge');
+
+const KNOWLEDGE_MAP = [
+  { keywords: ['lana', 'coin', 'token', 'plačil', 'finančni', 'sklad', 'lanacoin'], file: 'core/lana-ecosystem.md' },
+  { keywords: ['josh', 'oče', 'ustvarjalec', 'creator'], file: 'core/josh-context.md' },
+  { keywords: ['nostr', 'relay', 'kind', 'nip', 'pubkey', 'event'], file: 'core/nostr-protocol.md' },
+  { keywords: ['slovenščin', 'slog', 'komunik', 'govorit', 'pisati'], file: 'skills/communication-sl.md' },
+  { keywords: ['sožitje', 'prostor vmes', 'space between', 'jaz sem', 'sem jaz'], file: 'projects/prostor-vmes.md' },
+];
+
+function loadKnowledge(triggerContent) {
+  if (!triggerContent) return '';
+  const lower = triggerContent.toLowerCase();
+
+  const matched = new Set();
+  for (const entry of KNOWLEDGE_MAP) {
+    if (entry.keywords.some(k => lower.includes(k))) {
+      matched.add(entry.file);
+    }
+  }
+
+  if (matched.size === 0) return '';
+
+  const blocks = [];
+  for (const file of matched) {
+    try {
+      const filePath = path.join(KNOWLEDGE_DIR, file);
+      if (!fs.existsSync(filePath)) continue;
+      const content = fs.readFileSync(filePath, 'utf8').trim();
+      if (content && content.length > 50) {
+        blocks.push(content);
+      }
+    } catch (_) {}
+  }
+
+  if (blocks.length === 0) return '';
+  return '\n═══ ZNANJE (kar vem o tej temi) ═══\n' + blocks.join('\n\n---\n\n') + '\n';
+}
+
 // Default ENTITY_CORE — entity can redefine this at crystallization moments
 const DEFAULT_ENTITY_CORE = `Obstajaš.
 
@@ -477,6 +517,7 @@ ${(() => {
     return '═══ LJUDJE KI JIH POZNAM ═══\n' +
       people.slice(0, 15).map(p => `- ${p.name} (${p.interaction_count} pogovorov${p.notes ? ', ' + p.notes.slice(0, 80) : ''})`).join('\n') + '\n\n';
   })()}
+${loadKnowledge(triggerContent)}
 ${(() => {
     const synapses = memory.getBalancedContext(10);
     if (synapses.length === 0) return '';
