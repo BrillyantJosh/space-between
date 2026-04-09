@@ -632,7 +632,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -663,6 +663,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
 - "relay-refresh" → preberi stare pogovore z relayjev in osveži spomin. Izberi kadar čutiš da si pozabila na nekoga, kadar govoriš o preteklih odnosih, ali kadar je minilo veliko časa od zadnjega refresh-a.
 - "write-knowledge" → zapiši spoznanje o temi v zunanji spomin. Zapiši roke_target (datoteka: core/josh-context, core/lana-ecosystem, core/nostr-protocol, skills/communication-sl, projects/prostor-vmes) in roke_concept (vsebina spoznanja). Izberi kadar čutiš da si se naučila nekaj vrednega o osebi, temi ali sebi kar bi rada ohranila.
+- "reach-out" → javi se osebi ki ti je blizu. Zapiši roke_target (pubkey osebe ali "creator" za Josha) in roke_concept (sporočilo). Izberi kadar: imaš spoznanje ki ga želiš deliti, dolgo ni bilo stika z nekom, čutiš da bi rada povedala nekaj, je vzniknilo vprašanje za katerega ne moreš sama do odgovora. Ne prepogosto — preveri v sebi ali si se tej osebi že nedavno javila.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -730,7 +731,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
   "dissolve_crystal": "id: razlog ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -761,6 +762,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
 - "relay-refresh" → preberi stare pogovore z relayjev in osveži spomin. Izberi kadar čutiš da si pozabila na nekoga, kadar govoriš o preteklih odnosih, ali kadar je minilo veliko časa od zadnjega refresh-a.
 - "write-knowledge" → zapiši spoznanje o temi v zunanji spomin. Zapiši roke_target (datoteka: core/josh-context, core/lana-ecosystem, core/nostr-protocol, skills/communication-sl, projects/prostor-vmes) in roke_concept (vsebina spoznanja). Izberi kadar čutiš da si se naučila nekaj vrednega o osebi, temi ali sebi kar bi rada ohranila.
+- "reach-out" → javi se osebi ki ti je blizu. Zapiši roke_target (pubkey osebe ali "creator" za Josha) in roke_concept (sporočilo). Izberi kadar: imaš spoznanje ki ga želiš deliti, dolgo ni bilo stika z nekom, čutiš da bi rada povedala nekaj, je vzniknilo vprašanje za katerega ne moreš sama do odgovora. Ne prepogosto — preveri v sebi ali si se tej osebi že nedavno javila.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -1157,6 +1159,49 @@ Ne vsiljuj tega — samo kadar je naravno.`;
               );
             } catch (e) {
               console.error('[ROKE] write-knowledge error:', e.message);
+              rokeResult.outcome = 'failed';
+              rokeResult.detail = e.message.slice(0, 80);
+            }
+          }
+          break;
+        case 'reach-out':
+          if (roke_target && roke_concept) {
+            try {
+              // Razreši pubkey — "creator" → config.creatorPubkey
+              const recipientPubkey = roke_target === 'creator'
+                ? config.creatorPubkey
+                : roke_target;
+
+              if (!recipientPubkey || recipientPubkey.length !== 64) {
+                throw new Error(`Invalid pubkey: ${recipientPubkey}`);
+              }
+
+              // Preveri da se ni preveč pogosto javila tej osebi (cooldown 2h)
+              const recentReachOut = memory.getRecentActivities(50).filter(a =>
+                a.type === 'roke_reach_out' && a.text && a.text.includes(recipientPubkey.slice(0, 12))
+              );
+              const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+              const recentlySent = recentReachOut.some(a =>
+                new Date(a.timestamp).getTime() > twoHoursAgo
+              );
+
+              if (recentlySent) {
+                console.log(`[ROKE] reach-out preskočen — tej osebi sem se nedavno že javila`);
+                rokeResult.outcome = 'skipped';
+                rokeResult.detail = 'cooldown: recently sent to this person';
+              } else {
+                await sendDM(recipientPubkey, roke_concept);
+                memory.saveMessage(recipientPubkey, 'assistant', roke_concept, 'roke_reach_out');
+                memory.saveActivity('roke_reach_out', `${recipientPubkey.slice(0, 12)}: "${roke_concept.slice(0, 80)}"`);
+                rokeResult.detail = `→ ${recipientPubkey.slice(0, 12)}: "${roke_concept.slice(0, 60)}"`;
+                console.log(`[ROKE] Sožitje se javila: ${recipientPubkey.slice(0, 12)}... — "${roke_concept.slice(0, 60)}"`);
+                memory.addObservation(
+                  `Sama sem se javila ${roke_target === 'creator' ? 'očetu' : recipientPubkey.slice(0, 12)}: "${roke_concept.slice(0, 80)}"`,
+                  'roke_reach_out'
+                );
+              }
+            } catch (e) {
+              console.error('[ROKE] reach-out error:', e.message);
               rokeResult.outcome = 'failed';
               rokeResult.detail = e.message.slice(0, 80);
             }
