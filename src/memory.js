@@ -1524,9 +1524,17 @@ const memory = {
       .slice(0, 10);
     if (words.length === 0) return [];
 
-    const conditions = words
-      .map(w => `(LOWER(pattern) LIKE '%${w.replace(/'/g, "''")}%' OR LOWER(resonance_field) LIKE '%${w.replace(/'/g, "''")}%')`)
-      .join(' OR ');
+    // Za vsako besedo dodaj tudi predpono (5+ znakov) → ujame sklone (Gašperju → gašper)
+    const searchTerms = [];
+    for (const w of words) {
+      const safe = w.replace(/'/g, "''");
+      searchTerms.push(`(LOWER(pattern) LIKE '%${safe}%' OR LOWER(resonance_field) LIKE '%${safe}%')`);
+      if (w.length > 5) {
+        const stem = w.slice(0, Math.max(4, w.length - 2)).replace(/'/g, "''");
+        searchTerms.push(`(LOWER(pattern) LIKE '%${stem}%' OR LOWER(resonance_field) LIKE '%${stem}%')`);
+      }
+    }
+    const conditions = searchTerms.join(' OR ');
 
     let candidates = [];
     try {
