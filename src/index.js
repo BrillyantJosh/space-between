@@ -2,6 +2,29 @@ import config from './config.js';
 import memory from './memory.js';
 import { runTriad, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
 import { dream } from './dream.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname_idx = path.dirname(fileURLToPath(import.meta.url));
+const KNOWLEDGE_DIR_IDX = path.join(__dirname_idx, '..', 'knowledge');
+
+// === BOOTSTRAP — enkrat ob zagonu potegni llms.txt v knowledge ===
+async function bootstrapKnowledge() {
+  const target = path.join(KNOWLEDGE_DIR_IDX, 'core', 'lana-nostr-kinds.md');
+  try {
+    const res = await fetch('https://lananostr.site/llms.txt', { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    if (text && text.length > 100) {
+      fs.mkdirSync(path.join(KNOWLEDGE_DIR_IDX, 'core'), { recursive: true });
+      fs.writeFileSync(target, text, 'utf8');
+      console.log(`[BOOT] Knowledge bootstrap: lana-nostr-kinds.md (${text.length} znakov)`);
+    }
+  } catch (e) {
+    console.warn(`[BOOT] Knowledge bootstrap preskočen: ${e.message}`);
+  }
+}
 import {
   connectRelays, publishProfile, publishNote, publishReply,
   sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity, onRelayConnect
@@ -645,6 +668,9 @@ async function main() {
 
   // Connect to NOSTR
   await connectRelays();
+
+  // Bootstrap knowledge (enkrat ob zagonu, ne blokira)
+  bootstrapKnowledge().catch(e => console.warn('[BOOT] bootstrap error:', e.message));
 
   // Publish profile
   await publishProfile();

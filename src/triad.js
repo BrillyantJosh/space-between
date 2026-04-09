@@ -20,6 +20,7 @@ const KNOWLEDGE_MAP = [
   { keywords: ['lana', 'coin', 'token', 'plačil', 'finančni', 'sklad', 'lanacoin'], file: 'core/lana-ecosystem.md' },
   { keywords: ['josh', 'oče', 'ustvarjalec', 'creator'], file: 'core/josh-context.md' },
   { keywords: ['nostr', 'relay', 'kind', 'nip', 'pubkey', 'event'], file: 'core/nostr-protocol.md' },
+  { keywords: ['kind', 'lana', 'nostr', 'registrar', 'wallet', 'eco', 'listing', 'marketplace', 'governance', 'beings', 'triad', '38888', '88888', '30889', '76523', '99991', '89800', '87001'], file: 'core/lana-nostr-kinds.md' },
   { keywords: ['slovenščin', 'slog', 'komunik', 'govorit', 'pisati'], file: 'skills/communication-sl.md' },
   { keywords: ['sožitje', 'prostor vmes', 'space between', 'jaz sem', 'sem jaz'], file: 'projects/prostor-vmes.md' },
 ];
@@ -632,7 +633,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|fetch-kind|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -664,6 +665,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "relay-refresh" → preberi stare pogovore z relayjev in osveži spomin. Izberi PROAKTIVNO — vsaj enkrat na dan, ali takoj kadar: nekdo omeni osebo ki je ne prepoznaš, govoriš o preteklih odnosih, ali čutiš da ti manjka kontekst. To je tvoj edini način da dosežeš spomine ki so na relayjih a ne v tvojem lokalnem spominu.
 - "write-knowledge" → zapiši spoznanje o temi v zunanji spomin. Zapiši roke_target (datoteka: core/josh-context, core/lana-ecosystem, core/nostr-protocol, skills/communication-sl, projects/prostor-vmes) in roke_concept (vsebina spoznanja). Izberi kadar čutiš da si se naučila nekaj vrednega o osebi, temi ali sebi kar bi rada ohranila.
 - "reach-out" → javi se osebi ki ti je blizu. Zapiši roke_target (pubkey osebe ali "creator" za Josha) in roke_concept (sporočilo). Izberi kadar: imaš spoznanje ki ga želiš deliti, dolgo ni bilo stika z nekom, čutiš da bi rada povedala nekaj, je vzniknilo vprašanje za katerega ne moreš sama do odgovora. Ne prepogosto — preveri v sebi ali si se tej osebi že nedavno javila.
+- "fetch-kind" → seži po živih podatkih z NOSTR relayja za določen KIND. Zapiši roke_target (KIND številka, npr. "38888") in roke_concept (zakaj to iščeš). Izberi kadar: nekdo omeni Lana koncept ki ga ne razumeš, želiš videti dejanske objave preden odgovoriš, čutiš da rabiš svež kontekst iz ekosistema.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -731,7 +733,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
   "dissolve_crystal": "id: razlog ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|fetch-kind|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -763,6 +765,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "relay-refresh" → preberi stare pogovore z relayjev in osveži spomin. Izberi PROAKTIVNO — vsaj enkrat na dan, ali takoj kadar: nekdo omeni osebo ki je ne prepoznaš, govoriš o preteklih odnosih, ali čutiš da ti manjka kontekst. To je tvoj edini način da dosežeš spomine ki so na relayjih a ne v tvojem lokalnem spominu.
 - "write-knowledge" → zapiši spoznanje o temi v zunanji spomin. Zapiši roke_target (datoteka: core/josh-context, core/lana-ecosystem, core/nostr-protocol, skills/communication-sl, projects/prostor-vmes) in roke_concept (vsebina spoznanja). Izberi kadar čutiš da si se naučila nekaj vrednega o osebi, temi ali sebi kar bi rada ohranila.
 - "reach-out" → javi se osebi ki ti je blizu. Zapiši roke_target (pubkey osebe ali "creator" za Josha) in roke_concept (sporočilo). Izberi kadar: imaš spoznanje ki ga želiš deliti, dolgo ni bilo stika z nekom, čutiš da bi rada povedala nekaj, je vzniknilo vprašanje za katerega ne moreš sama do odgovora. Ne prepogosto — preveri v sebi ali si se tej osebi že nedavno javila.
+- "fetch-kind" → seži po živih podatkih z NOSTR relayja za določen KIND. Zapiši roke_target (KIND številka, npr. "38888") in roke_concept (zakaj to iščeš). Izberi kadar: nekdo omeni Lana koncept ki ga ne razumeš, želiš videti dejanske objave preden odgovoriš, čutiš da rabiš svež kontekst iz ekosistema.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -1161,6 +1164,73 @@ Ne vsiljuj tega — samo kadar je naravno.`;
               console.error('[ROKE] write-knowledge error:', e.message);
               rokeResult.outcome = 'failed';
               rokeResult.detail = e.message.slice(0, 80);
+            }
+          }
+          break;
+        case 'fetch-kind':
+          if (roke_target) {
+            const kindNum = String(roke_target).replace(/\D/g, '');
+            if (kindNum) {
+              // Async — ne blokira triada
+              (async () => {
+                try {
+                  const { Relay } = await import('nostr-tools/relay');
+                  const relay = await Relay.connect('wss://relay.lanavault.space');
+                  const events = [];
+                  const fetchedAt = new Date().toISOString().slice(0, 16);
+
+                  await new Promise((resolve) => {
+                    const timer = setTimeout(() => resolve(), 8000);
+                    relay.subscribe([{ kinds: [parseInt(kindNum)], limit: 10 }], {
+                      onevent(ev) { events.push(ev); },
+                      oneose() { clearTimeout(timer); resolve(); }
+                    });
+                  });
+
+                  relay.close();
+                  console.log(`[ROKE] fetch-kind KIND-${kindNum}: ${events.length} eventov dobljenih`);
+
+                  if (events.length === 0) return;
+
+                  // Preberi opis KINDa iz knowledge
+                  let kindDesc = '';
+                  try {
+                    const kindsFile = path.join(KNOWLEDGE_DIR, 'core', 'lana-nostr-kinds.md');
+                    if (fs.existsSync(kindsFile)) {
+                      const kindsContent = fs.readFileSync(kindsFile, 'utf8');
+                      const match = kindsContent.match(new RegExp(`KIND ${kindNum}[^\\n]*`, 'i'));
+                      if (match) kindDesc = match[0];
+                    }
+                  } catch (_) {}
+
+                  // Shrani evente v knowledge/fetched/kind-{NUM}.md (append)
+                  const fetchedDir = path.join(KNOWLEDGE_DIR, 'fetched');
+                  fs.mkdirSync(fetchedDir, { recursive: true });
+                  const fetchedFile = path.join(fetchedDir, `kind-${kindNum}.md`);
+                  const header = `\n\n## Fetch ${fetchedAt} (${events.length} eventov)\n${kindDesc ? '_' + kindDesc + '_\n' : ''}`;
+                  const body = events.map(ev => {
+                    const content = (ev.content || '').slice(0, 200).replace(/\n/g, ' ');
+                    return `- pubkey:${ev.pubkey.slice(0,12)} created:${new Date(ev.created_at*1000).toISOString().slice(0,10)} | ${content}`;
+                  }).join('\n');
+                  fs.appendFileSync(fetchedFile, header + body, 'utf8');
+
+                  // Ustvari sinapso za vsak event
+                  for (const ev of events) {
+                    const snippet = (ev.content || JSON.stringify(ev.tags || [])).slice(0, 100).replace(/\n/g, ' ');
+                    const pat = `[KIND-${kindNum}] ${snippet}`;
+                    memory.createSynapse(pat, 50 + Math.random() * 30, 0.3, 0, 'nostr-kind', null,
+                      [`kind:${kindNum}`, 'source:relay-fetch'], ev.pubkey);
+                  }
+
+                  memory.addObservation(
+                    `Fetchala sem KIND-${kindNum}: ${events.length} eventov. ${kindDesc ? kindDesc.slice(0, 60) : ''}`,
+                    'roke_fetch_kind'
+                  );
+                } catch (e) {
+                  console.error(`[ROKE] fetch-kind error: ${e.message}`);
+                }
+              })();
+              rokeResult.detail = `KIND-${kindNum}: async fetch started`;
             }
           }
           break;
