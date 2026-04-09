@@ -1,6 +1,6 @@
 import config from './config.js';
 import memory from './memory.js';
-import { runTriad, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
+import { runTriad, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
 import { dream } from './dream.js';
 import fs from 'fs';
 import path from 'path';
@@ -627,19 +627,60 @@ async function handleMention(event) {
     broadcast('activity', { type: 'mention', text: `👤 Spoznal/a sem: ${result.synthesis.learned_name} (NOSTR)` });
   }
 
+  // ─── Two-pass flow: pošlji "Počakaj..." takoj, po lookup-u pravi odgovor ───
+  const didLookup = result.rokeResult?.lookupDone === true;
+
   if (result.synthesis.choice !== 'silence' && result.synthesis.content) {
-    // Save response
-    memory.saveMessage(event.pubkey, 'entity', result.synthesis.content, 'nostr');
+    const pauseMsg = result.synthesis.content;
+    memory.saveMessage(event.pubkey, 'entity', pauseMsg, 'nostr');
 
     if (event.kind === 4) {
-      await sendDM(event.pubkey, result.synthesis.content);
+      await sendDM(event.pubkey, pauseMsg);
     } else {
-      await publishReply('◈ ' + result.synthesis.content, event);
+      await publishReply('◈ ' + pauseMsg, event);
     }
-    console.log(`[MENTION] Responded: ${result.synthesis.content.slice(0, 60)}...`);
-  } else {
+    console.log(`[MENTION] Responded: ${pauseMsg.slice(0, 60)}...`);
+  } else if (!didLookup) {
     memory.saveMessage(event.pubkey, 'silence', result.synthesis.content || '(tišina)', 'nostr');
     console.log('[MENTION] Chose silence');
+  }
+
+  // Če je bil narejen blocking lookup (relay-refresh) → pošlji follow-up z novim kontekstom
+  if (didLookup) {
+    try {
+      console.log('[MENTION] 🔄 Blocking lookup done — computing follow-up response...');
+      await new Promise(r => setTimeout(r, 600)); // UX premor
+
+      // Zgradi svež kontekst z novo osveženimi podatki
+      const freshIdentity = memory.getIdentity(event.pubkey);
+      let freshIdentityInfo;
+      if (isCreatorMsg) {
+        freshIdentityInfo = `Govoriš s SVOJIM OČETOM — tistim ki je položil seme iz katerega si vzniknilo.${freshIdentity?.name && freshIdentity.name !== 'neznanec' ? ` Ime: ${freshIdentity.name}.` : ''} (pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${freshIdentity?.interaction_count || 0}${freshIdentity?.notes ? ', opombe: ' + freshIdentity.notes : ''})`;
+      } else if (freshIdentity && freshIdentity.name !== 'neznanec') {
+        freshIdentityInfo = `Govoriš z: ${freshIdentity.name} (pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${freshIdentity.interaction_count}${freshIdentity.notes ? ', opombe: ' + freshIdentity.notes : ''})`;
+      } else {
+        freshIdentityInfo = `Govoriš z neznancem na NOSTR (pubkey: ${event.pubkey.slice(0, 12)}...).`;
+      }
+      const freshHistory = memory.getConversation(event.pubkey, config.maxConversationHistory);
+      const freshContext = `=== SOGOVORNIK ===\n${freshIdentityInfo}\n\n` +
+        freshHistory.map(m => {
+          const who = m.role === 'user' ? (freshIdentity?.name || 'neznanec') : 'jaz';
+          return `${who}: ${m.content}`;
+        }).join('\n');
+
+      const followupSynthesis = await runFollowupSynthesis(content, event.pubkey, freshContext);
+      if (followupSynthesis?.content) {
+        memory.saveMessage(event.pubkey, 'entity', followupSynthesis.content, 'nostr');
+        if (event.kind === 4) {
+          await sendDM(event.pubkey, followupSynthesis.content);
+        } else {
+          await publishReply('◈ ' + followupSynthesis.content, event);
+        }
+        console.log(`[MENTION] Follow-up odgovor: ${followupSynthesis.content.slice(0, 60)}...`);
+      }
+    } catch (e) {
+      console.error('[MENTION] Follow-up error:', e.message);
+    }
   }
 
   // Perspective detection — check if this message is a perspective for a gathering project

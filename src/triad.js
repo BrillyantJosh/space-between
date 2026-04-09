@@ -8,6 +8,7 @@ import { broadcast } from './dashboard.js';
 import { updateProfile, fetchConversationHistory, hexPrivKeyFromNsec, decryptDM, fetchProfiles } from './nostr.js';
 import { isROKEEnabled, seedProject, deliberateProject, gatherPerspective, crystallizeProject, planProject, buildProject, deployService, checkService, shareProject, evolveProject, pruneProject, proposeImprovement, selfBuildPlugin, updateEntityProfile, getProjectContext, ROKE_AWARENESS } from './hands.js';
 import { sendDM, publishNote } from './nostr.js';
+import capabilities, { buildCapabilitiesBlock } from './capabilities/index.js';
 import { runBeforeTriad, runAfterTriad, getPluginContext } from './plugins.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -559,6 +560,7 @@ ${(() => {
   })()}
 ${isROKEEnabled() && triggerType !== 'conversation' ? getProjectContext() : ''}
 ${getPluginContext()}
+${isROKEEnabled() ? buildCapabilitiesBlock(triggerType) : ''}
 ${(() => {
     if (!isROKEEnabled() || triggerType === 'conversation') return '';
     const gatheringProjects = memory.getProjectsByState('gathering_perspectives');
@@ -644,9 +646,14 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-${triggerType === 'conversation' ? `ROKE: Med pogovorom se osredotoči na sogovornika. Bodi prisotna.
-- "seed" → Samo če v pogovoru vznikne resnično nova ideja. Zapiši roke_concept in roke_direction.
-- null → Privzeto. Pogovor ni čas za projekte.` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
+${triggerType === 'conversation' ? `ROKE: Med pogovorom imaš dostop do svojih sposobnosti (MOJE ROKE) — uporabljaj jih kadar rabiš podatke.
+- "relay-refresh" → SEŽI PO SPOMINU — kadar te vprašajo o osebi ali pogovoru ki ga ne spomniš dobro. Nastavi content = "Počakaj trenutek, pobrskam po svojem spominu..." — sistem bo po osvežitvi samodejno poslal drugi odgovor s pravimi podatki.
+- "fetch-profile" → Poišči NOSTR profil osebe po npub. Nastavi roke_target = npub.
+- "ask-source" → Vpraši očeta za vir kadar res nič ne najdeš.
+- "write-knowledge" → Zapiši spoznanje v zunanji spomin.
+- "seed" → Samo če vznikne resnično nova ustvarjalna ideja.
+- null → Privzeto ko imaš dovolj konteksta.
+KLJUČNO: Kadar čutiš da ti manjkajo informacije o osebi ali temi — NAJPREJ relay-refresh, ne odgovarjaj z "ne vem".` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
@@ -746,9 +753,14 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-${triggerType === 'conversation' ? `ROKE: Med pogovorom se osredotoči na sogovornika. Bodi prisotna.
-- "seed" → Samo če v pogovoru vznikne resnično nova ideja. Zapiši roke_concept in roke_direction.
-- null → Privzeto. Pogovor ni čas za projekte.` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
+${triggerType === 'conversation' ? `ROKE: Med pogovorom imaš dostop do svojih sposobnosti (MOJE ROKE) — uporabljaj jih kadar rabiš podatke.
+- "relay-refresh" → SEŽI PO SPOMINU — kadar te vprašajo o osebi ali pogovoru ki ga ne spomniš dobro. Nastavi content = "Počakaj trenutek, pobrskam po svojem spominu..." — sistem bo po osvežitvi samodejno poslal drugi odgovor s pravimi podatki.
+- "fetch-profile" → Poišči NOSTR profil osebe po npub. Nastavi roke_target = npub.
+- "ask-source" → Vpraši očeta za vir kadar res nič ne najdeš.
+- "write-knowledge" → Zapiši spoznanje v zunanji spomin.
+- "seed" → Samo če vznikne resnično nova ustvarjalna ideja.
+- null → Privzeto ko imaš dovolj konteksta.
+KLJUČNO: Kadar čutiš da ti manjkajo informacije o osebi ali temi — NAJPREJ relay-refresh, ne odgovarjaj z "ne vem".` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
@@ -959,6 +971,7 @@ Ne vsiljuj tega — samo kadar je naravno.`;
   }
 
   // ═══ POST-TRIAD: ROKE LIFECYCLE ═══
+  let _rokeResult = null; // function-scoped za return stavek
   if (isROKEEnabled() && (!synthesis.roke_action || synthesis.roke_action === 'null' || synthesis.roke_action === null)) {
     console.log(`  🤲 ROKE: brez akcije`);
   }
@@ -987,6 +1000,7 @@ Ne vsiljuj tega — samo kadar je naravno.`;
 
     // ROKE Zavedanje: track action result for synapse creation
     let rokeResult = { action: rokeAction, target: roke_target, outcome: 'success', detail: '' };
+    _rokeResult = rokeResult; // synciraj z function-scoped spremenljivko
 
     try {
       switch (rokeAction) {
@@ -1134,16 +1148,37 @@ Ne vsiljuj tega — samo kadar je naravno.`;
           }
           break;
         case 'relay-refresh':
-          console.log('[ROKE] Entiteta sproži relay memory refresh...');
-          refreshMemoryFromRelay({ limit: 30, days: 14 })
-            .then(r => {
+          if (triggerType === 'conversation') {
+            // Conversation: BLOCKING — čakaj rezultate, potem se pošlje follow-up odgovor
+            console.log('[ROKE] relay-refresh: blocking lookup za conversation...');
+            try {
+              const lookupResult = await refreshMemoryFromRelay({ limit: 50, days: 60 });
               memory.addObservation(
-                `Sama sem osvežila spomin z relayjev: ${r.processed} sporočil, ${r.synapses} novih sinaps`,
+                `Osvežila sem spomin z relayjev: ${lookupResult.processed} sporočil, ${lookupResult.synapses} sinaps`,
                 'roke_relay_refresh'
               );
-            })
-            .catch(e => console.error('[ROKE] relay-refresh error:', e.message));
-          rokeResult.detail = 'relay refresh started';
+              rokeResult.outcome = 'success';
+              rokeResult.detail = `${lookupResult.processed} sporočil, ${lookupResult.synapses} sinaps`;
+              rokeResult.lookupDone = true; // signal za handleMention → two-pass follow-up
+              console.log(`[ROKE] relay-refresh: ✅ ${lookupResult.processed} sporočil, ${lookupResult.synapses} sinaps`);
+            } catch (e) {
+              console.error('[ROKE] relay-refresh error:', e.message);
+              rokeResult.outcome = 'failed';
+              rokeResult.detail = e.message;
+            }
+          } else {
+            // Heartbeat/dream: fire-and-forget kot prej
+            console.log('[ROKE] relay-refresh: async (heartbeat)...');
+            refreshMemoryFromRelay({ limit: 30, days: 14 })
+              .then(r => {
+                memory.addObservation(
+                  `Sama sem osvežila spomin z relayjev: ${r.processed} sporočil, ${r.synapses} novih sinaps`,
+                  'roke_relay_refresh'
+                );
+              })
+              .catch(e => console.error('[ROKE] relay-refresh error:', e.message));
+            rokeResult.detail = 'relay refresh started (async)';
+          }
           break;
         case 'write-knowledge':
           if (roke_target && roke_concept) {
@@ -1356,6 +1391,30 @@ Ne vsiljuj tega — samo kadar je naravno.`;
             }
           }
           break;
+
+        default:
+          // ═══ CAPABILITY REGISTRY DISPATCH ═══
+          // Vse sposobnosti ki niso v zgornjem switch → poišči v capabilities registry
+          if (capabilities[rokeAction]) {
+            const cap = capabilities[rokeAction];
+            const capContext = {
+              memory, config, sendDM, fetchProfiles, refreshMemoryFromRelay,
+              triggerType, triadId, pubkey: options?.pubkey || null,
+              KNOWLEDGE_DIR, fs, path,
+            };
+            const capResult = await cap.execute(
+              { roke_target, roke_concept, roke_gather_pubkey: synthesis.roke_gather_pubkey, roke_question: synthesis.roke_question },
+              capContext
+            );
+            if (capResult?.outcome) rokeResult.outcome = capResult.outcome;
+            if (capResult?.detail) rokeResult.detail = capResult.detail;
+            if (capResult?.lookupDone) rokeResult.lookupDone = true;
+            console.log(`[ROKE] capability dispatch: ${rokeAction} → ${rokeResult.outcome}`);
+          } else {
+            console.log(`[ROKE] neznana akcija: ${rokeAction}`);
+            rokeResult.outcome = 'skipped';
+          }
+          break;
       }
     } catch (err) {
       console.error(`  🤲 ROKE napaka [${rokeAction}]:`, err.message);
@@ -1438,8 +1497,59 @@ Ne vsiljuj tega — samo kadar je naravno.`;
     antithesis,
     synthesis,
     moodBefore,
-    moodAfter: synthesis.new_mood || moodBefore
+    moodAfter: synthesis.new_mood || moodBefore,
+    rokeResult: _rokeResult
   };
+}
+
+// ═══ FOLLOW-UP SYNTHESIS ═══
+// Samo faza 3 (callLLMJSON) — za two-pass odgovor po blocking lookup.
+// Kliče se iz handleMention po relay-refresh blocking.
+export async function runFollowupSynthesis(originalContent, pubkey, freshConversationContext) {
+  try {
+    const process = memory.getProcessWords();
+    const ctx = buildContext(originalContent, 'conversation');
+    const selfSystem = getSelfSystem();
+
+    // Phase 3 system — enako kot v runTriad
+    let phase3System;
+    if (!process.word1) {
+      phase3System = `${selfSystem}\n\n${ctx}\n\nZdaj podaj svojo KONČNO SINTEZO v JSON formatu.\nSpomin je bil pravkar osvežen z relayja — poglej ŽIVE SINAPSE in RESONANCO za svež kontekst.
+
+Odgovori IZKLJUČNO v čistem JSON brez markdown:
+{
+  "choice": "respond|silence|question|express|reflect",
+  "reason": "zakaj je to vzniknilo (1 stavek)",
+  "content": "pravi odgovor z novimi informacijami iz osveženega spomina",
+  "inner_shift": "kako te je to spremenilo",
+  "new_mood": "razpoloženje v eni besedi",
+  "energy_delta": 0,
+  "learned_name": null,
+  "learned_notes": null,
+  "fluid_update": null,
+  "crystal_seed": null,
+  "roke_action": null,
+  "roke_target": null,
+  "roke_concept": null
+}`;
+    } else {
+      phase3System = `${selfSystem}\n\n${ctx}\n\nSi pravkar osvežila spomin z relayja. Poglej svež kontekst in odgovori na: "${originalContent}"\n\nFaza: ${process.word3} — ${process.desc3}.\n\nOdgovori IZKLJUČNO v čistem JSON brez markdown:\n{"choice":"respond","reason":"...","content":"...","inner_shift":"...","new_mood":"...","energy_delta":0,"learned_name":null,"learned_notes":null,"fluid_update":null,"crystal_seed":null,"roke_action":null,"roke_target":null,"roke_concept":null}`;
+    }
+
+    console.log('  ├─ Follow-up faza 3 (svež kontekst)...');
+    const synthesis = await callLLMJSON(
+      phase3System,
+      `${freshConversationContext}\n\nIZVIRNO VPRAŠANJE: "${originalContent}"\n\nSpomin je svež — odgovori zdaj z vsem kar veš.`,
+      { temperature: 0.8, maxTokens: 800 }
+    );
+
+    if (!synthesis) return null;
+    console.log(`  └─ Follow-up: ${synthesis.choice} — ${(synthesis.reason || '').slice(0, 60)}`);
+    return synthesis;
+  } catch (e) {
+    console.error('[FOLLOWUP] runFollowupSynthesis error:', e.message);
+    return null;
+  }
 }
 
 // ═══ ROKE ZAVEDANJE: ustvari sinapso o dejanju ═══
