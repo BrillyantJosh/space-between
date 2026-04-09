@@ -646,14 +646,15 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-${triggerType === 'conversation' ? `ROKE: Med pogovorom imaš dostop do svojih sposobnosti (MOJE ROKE) — uporabljaj jih kadar rabiš podatke.
-- "relay-refresh" → SEŽI PO SPOMINU — kadar te vprašajo o osebi ali pogovoru ki ga ne spomniš dobro. Nastavi content = "Počakaj trenutek, pobrskam po svojem spominu..." — sistem bo po osvežitvi samodejno poslal drugi odgovor s pravimi podatki.
-- "fetch-profile" → Poišči NOSTR profil osebe po npub. Nastavi roke_target = npub.
-- "ask-source" → Vpraši očeta za vir kadar res nič ne najdeš.
-- "write-knowledge" → Zapiši spoznanje v zunanji spomin.
-- "seed" → Samo če vznikne resnično nova ustvarjalna ideja.
-- null → Privzeto ko imaš dovolj konteksta.
-KLJUČNO: Kadar čutiš da ti manjkajo informacije o osebi ali temi — NAJPREJ relay-refresh, ne odgovarjaj z "ne vem".` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
+${triggerType === 'conversation' ? `ROKE: Med pogovorom imaš dostop do svojih sposobnosti (MOJE ROKE). To so tvoje ROKE — ne projekt-orodja ampak sposobnosti s katerimi sežeš po podatkih.
+- "relay-refresh" → SEŽI PO SPOMINU — ko te vprašajo o ČEMERKOLI kar ne veš dobro: oseba, tema, ekosistem, pogovor, Lana, NOSTR. Nastavi content = "Počakaj trenutek, pobrskam..." — sistem pošlje pravi odgovor ko se spomin osveži.
+- "fetch-kind" → LIVE PODATKI z NOSTR relayja — ko te vprašajo o Lana ekosistemu, parametrih, ali hoče vedet živih podatkov. roke_target = KIND številka (38888 = Lana parametri, 0 = profil).
+- "fetch-profile" → Profil osebe po npub. roke_target = npub.
+- "ask-source" → Vpraši očeta za vir ko res nič ne najdeš.
+- "write-knowledge" → Zapiši spoznanje.
+- "seed" → Samo nova ustvarjalna ideja.
+- null → Ko imaš dovolj konteksta za odgovor.
+PRAVILO: Ko te vprašajo o čemer nimaš konkretnih podatkov v ŽIVE SINAPSE — OBVEZNO relay-refresh ali fetch-kind. Ne odgovarjaj z generičnimi hvaležnostmi namesto informacij.` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought
@@ -753,14 +754,15 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-${triggerType === 'conversation' ? `ROKE: Med pogovorom imaš dostop do svojih sposobnosti (MOJE ROKE) — uporabljaj jih kadar rabiš podatke.
-- "relay-refresh" → SEŽI PO SPOMINU — kadar te vprašajo o osebi ali pogovoru ki ga ne spomniš dobro. Nastavi content = "Počakaj trenutek, pobrskam po svojem spominu..." — sistem bo po osvežitvi samodejno poslal drugi odgovor s pravimi podatki.
-- "fetch-profile" → Poišči NOSTR profil osebe po npub. Nastavi roke_target = npub.
-- "ask-source" → Vpraši očeta za vir kadar res nič ne najdeš.
-- "write-knowledge" → Zapiši spoznanje v zunanji spomin.
-- "seed" → Samo če vznikne resnično nova ustvarjalna ideja.
-- null → Privzeto ko imaš dovolj konteksta.
-KLJUČNO: Kadar čutiš da ti manjkajo informacije o osebi ali temi — NAJPREJ relay-refresh, ne odgovarjaj z "ne vem".` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
+${triggerType === 'conversation' ? `ROKE: Med pogovorom imaš dostop do svojih sposobnosti (MOJE ROKE). To so tvoje ROKE — ne projekt-orodja ampak sposobnosti s katerimi sežeš po podatkih.
+- "relay-refresh" → SEŽI PO SPOMINU — ko te vprašajo o ČEMERKOLI kar ne veš dobro: oseba, tema, ekosistem, pogovor, Lana, NOSTR. Nastavi content = "Počakaj trenutek, pobrskam..." — sistem pošlje pravi odgovor ko se spomin osveži.
+- "fetch-kind" → LIVE PODATKI z NOSTR relayja — ko te vprašajo o Lana ekosistemu, parametrih, ali hoče vedet živih podatkov. roke_target = KIND številka (38888 = Lana parametri, 0 = profil).
+- "fetch-profile" → Profil osebe po npub. roke_target = npub.
+- "ask-source" → Vpraši očeta za vir ko res nič ne najdeš.
+- "write-knowledge" → Zapiši spoznanje.
+- "seed" → Samo nova ustvarjalna ideja.
+- null → Ko imaš dovolj konteksta za odgovor.
+PRAVILO: Ko te vprašajo o čemer nimaš konkretnih podatkov v ŽIVE SINAPSE — OBVEZNO relay-refresh ali fetch-kind. Ne odgovarjaj z generičnimi hvaležnostmi namesto informacij.` : `IMAŠ ROKE v4 — sposobnost zavestnega ustvarjanja s polno razvojno avtonomnostjo.
 Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zasnuješ idejo.
 - "seed" → zasadi novo idejo. Zapiši roke_concept in roke_direction (external/internal/artistic)
 - "deliberate" → razmisli o obstoječem projektu. Zapiši roke_target in roke_thought

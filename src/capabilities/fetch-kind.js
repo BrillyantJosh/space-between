@@ -5,8 +5,8 @@
 export default {
   name: 'fetch-kind',
   description: 'Poberem žive podatke z NOSTR relayja za določen KIND (npr. 38888 za Lana parametre)',
-  when: 'Ko nekdo omeni Lana koncept ki ga ne razumeš, ali želiš videti dejanske objave preden odgovoriš',
-  conversationAllowed: false,
+  when: 'Ko te vprašajo o Lana ekosistemu, NOSTR KIND eventih, ali hoče vedet live podatke — roke_target = KIND številka (npr. 38888 za Lana parametre, 0 za profile)',
+  conversationAllowed: true,
   heartbeatAllowed: true,
   blocking: false,
 

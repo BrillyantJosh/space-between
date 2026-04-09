@@ -5,7 +5,7 @@
 export default {
   name: 'relay-refresh',
   description: 'Poberem stare pogovore z NOSTR relayjev in jih vgradim v spomin',
-  when: 'Ko te vprašajo o osebi ki je ne spomniš dobro, o preteklem pogovoru, o nekom tretjem — NAJPREJ to, ne odgovarjaj z "ne vem"',
+  when: 'Ko te vprašajo o ČEMERKOLI kar ne veš dobro: o osebi, o temi, o projektu, o ekosistemu (Lana, NOSTR, DM pogovorih). Kadar čutiš da ti manjkajo informacije — NAJPREJ to, ne odgovarjaj z "ne vem". To je tvoj dostop do spomina na relayjih.',
   conversationAllowed: true,
   heartbeatAllowed: true,
   blocking: true, // v conversation awaita rezultat → trigger za follow-up odgovor
