@@ -1454,28 +1454,44 @@ const memory = {
     return db.prepare('SELECT * FROM synapses WHERE energy >= 10 ORDER BY (energy * strength) DESC LIMIT ?').all(limit);
   },
 
-  // Uravnotežen kontekst — proporcionalno iz vsakega vira
-  getBalancedContext(totalLimit = 10) {
-    const sources = db.prepare(`
-      SELECT source_type, COUNT(*) as c
-      FROM synapses WHERE energy >= 10
-      GROUP BY source_type ORDER BY c DESC
-    `).all();
-    const total = sources.reduce((s, r) => s + r.c, 0) || 1;
-    const result = [];
-    for (const src of sources) {
-      const slots = Math.max(1, Math.round((src.c / total) * totalLimit));
-      const synapses = db.prepare(
-        'SELECT * FROM synapses WHERE energy >= 10 AND source_type = ? ORDER BY (energy * strength) DESC LIMIT ?'
-      ).all(src.source_type, slots);
-      result.push(...synapses);
-    }
-    // Dedupliciraj in razvrsti po ranku
+  // Uravnotežen kontekst — garantirani minimumi + proporcionalni preostanek
+  getBalancedContext(totalLimit = 15) {
+    // Zagotovljeni minimumi za posamostni vir (neodvisno od proporcij)
+    const GUARANTEED = {
+      conversation: 3,
+      history: 2,
+      identity: 2,
+      dream: 1,
+    };
+
     const seen = new Set();
-    return result
-      .filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; })
-      .sort((a, b) => (b.energy * b.strength) - (a.energy * a.strength))
-      .slice(0, totalLimit);
+    const result = [];
+
+    // Najprej zapolni garantirane minimume
+    for (const [srcType, minSlots] of Object.entries(GUARANTEED)) {
+      const synapses = db.prepare(
+        'SELECT * FROM synapses WHERE energy >= 5 AND source_type = ? ORDER BY (energy * strength) DESC LIMIT ?'
+      ).all(srcType, minSlots);
+      for (const s of synapses) {
+        if (!seen.has(s.id)) { seen.add(s.id); result.push(s); }
+      }
+    }
+
+    // Preostale slote zapolni proporcionalno iz vseh virov (po padajočem energy*strength)
+    const remaining = totalLimit - result.length;
+    if (remaining > 0) {
+      const ids = result.map(s => s.id);
+      const placeholders = ids.length > 0 ? `AND id NOT IN (${ids.join(',')})` : '';
+      const extra = db.prepare(
+        `SELECT * FROM synapses WHERE energy >= 10 ${placeholders} ORDER BY (energy * strength) DESC LIMIT ?`
+      ).all(remaining);
+      for (const s of extra) {
+        if (!seen.has(s.id)) { seen.add(s.id); result.push(s); }
+      }
+    }
+
+    // Vrni v vrstnem redu: garantirani (ohranjeni po vrsti) + preostanek
+    return result.slice(0, totalLimit);
   },
 
   // Semantični recall — sinapse ki resonirajo s trenutno temo

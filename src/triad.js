@@ -520,7 +520,7 @@ ${(() => {
   })()}
 ${loadKnowledge(triggerContent)}
 ${(() => {
-    const synapses = memory.getBalancedContext(10);
+    const synapses = memory.getBalancedContext(15);
     if (synapses.length === 0) return '';
     // Shrani IDje za deduplikacijo z resonančnim blokom
     _balancedIds = new Set(synapses.map(s => s.id));
