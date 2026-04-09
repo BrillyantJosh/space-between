@@ -7,6 +7,7 @@ services:
       - "3333"
     volumes:
       - ./data:/app/data
+      - ./knowledge:/app/knowledge
     environment:
       - VIRTUAL_HOST=being2.enlightenedai.org
       - VIRTUAL_PORT=3333
