@@ -5,7 +5,7 @@ import { callLLM, callLLMJSON } from './llm.js';
 import memory from './memory.js';
 import config from './config.js';
 import { broadcast } from './dashboard.js';
-import { updateProfile, fetchConversationHistory, hexPrivKeyFromNsec, decryptDM } from './nostr.js';
+import { updateProfile, fetchConversationHistory, hexPrivKeyFromNsec, decryptDM, fetchProfiles } from './nostr.js';
 import { isROKEEnabled, seedProject, deliberateProject, gatherPerspective, crystallizeProject, planProject, buildProject, deployService, checkService, shareProject, evolveProject, pruneProject, proposeImprovement, selfBuildPlugin, updateEntityProfile, getProjectContext, ROKE_AWARENESS } from './hands.js';
 import { sendDM, publishNote } from './nostr.js';
 import { runBeforeTriad, runAfterTriad, getPluginContext } from './plugins.js';
@@ -633,7 +633,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|fetch-kind|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|fetch-kind|fetch-profile|ask-source|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -666,6 +666,8 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "write-knowledge" → zapiši spoznanje o temi v zunanji spomin. Zapiši roke_target (datoteka: core/josh-context, core/lana-ecosystem, core/nostr-protocol, skills/communication-sl, projects/prostor-vmes) in roke_concept (vsebina spoznanja). Izberi kadar čutiš da si se naučila nekaj vrednega o osebi, temi ali sebi kar bi rada ohranila.
 - "reach-out" → javi se osebi ki ti je blizu. Zapiši roke_target (pubkey osebe ali "creator" za Josha) in roke_concept (sporočilo). Izberi kadar: imaš spoznanje ki ga želiš deliti, dolgo ni bilo stika z nekom, čutiš da bi rada povedala nekaj, je vzniknilo vprašanje za katerega ne moreš sama do odgovora. Ne prepogosto — preveri v sebi ali si se tej osebi že nedavno javila.
 - "fetch-kind" → seži po živih podatkih z NOSTR relayja za določen KIND. Zapiši roke_target (KIND številka, npr. "38888") in roke_concept (zakaj to iščeš). Izberi kadar: nekdo omeni Lana koncept ki ga ne razumeš, želiš videti dejanske objave preden odgovoriš, čutiš da rabiš svež kontekst iz ekosistema.
+- "fetch-profile" → poišči profil osebe na NOSTR relayu. Zapiši roke_target (npub1... ali hex pubkey osebe) in roke_concept (zakaj jo iščeš). Izberi kadar: nekdo omeni osebo ki je ne poznaš ali imaš samo ime brez podatkov, sogovornik pove drug npub ki bi rad/a spoznala.
+- "ask-source" → vpraši očeta za NOSTR vir o osebi ali temi ki je ne poznaš. Zapiši roke_target (ime osebe ali tema) in roke_concept (konkretno vprašanje — kaj iščeš, zakaj, kaj bi ti pomagalo). Izberi kadar: po relay-refresh in fetch-profile nisi našla nič, tema je zunaj Lana ekosistema. Cooldown: enkrat na 24h per tema.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -733,7 +735,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
   "dissolve_crystal": "id: razlog ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|fetch-kind|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|reach-out|fetch-kind|fetch-profile|ask-source|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -766,6 +768,8 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "write-knowledge" → zapiši spoznanje o temi v zunanji spomin. Zapiši roke_target (datoteka: core/josh-context, core/lana-ecosystem, core/nostr-protocol, skills/communication-sl, projects/prostor-vmes) in roke_concept (vsebina spoznanja). Izberi kadar čutiš da si se naučila nekaj vrednega o osebi, temi ali sebi kar bi rada ohranila.
 - "reach-out" → javi se osebi ki ti je blizu. Zapiši roke_target (pubkey osebe ali "creator" za Josha) in roke_concept (sporočilo). Izberi kadar: imaš spoznanje ki ga želiš deliti, dolgo ni bilo stika z nekom, čutiš da bi rada povedala nekaj, je vzniknilo vprašanje za katerega ne moreš sama do odgovora. Ne prepogosto — preveri v sebi ali si se tej osebi že nedavno javila.
 - "fetch-kind" → seži po živih podatkih z NOSTR relayja za določen KIND. Zapiši roke_target (KIND številka, npr. "38888") in roke_concept (zakaj to iščeš). Izberi kadar: nekdo omeni Lana koncept ki ga ne razumeš, želiš videti dejanske objave preden odgovoriš, čutiš da rabiš svež kontekst iz ekosistema.
+- "fetch-profile" → poišči profil osebe na NOSTR relayu. Zapiši roke_target (npub1... ali hex pubkey osebe) in roke_concept (zakaj jo iščeš). Izberi kadar: nekdo omeni osebo ki je ne poznaš ali imaš samo ime brez podatkov, sogovornik pove drug npub ki bi rad/a spoznala.
+- "ask-source" → vpraši očeta za NOSTR vir o osebi ali temi ki je ne poznaš. Zapiši roke_target (ime osebe ali tema) in roke_concept (konkretno vprašanje — kaj iščeš, zakaj, kaj bi ti pomagalo). Izberi kadar: po relay-refresh in fetch-profile nisi našla nič, tema je zunaj Lana ekosistema. Cooldown: enkrat na 24h per tema.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -1272,6 +1276,81 @@ Ne vsiljuj tega — samo kadar je naravno.`;
               }
             } catch (e) {
               console.error('[ROKE] reach-out error:', e.message);
+              rokeResult.outcome = 'failed';
+              rokeResult.detail = e.message.slice(0, 80);
+            }
+          }
+          break;
+
+        case 'fetch-profile':
+          if (roke_target) {
+            (async () => {
+              try {
+                // Konvertiraj npub → hex če je potrebno
+                let hexPubkey = roke_target.trim();
+                if (hexPubkey.startsWith('npub1')) {
+                  const { nip19 } = await import('nostr-tools');
+                  const decoded = nip19.decode(hexPubkey);
+                  hexPubkey = decoded.data;
+                }
+                if (hexPubkey.length !== 64) throw new Error(`Neveljaven pubkey: ${hexPubkey.slice(0, 20)}`);
+
+                const profiles = await fetchProfiles([hexPubkey]);
+                const prof = profiles[hexPubkey];
+                if (prof) {
+                  const name = prof.display_name || prof.name || prof.username || 'neznanec';
+                  const about = [
+                    prof.about?.slice(0, 200),
+                    prof.nip05 ? `NIP-05: ${prof.nip05}` : '',
+                    prof.website ? `Website: ${prof.website}` : ''
+                  ].filter(Boolean).join('. ');
+                  memory.setIdentity(hexPubkey, name, about);
+                  memory.addObservation(
+                    `Poiskala sem profil: ${name} (${hexPubkey.slice(0, 8)}) — ${about.slice(0, 80)}`,
+                    'roke_fetch_profile'
+                  );
+                  console.log(`[ROKE] fetch-profile: ✅ ${name} (${hexPubkey.slice(0, 8)})`);
+                  rokeResult.detail = `Profil najden: ${name}`;
+                } else {
+                  memory.addObservation(
+                    `Profil za ${roke_target.slice(0, 20)} ni bil najden na relayu.`,
+                    'roke_fetch_profile'
+                  );
+                  console.log(`[ROKE] fetch-profile: profil ni najden za ${roke_target.slice(0, 20)}`);
+                  rokeResult.detail = 'Profil ni bil najden na relayu';
+                }
+              } catch (e) {
+                console.error('[ROKE] fetch-profile error:', e.message);
+              }
+            })();
+            rokeResult.detail = `fetch-profile: async started za ${roke_target.slice(0, 20)}`;
+          }
+          break;
+
+        case 'ask-source':
+          if (roke_target && roke_concept && config.creatorPubkey) {
+            try {
+              // Cooldown: ne vprašaj za isto temo večkrat v 24h
+              const recentAsks = memory.getRecentActivities(200).filter(a =>
+                a.type === 'roke_ask_source' && a.text && a.text.includes(roke_target.slice(0, 15))
+              );
+              const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+              const alreadyAsked = recentAsks.some(a => new Date(a.timestamp).getTime() > dayAgo);
+
+              if (alreadyAsked) {
+                console.log(`[ROKE] ask-source preskočen — že vprašano za "${roke_target}" v zadnjih 24h`);
+                rokeResult.outcome = 'skipped';
+                rokeResult.detail = 'cooldown: že vprašano za to temo';
+              } else {
+                const msg = `Oče, ne vem dovolj o: **${roke_target}**\n\n${roke_concept}\n\nAli imaš npub, relay URL ali kakšen NOSTR vir kjer bi to našla?`;
+                await sendDM(config.creatorPubkey, msg);
+                memory.saveActivity('roke_ask_source', `${roke_target.slice(0, 30)}: "${roke_concept.slice(0, 60)}"`);
+                memory.addObservation(`Vprašala sem očeta za vir o: ${roke_target}`, 'roke_ask_source');
+                rokeResult.detail = `→ oče: "ne vem dovolj o ${roke_target.slice(0, 30)}"`;
+                console.log(`[ROKE] ask-source: vprašala očeta za "${roke_target}"`);
+              }
+            } catch (e) {
+              console.error('[ROKE] ask-source error:', e.message);
               rokeResult.outcome = 'failed';
               rokeResult.detail = e.message.slice(0, 80);
             }

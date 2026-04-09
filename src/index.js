@@ -27,7 +27,7 @@ async function bootstrapKnowledge() {
 }
 import {
   connectRelays, publishProfile, publishNote, publishReply,
-  sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity, onRelayConnect
+  sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity, onRelayConnect, fetchProfiles
 } from './nostr.js';
 import { startDashboard, broadcast } from './dashboard.js';
 import { isROKEEnabled, receiveProjectFeedback, deployService, checkService, crystallizeProject } from './hands.js';
@@ -561,6 +561,29 @@ async function handleMention(event) {
       if (content.toLowerCase().includes(p.name) || content.toLowerCase().includes(p.display_name.toLowerCase())) {
         receiveProjectFeedback(p.name, content, event.pubkey);
         break;
+      }
+    }
+  }
+
+  // ─── Auto-fetch KIND 0 profil za neznane sogovornike ───
+  {
+    const known = memory.getIdentity(event.pubkey);
+    if (!known || known.name === 'neznanec') {
+      try {
+        const profiles = await fetchProfiles([event.pubkey]);
+        const prof = profiles[event.pubkey];
+        if (prof) {
+          const name = prof.display_name || prof.name || prof.username || 'neznanec';
+          const about = [
+            prof.about?.slice(0, 200),
+            prof.nip05 ? `NIP-05: ${prof.nip05}` : '',
+            prof.website ? `Website: ${prof.website}` : ''
+          ].filter(Boolean).join('. ');
+          memory.setIdentity(event.pubkey, name, about || '');
+          console.log(`[IDENTITY] ✅ Profil pobran: ${name} (${event.pubkey.slice(0, 8)})`);
+        }
+      } catch (e) {
+        console.error('[IDENTITY] KIND 0 fetch failed:', e.message);
       }
     }
   }

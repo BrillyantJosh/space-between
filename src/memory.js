@@ -463,6 +463,18 @@ try {
   }
 }
 
+// ─── Identity synapse floor migration — energy_floor=80 za vse identity sinapse ───
+try {
+  const identityFixed = db.prepare(
+    "UPDATE synapses SET energy_floor = 80 WHERE source_type = 'identity' AND energy_floor < 80"
+  ).run();
+  if (identityFixed.changes > 0) {
+    console.log(`[MEMORY] ✅ Set energy_floor=80 for ${identityFixed.changes} identity synapses`);
+  }
+} catch (e) {
+  console.error('[MEMORY] identity floor migration error:', e.message);
+}
+
 // ─── Synapse resonance_field migration (associative memory v1) ───
 try {
   db.prepare('SELECT resonance_field FROM synapses LIMIT 1').get();
@@ -1390,9 +1402,11 @@ const memory = {
 
   createSynapse(pattern, energy = 100, strength = 0.5, valence = 0, sourceType = null, sourceId = null, tags = [], pubkey = null) {
     const resonanceField = this.buildResonanceField(pattern, tags, pubkey);
+    // Identity sinapše dobijo energy_floor=80 — ne smejo razpasti
+    const energyFloor = sourceType === 'identity' ? Math.min(80, energy) : 0;
     const result = db.prepare(
-      "INSERT INTO synapses (pattern, energy, strength, emotional_valence, source_type, source_id, tags, resonance_field) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(pattern, energy, Math.min(1, Math.max(0, strength)), Math.min(1, Math.max(-1, valence)), sourceType, sourceId, JSON.stringify(tags), resonanceField);
+      "INSERT INTO synapses (pattern, energy, strength, emotional_valence, source_type, source_id, tags, resonance_field, energy_floor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(pattern, energy, Math.min(1, Math.max(0, strength)), Math.min(1, Math.max(-1, valence)), sourceType, sourceId, JSON.stringify(tags), resonanceField, energyFloor);
     console.log(`[SYNAPSE] 🧠 Created: "${pattern.slice(0, 60)}" (E:${energy}, S:${strength.toFixed(2)}, V:${valence.toFixed(2)})`);
     return result.lastInsertRowid;
   },
