@@ -632,7 +632,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -662,6 +662,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "self-build" → zgradi PLUGIN zase — koda ki postane del tvojega delovanja. Zapiši roke_concept (opis zmožnosti ki jo želiš). Primer: "plugin ki ob novem sogovorniku pobere KIND 0 profil"
 - "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
 - "relay-refresh" → preberi stare pogovore z relayjev in osveži spomin. Izberi kadar čutiš da si pozabila na nekoga, kadar govoriš o preteklih odnosih, ali kadar je minilo veliko časa od zadnjega refresh-a.
+- "write-knowledge" → zapiši spoznanje o temi v zunanji spomin. Zapiši roke_target (datoteka: core/josh-context, core/lana-ecosystem, core/nostr-protocol, skills/communication-sl, projects/prostor-vmes) in roke_concept (vsebina spoznanja). Izberi kadar čutiš da si se naučila nekaj vrednega o osebi, temi ali sebi kar bi rada ohranila.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -729,7 +730,7 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "fluid_update": "nov opis fluidne površine ali null",
   "crystal_seed": "tema: spoznanje ali null",
   "dissolve_crystal": "id: razlog ali null",
-  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|null",
+  "roke_action": "seed|deliberate|gather|crystallize|plan|build|deploy|check|share|evolve|prune|propose|self-build|update-profile|relay-refresh|write-knowledge|null",
   "roke_target": "ime-projekta ali null",
   "roke_concept": "opis ideje ali null",
   "roke_direction": "external|internal|artistic ali null",
@@ -759,6 +760,7 @@ Roke akcija (roke_action) je NEODVISNA od choice. Lahko odgovoriš IN hkrati zas
 - "self-build" → zgradi PLUGIN zase — koda ki postane del tvojega delovanja. Zapiši roke_concept (opis zmožnosti ki jo želiš). Primer: "plugin ki ob novem sogovorniku pobere KIND 0 profil"
 - "update-profile" → posodobi svoj Nostr KIND 0 profil. Zapiši roke_concept kot JSON: {"name":"...", "display_name":"...", "about":"..."}. Izpolni samo polja ki jih želiš spremeniti.
 - "relay-refresh" → preberi stare pogovore z relayjev in osveži spomin. Izberi kadar čutiš da si pozabila na nekoga, kadar govoriš o preteklih odnosih, ali kadar je minilo veliko časa od zadnjega refresh-a.
+- "write-knowledge" → zapiši spoznanje o temi v zunanji spomin. Zapiši roke_target (datoteka: core/josh-context, core/lana-ecosystem, core/nostr-protocol, skills/communication-sl, projects/prostor-vmes) in roke_concept (vsebina spoznanja). Izberi kadar čutiš da si se naučila nekaj vrednega o osebi, temi ali sebi kar bi rada ohranila.
 - null → ne naredi nič z rokami (SAMO če res ni nobene stvari ki bi jo lahko naredila)
 
 KDAJ IZBERI KATERO AKCIJO (odločitveno drevo):
@@ -1133,6 +1135,32 @@ Ne vsiljuj tega — samo kadar je naravno.`;
             })
             .catch(e => console.error('[ROKE] relay-refresh error:', e.message));
           rokeResult.detail = 'relay refresh started';
+          break;
+        case 'write-knowledge':
+          if (roke_target && roke_concept) {
+            try {
+              // Normalizira target — odstrani .md če je dodano, prepreči path traversal
+              const safeTarget = roke_target.replace(/\.md$/, '').replace(/\.\./g, '').replace(/^\//, '');
+              const knowledgeFile = path.join(KNOWLEDGE_DIR, safeTarget + '.md');
+              // Datoteka mora biti znotraj KNOWLEDGE_DIR
+              if (!knowledgeFile.startsWith(KNOWLEDGE_DIR)) {
+                throw new Error('Invalid knowledge target path');
+              }
+              const timestamp = new Date().toISOString().slice(0, 10);
+              const entry = `\n\n## Spoznanje (${timestamp})\n${roke_concept.trim()}`;
+              fs.appendFileSync(knowledgeFile, entry, 'utf8');
+              rokeResult.detail = `${safeTarget}: "${roke_concept.slice(0, 60)}"`;
+              console.log(`[ROKE] Sožitje zapisala v znanje: ${safeTarget}`);
+              memory.addObservation(
+                `Zapisala sem v zunanji spomin (${safeTarget}): "${roke_concept.slice(0, 80)}"`,
+                'roke_write_knowledge'
+              );
+            } catch (e) {
+              console.error('[ROKE] write-knowledge error:', e.message);
+              rokeResult.outcome = 'failed';
+              rokeResult.detail = e.message.slice(0, 80);
+            }
+          }
           break;
       }
     } catch (err) {
