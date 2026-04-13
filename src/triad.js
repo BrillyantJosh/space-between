@@ -11,6 +11,7 @@ import { sendDM, publishNote } from './nostr.js';
 import capabilities, { buildCapabilitiesBlock } from './capabilities/index.js';
 import { runBeforeTriad, runAfterTriad, getPluginContext } from './plugins.js';
 import { getPresence, formatPresenceForContext } from './presence.js';
+import { getRelevantSkills } from './skills.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FATHERS_VISION_PATH = path.join(__dirname, '..', 'data', 'fathers-vision.md');
@@ -476,7 +477,10 @@ function buildContext(triggerContent = '', triggerType = '') {
   const presence = getPresence();
   const presenceBlock = formatPresenceForContext(presence);
 
-  return `${presenceBlock}═══ KDO SEM ═══
+  // ◈ TELO — relevantni skills
+  const skillsBlock = getRelevantSkills(triggerContent, 3);
+
+  return `${presenceBlock}${skillsBlock}═══ KDO SEM ═══
 
 KRISTALIZIRANO JEDRO:
 ${coreText}

@@ -2240,6 +2240,107 @@ const memory = {
     return db.prepare(
       'SELECT tp.* FROM thematic_pathways tp JOIN pathway_synapses ps ON tp.id = ps.pathway_id WHERE ps.synapse_id = ?'
     ).all(synapseId);
+  },
+
+  // ═══ SKILLS SISTEM ═══
+
+  // Vrne pathways ki so dozreli za skill kristalizacijo
+  getRipePathwaysForSkills() {
+    return db.prepare(`
+      SELECT * FROM thematic_pathways
+      WHERE faza = 'globlja_sinteza'
+      AND zaupanje >= 0.75
+      AND fire_count >= 5
+      ORDER BY zaupanje DESC
+      LIMIT 5
+    `).all();
+  },
+
+  // Shrani zapis o skill-u
+  saveSkillRecord(slug, theme, source, zaupanje) {
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS skills (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug TEXT UNIQUE,
+        theme TEXT,
+        source TEXT,
+        zaupanje REAL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `).run();
+    db.prepare(`
+      INSERT INTO skills (slug, theme, source, zaupanje)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(slug) DO UPDATE SET
+        zaupanje = excluded.zaupanje,
+        updated_at = datetime('now')
+    `).run(slug, theme, source, zaupanje);
+  },
+
+  // Zadnjič posodobljen skill
+  getSkillLastUpdated(slug) {
+    try {
+      const row = db.prepare('SELECT updated_at FROM skills WHERE slug = ?').get(slug);
+      return row?.updated_at || null;
+    } catch (_) { return null; }
+  },
+
+  // Zadnje zaupanje skilla
+  getSkillZaupanje(slug) {
+    try {
+      const row = db.prepare('SELECT zaupanje FROM skills WHERE slug = ?').get(slug);
+      return row?.zaupanje || 0;
+    } catch (_) { return 0; }
+  },
+
+  // Ponavljajoči triada vzorci (3x+ ista tema)
+  getRepeatedTriadPatterns(minCount = 3) {
+    return db.prepare(`
+      SELECT
+        trigger_content as theme,
+        COUNT(*) as count,
+        GROUP_CONCAT(synthesis_content, '|||') as syntheses_raw
+      FROM triads
+      WHERE synthesis_choice = 'express'
+      AND trigger_type != 'birth'
+      GROUP BY substr(trigger_content, 1, 50)
+      HAVING count >= ?
+      ORDER BY count DESC
+      LIMIT 10
+    `).all(minCount).map(row => ({
+      ...row,
+      syntheses: (row.syntheses_raw || '').split('|||').filter(Boolean)
+    }));
+  },
+
+  // Sinapse ki resonirajo s pathway
+  getSynapsesForPathway(pathwayId, limit = 5) {
+    try {
+      return db.prepare(`
+        SELECT s.* FROM synapses s
+        JOIN pathway_synapses ps ON ps.synapse_id = s.id
+        WHERE ps.pathway_id = ?
+        ORDER BY s.energy DESC
+        LIMIT ?
+      `).all(pathwayId, limit);
+    } catch (_) {
+      return [];
+    }
+  },
+
+  // Triads ki so aktivirale določeno temo
+  getTriadsForPathway(theme, limit = 3) {
+    const words = theme.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (words.length === 0) return [];
+    const conditions = words.map(() => 'LOWER(trigger_content) LIKE ?').join(' OR ');
+    const params = words.map(w => `%${w}%`);
+    return db.prepare(`
+      SELECT * FROM triads
+      WHERE (${conditions})
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `).all(...params, limit);
   }
 };
 

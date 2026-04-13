@@ -1,5 +1,6 @@
 import config from './config.js';
 import { getPresence, formatPresenceForContext } from './presence.js';
+import { checkForEmergedSkills, checkForTriadPatterns } from './skills.js';
 import memory from './memory.js';
 import { runTriad, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
 import { dream } from './dream.js';
@@ -159,6 +160,20 @@ async function handleHeartbeat() {
 
   console.log(`[HEARTBEAT] #${heartbeatNum} | Mood: ${state.mood || '...'} | Energy: ${state.energy.toFixed(2)} | Idle: ${idleMinutes.toFixed(0)}min | Proces: ${processLabel}`);
   broadcast('heartbeat', { num: heartbeatNum, mood: state.mood, energy: state.energy });
+
+  // ◈ TELO — preveri ali so kateri skills dozreli (vsak 100. utrip)
+  if (heartbeatNum % 100 === 0) {
+    try {
+      const newFromPathways = await checkForEmergedSkills();
+      const newFromPatterns = await checkForTriadPatterns();
+      const total = newFromPathways.length + newFromPatterns.length;
+      if (total > 0) {
+        console.log(`[SKILLS] 💎 ${total} novih skills kristaliziralo`);
+      }
+    } catch (e) {
+      console.error('[SKILLS] Kristalizacija napaka:', e.message);
+    }
+  }
   broadcast('activity', { type: 'heartbeat', text: `💓 Utrip #${heartbeatNum} | ${state.mood || '...'} | E:${state.energy.toFixed(2)} | Idle:${idleMinutes.toFixed(0)}m` });
 
   // Recover energy when idle
