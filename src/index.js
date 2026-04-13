@@ -1,6 +1,8 @@
 import config from './config.js';
 import { getPresence, formatPresenceForContext } from './presence.js';
 import { checkForEmergedSkills, checkForTriadPatterns } from './skills.js';
+import { initKnowledgeDB, getKnowledgeStats } from './knowledge-db.js';
+import { runFullIngestion } from './ingestion.js';
 import memory from './memory.js';
 import { runTriad, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
 import { dream } from './dream.js';
@@ -179,6 +181,18 @@ async function handleHeartbeat() {
       }
     } catch (e) {
       console.error('[SKILLS] Kristalizacija napaka:', e.message);
+    }
+  }
+
+  // ◈ RAG — Dnevna osvežitev Lana NOSTR znanja (vsak 1440. utrip = vsak dan)
+  if (heartbeatNum % 1440 === 0) {
+    try {
+      const { ingestLanaNostrDocs, ingestNostrKnowledge } = await import('./ingestion.js');
+      await ingestLanaNostrDocs();
+      await ingestNostrKnowledge();
+      console.log('[RAG] 🔄 Dnevna osvežitev znanja');
+    } catch (e) {
+      console.error('[RAG] Dnevna osvežitev napaka:', e.message);
     }
   }
   broadcast('activity', { type: 'heartbeat', text: `💓 Utrip #${heartbeatNum} | ${state.mood || '...'} | E:${state.energy.toFixed(2)} | Idle:${idleMinutes.toFixed(0)}m` });
@@ -764,6 +778,18 @@ async function main() {
 
   // Bootstrap knowledge (enkrat ob zagonu, ne blokira)
   bootstrapKnowledge().catch(e => console.warn('[BOOT] bootstrap error:', e.message));
+
+  // ◈ RAG — Inicializacija knowledge baze
+  const ragOk = await initKnowledgeDB();
+  if (ragOk) {
+    const stats = await getKnowledgeStats();
+    if (stats.count === 0) {
+      console.log('[RAG] Prva zagon — uvažam znanje...');
+      runFullIngestion().catch(e => console.error('[RAG] Ingestion napaka:', e.message));
+    } else {
+      console.log(`[RAG] Knowledge base: ${stats.count} chunkov že v bazi`);
+    }
+  }
 
   // Publish profile
   await publishProfile();

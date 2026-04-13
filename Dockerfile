@@ -1,7 +1,9 @@
-FROM node:20-alpine
+FROM node:20-slim
 
-# Install build dependencies for better-sqlite3 + git for potential integrations
-RUN apk add --no-cache python3 make g++ git
+# Install build dependencies for better-sqlite3, onnxruntime-node + git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

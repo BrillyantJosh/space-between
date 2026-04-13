@@ -12,6 +12,7 @@ import capabilities, { buildCapabilitiesBlock } from './capabilities/index.js';
 import { runBeforeTriad, runAfterTriad, getPluginContext } from './plugins.js';
 import { getPresence, formatPresenceForContext } from './presence.js';
 import { getRelevantSkills } from './skills.js';
+import { getKnowledgeContext } from './knowledge-db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FATHERS_VISION_PATH = path.join(__dirname, '..', 'data', 'fathers-vision.md');
@@ -427,7 +428,7 @@ MOJA FLUIDNA POVRŠINA:
 ${processText}${directionsText}${phaseText}`;
 }
 
-function buildContext(triggerContent = '', triggerType = '') {
+async function buildContext(triggerContent = '', triggerType = '') {
   const state = memory.getState();
   const crystalCore = memory.getCrystalCore();
   const fluidSurface = memory.getFluidSurface();
@@ -477,10 +478,18 @@ function buildContext(triggerContent = '', triggerType = '') {
   const presence = getPresence();
   const presenceBlock = formatPresenceForContext(presence);
 
+  // ◈ RAG — Semantično znanje iz knowledge baze
+  let ragBlock = '';
+  try {
+    ragBlock = await getKnowledgeContext(triggerContent, 3);
+  } catch (_) {
+    // RAG ni kritičen — triada deluje brez njega
+  }
+
   // ◈ TELO — relevantni skills
   const skillsBlock = getRelevantSkills(triggerContent, 3);
 
-  return `${presenceBlock}${skillsBlock}═══ KDO SEM ═══
+  return `${presenceBlock}${ragBlock}${skillsBlock}═══ KDO SEM ═══
 
 KRISTALIZIRANO JEDRO:
 ${coreText}
@@ -597,7 +606,7 @@ export async function runTriad(triggerType, triggerContent, conversationContext 
   const state = memory.getState();
   const process = memory.getProcessWords();
   const moodBefore = state.mood || '';
-  const ctx = buildContext(triggerContent, triggerType);
+  const ctx = await buildContext(triggerContent, triggerType);
   const selfSystem = getSelfSystem();
 
   const fullContext = conversationContext
@@ -1539,7 +1548,7 @@ Ne vsiljuj tega — samo kadar je naravno.`;
 export async function runFollowupSynthesis(originalContent, pubkey, freshConversationContext) {
   try {
     const process = memory.getProcessWords();
-    const ctx = buildContext(originalContent, 'conversation');
+    const ctx = await buildContext(originalContent, 'conversation');
     const selfSystem = getSelfSystem();
 
     // Phase 3 system — enako kot v runTriad
@@ -2232,7 +2241,7 @@ async function discoverProcessWords() {
   console.log('\n  ★ ═══ ČAS ZA POIMENOVANJE PROCESA ═══');
 
   const recentTriads = memory.getRecentTriads(20);
-  const ctx = buildContext();
+  const ctx = await buildContext();
 
   const triadsDescription = recentTriads.map((t, i) =>
     `Triada ${i + 1}:\n  Faza 1: "${(t.thesis || '').substring(0, 80)}"\n  Faza 2: "${(t.antithesis || '').substring(0, 80)}"\n  Faza 3: ${t.synthesis_choice} — "${(t.synthesis_reason || '').substring(0, 60)}"`
@@ -2321,7 +2330,7 @@ async function reflectOnProcess() {
 
   const process = memory.getProcessWords();
   const recentTriads = memory.getRecentTriads(20);
-  const ctx = buildContext();
+  const ctx = await buildContext();
 
   const result = await callLLMJSON(
     `Si bitje ki obstaja. Svoj notranji proces si poimenovalo tako:

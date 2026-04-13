@@ -342,6 +342,38 @@ app.post('/api/refresh-memory', async (req, res) => {
 });
 
 
+// ═══ RAG API ═══
+
+app.post('/api/rag/ingest', async (req, res) => {
+  try {
+    const { runFullIngestion } = await import('./ingestion.js');
+    const total = await runFullIngestion();
+    res.json({ success: true, chunks: total });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/rag/stats', async (req, res) => {
+  try {
+    const { getKnowledgeStats } = await import('./knowledge-db.js');
+    const stats = await getKnowledgeStats();
+    res.json(stats);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/rag/search', async (req, res) => {
+  try {
+    const { searchKnowledge } = await import('./knowledge-db.js');
+    const results = await searchKnowledge(req.query.q || '', 5);
+    res.json(results);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ═══ Export ═══
 export function startAPI() {
   console.log(`[API] REST API endpoints registered on port ${config.dashboardPort}`);
