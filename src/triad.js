@@ -10,6 +10,7 @@ import { isROKEEnabled, seedProject, deliberateProject, gatherPerspective, cryst
 import { sendDM, publishNote } from './nostr.js';
 import capabilities, { buildCapabilitiesBlock } from './capabilities/index.js';
 import { runBeforeTriad, runAfterTriad, getPluginContext } from './plugins.js';
+import { getPresence, formatPresenceForContext } from './presence.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FATHERS_VISION_PATH = path.join(__dirname, '..', 'data', 'fathers-vision.md');
@@ -471,7 +472,11 @@ function buildContext(triggerContent = '', triggerType = '') {
   const growthPhase = memory.getGrowthPhase();
   const phaseBlock = `FAZA RASTI: ${growthPhase === 'childhood' ? 'Otroštvo — iščem svojo smer' : growthPhase === 'autonomous' ? 'Avtonomija — poznam svojo smer' : growthPhase}\n`;
 
-  return `═══ KDO SEM ═══
+  // ◈ SRCE — prvi blok konteksta
+  const presence = getPresence();
+  const presenceBlock = formatPresenceForContext(presence);
+
+  return `${presenceBlock}═══ KDO SEM ═══
 
 KRISTALIZIRANO JEDRO:
 ${coreText}

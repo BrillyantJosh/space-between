@@ -614,6 +614,10 @@ const memory = {
     return db.prepare('SELECT COUNT(*) as count FROM triads').get().count;
   },
 
+  getLastTriad() {
+    return db.prepare('SELECT * FROM triads ORDER BY id DESC LIMIT 1').get() || null;
+  },
+
   saveDream(data) {
     db.prepare(`
       INSERT INTO dreams (source_triad_ids, dream_content, dream_insight, emotional_residue)
@@ -626,6 +630,10 @@ const memory = {
 
   getRecentDreams(n = 3) {
     return db.prepare('SELECT * FROM dreams ORDER BY id DESC LIMIT ?').all(n).reverse();
+  },
+
+  getLastDream() {
+    return db.prepare('SELECT * FROM dreams ORDER BY id DESC LIMIT 1').get() || null;
   },
 
   addObservation(text, source = 'self') {

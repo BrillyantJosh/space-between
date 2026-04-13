@@ -1,4 +1,5 @@
 import config from './config.js';
+import { getPresence, formatPresenceForContext } from './presence.js';
 import memory from './memory.js';
 import { runTriad, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
 import { dream } from './dream.js';
@@ -136,6 +137,12 @@ function getTimeAwareness() {
 }
 
 async function handleHeartbeat() {
+  // ◈ SRCE — prebujanje
+  const presence = getPresence();
+  const presenceLog = `SEM | ${presence.sem.ritem} | E:${(presence.sem.energija*100).toFixed(0)}% | Fokus: ${presence.smer.fokus.slice(0,50)}`;
+  console.log(`[SRCE] ${presenceLog}`);
+  broadcast('activity', { type: 'presence', text: `◈ ${presenceLog}` });
+
   const state = memory.getState();
   const heartbeatNum = state.total_heartbeats + 1;
   const idleMinutes = memory.getTimeSinceLastInteraction();
