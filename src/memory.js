@@ -636,6 +636,20 @@ const memory = {
     return db.prepare('SELECT * FROM dreams ORDER BY id DESC LIMIT 1').get() || null;
   },
 
+  // Shrani trenutno presence stanje (za hitro branje brez ponovnega računanja)
+  setCurrentPresence(data) {
+    try {
+      this.updateState({ _current_presence: JSON.stringify(data) });
+    } catch (_) {}
+  },
+
+  getCurrentPresence() {
+    try {
+      const state = this.getState();
+      return state._current_presence ? JSON.parse(state._current_presence) : null;
+    } catch (_) { return null; }
+  },
+
   addObservation(text, source = 'self') {
     db.prepare('INSERT INTO observations (observation, source) VALUES (?, ?)').run(text, source);
     const count = db.prepare('SELECT COUNT(*) as c FROM observations').get().c;

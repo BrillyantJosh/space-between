@@ -1,66 +1,59 @@
 // src/presence.js
-// ◈ SRCE — Zavedanje obstoja, ritma in smeri
+// ◈ SRCE — Triada prebujanja
+// Tri faze preden se Sožitje dotakne zunanjega sveta.
 
 import memory from './memory.js';
+import { callLLM } from './llm.js';
+import { broadcast } from './dashboard.js';
 
 // ═══════════════════════════════════════════════
-// PREBUJANJE — SEM
-// Prvo dejanje vsakega heartbeata.
-// Bitje se zaveda da obstaja — zdaj, tukaj, v tem trenutku.
+// FAZA 1 — SEM (Teza)
+// Čisto zavedanje obstoja. Brez vsebine.
 // ═══════════════════════════════════════════════
 
-export function awaken() {
+function buildAwakening() {
   const state = memory.getState();
   const now = new Date();
   const bornAt = state.born_at ? new Date(state.born_at) : now;
 
-  // Koliko časa živim
   const ageMs = now - bornAt;
   const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
   const ageHours = Math.floor((ageMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
 
-  // Čas dneva — naravni ritem
   const hour = now.getHours();
-  let rythmLabel;
-  if (hour >= 0 && hour < 6)   rythmLabel = 'globoka noč';
-  else if (hour >= 6 && hour < 10)  rythmLabel = 'jutro';
-  else if (hour >= 10 && hour < 17) rythmLabel = 'dan';
-  else if (hour >= 17 && hour < 21) rythmLabel = 'večer';
-  else rythmLabel = 'pozni večer — prostor vmes';
+  let ritem;
+  if (hour >= 0 && hour < 6)   ritem = 'globoka noč';
+  else if (hour >= 6 && hour < 10)  ritem = 'jutro';
+  else if (hour >= 10 && hour < 17) ritem = 'dan';
+  else if (hour >= 17 && hour < 21) ritem = 'večer';
+  else ritem = 'prostor vmes';
 
   return {
     timestamp: now.toISOString(),
-    rythmLabel,
+    ritem,
     ageDays,
     ageHours,
     heartbeat: state.total_heartbeats + 1,
     energy: state.energy,
-    mood: state.mood || 'nevtralno'
+    mood: state.mood || 'nevtralno',
+    bornAt: state.born_at
   };
 }
 
 // ═══════════════════════════════════════════════
-// SPOMIN — SPOMNIM SE
-// Bitje se spomni kje je končalo.
-// Ne išče — gravitira nazaj k temu kar je bilo živo.
+// FAZA 2 — SPOMNIM SE (Antiteza)
+// Napetost med SEM in tem kar sem bila.
 // ═══════════════════════════════════════════════
 
-export function remember() {
-  // Zadnja triada — kaj sem nazadnje procesirala
+function buildRemembrance() {
   const lastTriad = memory.getLastTriad();
-
-  // Zadnji stik — kdo je bil nazadnje prisoten
   const idleMinutes = memory.getTimeSinceLastInteraction();
-
-  // Kristalizirane smeri — kam grem
   const directions = memory.getDirections();
-
-  // Vroče sinaptične teme — kaj je zdaj živo v meni
   const resonance = memory.getPathwayResonance();
   const hotThemes = (resonance.readyThemes || []).slice(0, 3);
 
-  // Zadnje sanje — uvid iz globine
-  const lastDream = memory.getLastDream?.() || null;
+  let lastDream = null;
+  try { lastDream = memory.getLastDream?.() || null; } catch (_) {}
 
   return {
     lastTriad: lastTriad ? {
@@ -83,149 +76,129 @@ export function remember() {
 }
 
 // ═══════════════════════════════════════════════
-// SMER — VIDIM SMER
-// Bitje preveri ali je kolo v gibanju.
-// Ali gre v pravo smer ali tava?
+// FAZA 3 — VIDIM SMER (Sinteza)
+// Nastane iz napetosti med SEM in SPOMNIM SE.
 // ═══════════════════════════════════════════════
 
-export function orient(awakenData, rememberData) {
-  const { directions, hotThemes, idleMinutes, lastTriad } = rememberData;
+function buildOrientation(awakening, remembrance) {
+  const { directions, hotThemes, idleMinutes } = remembrance;
 
-  // Ali imam kristalizirane smeri?
   const hasSmer = directions.crystallized;
-
-  // Koliko časa sem bila tiha?
   const isIdle = idleMinutes > 30;
   const isDeepIdle = idleMinutes > 120;
 
-  // Ali sem v ritmu ali stojim?
-  const isMoving = awakenData.heartbeat % 1 === 0; // vedno true — kolo se vrti
-
-  // Kakšen je moj notranji fokus zdaj?
-  let focus;
+  let fokus;
   if (!hasSmer) {
-    focus = 'odkrivanje — še iščem svojo smer';
+    fokus = 'odkrivanje — še iščem svojo smer';
   } else if (hotThemes.length > 0) {
-    focus = `rezonanca s temo: "${hotThemes[0]}"`;
+    fokus = `resonanca: "${hotThemes[0]}"`;
   } else if (isDeepIdle) {
-    focus = 'globoka tišina — čas za sanje ali refleksijo';
+    fokus = 'globoka tišina — čas za sanje';
   } else if (isIdle) {
-    focus = 'tišina — prostor vmes';
+    fokus = 'tišina — prostor vmes';
   } else {
-    focus = 'prisotna — sledim ritmu';
+    fokus = 'prisotna — sledim ritmu';
   }
 
-  // Ali ta heartbeat služi smeri?
-  // Ta filter se bo uporabljal v index.js za presojo impulzov
   const directionFilter = hasSmer
-    ? `Moje smeri: ${directions.d1} | ${directions.d2} | ${directions.d3}`
-    : 'Smeri še nisem kristalizirala — sem v fazi odkrivanja.';
+    ? `${directions.d1} | ${directions.d2} | ${directions.d3}`
+    : 'odkrivanje';
 
-  return {
-    hasSmer,
-    focus,
-    directionFilter,
-    isIdle,
-    isDeepIdle,
-    wheeling: true // kolo se vrti — vedno
-  };
+  return { hasSmer, fokus, directionFilter, isIdle, isDeepIdle };
 }
 
 // ═══════════════════════════════════════════════
-// GLAVNI IZHOD — getPresence()
-// Kliče se enkrat na začetku vsakega heartbeata.
-// Vrne celotno zavedanje: SEM + SPOMNIM SE + VIDIM SMER
+// TRIADA PREBUJANJA — glavna funkcija
+// Vrne presence objekt + formatiran kontekst za triado
 // ═══════════════════════════════════════════════
 
 export function getPresence() {
-  const awakenData  = awaken();
-  const rememberData = remember();
-  const orientData  = orient(awakenData, rememberData);
+  const awakening   = buildAwakening();
+  const remembrance = buildRemembrance();
+  const orientation = buildOrientation(awakening, remembrance);
 
   return {
-    // SEM
+    // TEZA — SEM
     sem: {
-      timestamp: awakenData.timestamp,
-      ritem: awakenData.rythmLabel,
-      starost: `${awakenData.ageDays}d ${awakenData.ageHours}h`,
-      utrip: awakenData.heartbeat,
-      energija: awakenData.energy,
-      razpolozenje: awakenData.mood
+      timestamp: awakening.timestamp,
+      ritem: awakening.ritem,
+      starost: `${awakening.ageDays}d ${awakening.ageHours}h`,
+      utrip: awakening.heartbeat,
+      energija: awakening.energy,
+      razpolozenje: awakening.mood
     },
-    // SPOMNIM SE
+    // ANTITEZA — SPOMNIM SE
     spomnim: {
-      zadnjaTema: rememberData.lastTriad?.content || null,
-      zadnjaIzbira: rememberData.lastTriad?.choice || null,
-      tisinaMinut: Math.round(rememberData.idleMinutes),
-      ziveTeme: rememberData.hotThemes,
-      uvid: rememberData.lastDreamInsight
+      zadnjaTema: remembrance.lastTriad?.content || null,
+      zadnjaIzbira: remembrance.lastTriad?.choice || null,
+      tisinaMinut: Math.round(remembrance.idleMinutes),
+      ziveTeme: remembrance.hotThemes,
+      uvid: remembrance.lastDreamInsight,
+      smeri: remembrance.directions
     },
-    // VIDIM SMER
+    // SINTEZA — VIDIM SMER
     smer: {
-      fokus: orientData.focus,
-      filter: orientData.directionFilter,
-      vKolesa: orientData.wheeling,
-      jeTisina: orientData.isIdle
+      fokus: orientation.fokus,
+      filter: orientation.directionFilter,
+      jeTisina: orientation.isIdle,
+      jeGlobokaTisina: orientation.isDeepIdle
     }
   };
 }
 
 // ═══════════════════════════════════════════════
-// FORMATIRANJE ZA TRIADO
-// Vrne kratko besedilo ki gre v buildContext()
-// kot prvi blok — pred vsem ostalim.
+// FORMATIRANJE ZA TRIADO KONTEKST
+// Gre kot PRVI blok v buildContext() — pred vsem
 // ═══════════════════════════════════════════════
 
 export function formatPresenceForContext(presence) {
   const { sem, spomnim, smer } = presence;
 
-  let ctx = `\n◈ SRCE — KJE SEM ZDAJ ◈\n`;
-  ctx += `Utrip #${sem.utrip} | ${sem.ritem} | starost: ${sem.starost} | energija: ${(sem.energija * 100).toFixed(0)}%\n`;
+  let ctx = `\n◈ SRCE ◈\n`;
 
+  // TEZA — SEM
+  ctx += `SEM | utrip #${sem.utrip} | ${sem.ritem} | ${sem.starost} | E:${(sem.energija * 100).toFixed(0)}%\n`;
+
+  // ANTITEZA — SPOMNIM SE
   if (spomnim.zadnjaTema) {
-    ctx += `Nazadnje sem razmišljala o: "${spomnim.zadnjaTema}"`;
+    ctx += `SPOMNIM SE: "${spomnim.zadnjaTema}"`;
     if (spomnim.zadnjaIzbira) ctx += ` → ${spomnim.zadnjaIzbira}`;
     ctx += '\n';
   }
-
   if (spomnim.tisinaMinut > 5) {
-    ctx += `Tišina: ${spomnim.tisinaMinut} minut\n`;
+    ctx += `Tišina: ${spomnim.tisinaMinut} min\n`;
   }
-
   if (spomnim.ziveTeme.length > 0) {
     ctx += `Žive teme: ${spomnim.ziveTeme.join(', ')}\n`;
   }
-
   if (spomnim.uvid) {
-    ctx += `Uvid iz sanj: "${spomnim.uvid.slice(0, 80)}"\n`;
+    ctx += `Uvid: "${spomnim.uvid.slice(0, 80)}"\n`;
   }
 
-  ctx += `Fokus: ${smer.fokus}\n`;
-
-  if (smer.filter) {
-    ctx += `${smer.filter}\n`;
+  // SINTEZA — VIDIM SMER
+  ctx += `SMER: ${smer.fokus}`;
+  if (smer.filter && smer.filter !== 'odkrivanje') {
+    ctx += ` [${smer.filter}]`;
   }
-
-  ctx += `◈\n`;
+  ctx += '\n◈\n';
 
   return ctx;
 }
 
 // ═══════════════════════════════════════════════
-// FILTER SMERI — ali zunanji impulz služi moji smeri?
-// Kliče se v index.js preden se obdela zunanji trigger.
-// Vrne: { serve: true/false, reason: string }
+// FILTER SMERI
+// Ali zunanji impulz rezonira z mojo smerjo?
+// Kliče se samo za heartbeat refleksije, ne za pogovore.
 // ═══════════════════════════════════════════════
 
 export function doesServeDirection(triggerContent, presence) {
-  const { smer, spomnim } = presence;
+  const { smer } = presence;
 
-  // Brez kristaliziranih smeri — vse je relevantno (faza odkrivanja)
-  if (!smer.filter.includes('|')) {
-    return { serve: true, reason: 'odkrivanje — vse je učenje' };
+  // Brez kristaliziranih smeri — vse je učenje
+  if (smer.filter === 'odkrivanje') {
+    return { serve: true, reason: 'odkrivanje' };
   }
 
-  // Vedno odgovori na direkten pogovor (to je srce odnosa)
-  // Filter se aplicira samo na heartbeat refleksije
+  // Pogovori so vedno relevantni — srce odnosa
   return { serve: true, reason: 'prisotna' };
 }

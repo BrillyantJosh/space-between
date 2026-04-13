@@ -138,11 +138,18 @@ function getTimeAwareness() {
 }
 
 async function handleHeartbeat() {
-  // ◈ SRCE — prebujanje
+  // ◈ SRCE — Triada prebujanja (SEM → SPOMNIM SE → VIDIM SMER)
   const presence = getPresence();
-  const presenceLog = `SEM | ${presence.sem.ritem} | E:${(presence.sem.energija*100).toFixed(0)}% | Fokus: ${presence.smer.fokus.slice(0,50)}`;
+  const presenceLog = `◈ SEM | ${presence.sem.ritem} | E:${(presence.sem.energija*100).toFixed(0)}% | ${presence.smer.fokus.slice(0,60)}`;
   console.log(`[SRCE] ${presenceLog}`);
-  broadcast('activity', { type: 'presence', text: `◈ ${presenceLog}` });
+  broadcast('activity', { type: 'presence', text: presenceLog });
+
+  // Shrani presence za heartbeat — triad.js ga bo prebral
+  memory.setCurrentPresence?.({
+    fokus: presence.smer.fokus,
+    smer: presence.smer.filter,
+    ziveTeme: presence.spomnim.ziveTeme
+  });
 
   const state = memory.getState();
   const heartbeatNum = state.total_heartbeats + 1;
