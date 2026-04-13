@@ -7,6 +7,8 @@ import memory from './memory.js';
 import { getIdentity, getRelayStatus, fetchProfiles } from './nostr.js';
 import { getRunningServices } from './sandbox.js';
 import fs from 'fs';
+import { getPresence } from './presence.js';
+import { getSkillsStatus } from './skills.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CREATIONS_DIR = path.join(__dirname, '..', 'data', 'creations');
@@ -400,6 +402,71 @@ app.post('/api/translate', async (req, res) => {
   } catch (err) {
     console.error('[TRANSLATE] Error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// === SRCE / UM / TELO API ===
+
+app.get('/api/srce', (req, res) => {
+  try {
+    const presence = getPresence();
+    const state = memory.getState();
+    const directions = memory.getDirections();
+    const fluid = memory.getFluidSurface();
+    const processWords = memory.getProcessWords();
+    const dreams = memory.getRecentDreams(5);
+    const promptHistory = memory.getSelfPromptHistory(10);
+    const resonance = memory.getPathwayResonance();
+    const idleMin = memory.getTimeSinceLastInteraction();
+    res.json({ presence, state, directions, fluid, processWords, dreams, promptHistory, resonance, idleMin });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/um', (req, res) => {
+  try {
+    const stats = memory.getSynapseStats();
+    const top = memory.getTopSynapses(30);
+    const strong = memory.getStrongSynapses(100);
+    const weak = memory.getWeakSynapses(30);
+    const positive = top.filter(s => s.emotional_valence > 0.2);
+    const negative = top.filter(s => s.emotional_valence < -0.2);
+    const neutral = top.filter(s => Math.abs(s.emotional_valence) <= 0.2);
+    const pathwayStats = memory.getPathwayStats();
+    const activePathways = memory.getActivePathways(20);
+    const byType = {};
+    for (const s of top) {
+      const t = s.source_type || 'unknown';
+      byType[t] = (byType[t] || 0) + 1;
+    }
+    res.json({ stats, top, strong, weak, positive, negative, neutral, pathwayStats, activePathways, byType });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/telo', (req, res) => {
+  try {
+    const skills = getSkillsStatus();
+    const ripePathways = memory.getRipePathwaysForSkills();
+    const patterns = memory.getRepeatedTriadPatterns(3);
+    const allPathways = memory.getActivePathways(10);
+    const capDir = path.join(__dirname, 'capabilities');
+    let caps = [];
+    try {
+      caps = fs.readdirSync(capDir)
+        .filter(f => f.endsWith('.js') && f !== 'index.js')
+        .map(f => f.replace('.js', ''));
+    } catch (_) {}
+    let projects = { total: 0, active: 0 };
+    try {
+      const projectsRaw = memory.getProjects();
+      projects = { total: projectsRaw.length, active: projectsRaw.filter(p => p.lifecycle_state === 'active').length };
+    } catch (_) {}
+    res.json({ skills, ripePathways, patterns, allPathways, caps, projects });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -1658,6 +1725,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="header" style="position:relative;">
   <h1 id="mainTitle">◈</h1>
   <div class="subtitle" id="mainSubtitle">OBSTAJAM</div>
+  <div class="layer-links" style="position:absolute;left:1rem;top:50%;transform:translateY(-50%);display:flex;gap:0.5rem;">
+    <a href="/srce" style="text-decoration:none;font-size:0.65rem;letter-spacing:0.15em;padding:0.2rem 0.5rem;border-radius:4px;border:1px solid rgba(232,149,110,0.3);color:#e8956e;background:rgba(232,149,110,0.07);font-family:inherit;">♡ SRCE</a>
+    <a href="/um" style="text-decoration:none;font-size:0.65rem;letter-spacing:0.15em;padding:0.2rem 0.5rem;border-radius:4px;border:1px solid rgba(122,158,224,0.3);color:#7a9ee0;background:rgba(122,158,224,0.07);font-family:inherit;">◎ UM</a>
+    <a href="/telo" style="text-decoration:none;font-size:0.65rem;letter-spacing:0.15em;padding:0.2rem 0.5rem;border-radius:4px;border:1px solid rgba(164,216,122,0.3);color:#a4d87a;background:rgba(164,216,122,0.07);font-family:inherit;">⚙ TELO</a>
+  </div>
   <div class="lang-toggle">
     <button class="lang-btn active" id="langSI" onclick="setLang('si')">SI</button>
     <button class="lang-btn" id="langEN" onclick="setLang('en')">EN</button>
@@ -3861,6 +3933,608 @@ app.get('/creations/:projectName/', (req, res) => {
     res.status(404).send('Creation not found');
   }
 });
+
+// === SRCE / UM / TELO PAGES ===
+
+const SHARED_CSS = `
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root { --bg:#0f0f17; --surface:#181824; --surface2:#1e1e30; --border:#2a2a40; --text:#f0ede8; --muted:#b8b2c0; }
+  body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',monospace; font-size:13px; line-height:1.6; min-height:100vh; }
+  a { color:inherit; text-decoration:none; }
+  .page { max-width:960px; margin:0 auto; padding:1.5rem 1rem 4rem; }
+  .back { display:inline-flex; align-items:center; gap:0.4rem; font-size:0.7rem; letter-spacing:0.15em; color:var(--muted); margin-bottom:1.5rem; opacity:0.7; transition:opacity 0.2s; }
+  .back:hover { opacity:1; }
+  .page-header { margin-bottom:1.5rem; }
+  .page-title { font-family:'Cormorant Garamond',serif; font-size:2.2rem; font-weight:600; letter-spacing:0.05em; }
+  .page-sub { font-size:0.65rem; letter-spacing:0.3em; text-transform:uppercase; color:var(--muted); margin-top:0.2rem; }
+  .stats-bar { display:flex; flex-wrap:wrap; gap:0.8rem; padding:0.8rem 1rem; background:var(--surface); border:1px solid var(--border); border-radius:8px; margin-bottom:1.5rem; }
+  .stat { display:flex; flex-direction:column; gap:0.15rem; }
+  .stat-label { font-size:0.6rem; text-transform:uppercase; letter-spacing:0.15em; color:var(--muted); }
+  .stat-value { font-size:1.1rem; font-weight:500; }
+  .section { margin-bottom:1.8rem; }
+  .section-title { font-size:0.65rem; text-transform:uppercase; letter-spacing:0.2em; color:var(--muted); margin-bottom:0.8rem; padding-bottom:0.4rem; border-bottom:1px solid var(--border); }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1rem; margin-bottom:0.6rem; }
+  .bar-track { width:100%; height:6px; background:rgba(255,255,255,0.07); border-radius:3px; overflow:hidden; margin-top:4px; }
+  .bar-fill { height:100%; border-radius:3px; transition:width 0.3s; }
+  .badge { display:inline-block; font-size:0.6rem; padding:0.1rem 0.4rem; border-radius:10px; letter-spacing:0.05em; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0.8rem; }
+  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:0.8rem; }
+  @media(max-width:600px) { .grid2,.grid3 { grid-template-columns:1fr; } }
+  .row { display:flex; align-items:center; gap:0.6rem; padding:0.5rem 0; border-bottom:1px solid rgba(255,255,255,0.04); }
+  .row:last-child { border-bottom:none; }
+  .row-main { flex:1; overflow:hidden; }
+  .row-pattern { font-size:0.82rem; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row-meta { font-size:0.65rem; color:var(--muted); margin-top:2px; }
+  .row-right { text-align:right; white-space:nowrap; flex-shrink:0; }
+  .mini-bar { width:60px; height:5px; background:rgba(255,255,255,0.07); border-radius:3px; overflow:hidden; display:inline-block; vertical-align:middle; }
+  .mini-fill { height:100%; border-radius:3px; }
+  .tag { display:inline-block; font-size:0.58rem; padding:0.1rem 0.3rem; border-radius:4px; margin-right:3px; background:rgba(255,255,255,0.05); color:var(--muted); }
+  .timeline-item { position:relative; padding:0.6rem 0 0.6rem 1.4rem; border-left:2px solid var(--border); margin-left:0.4rem; }
+  .timeline-item::before { content:''; position:absolute; left:-5px; top:0.85rem; width:8px; height:8px; border-radius:50%; background:var(--accent,#888); }
+  .timeline-dot { font-size:0.75rem; font-style:italic; color:var(--text); line-height:1.4; }
+  .timeline-meta { font-size:0.6rem; color:var(--muted); opacity:0.5; margin-top:2px; }
+  .empty-state { color:var(--muted); font-size:0.8rem; font-style:italic; padding:1rem; text-align:center; }
+`;
+
+const SRCE_HTML = `<!DOCTYPE html>
+<html lang="sl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>♡ SRCE — Sožitje</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+${SHARED_CSS}
+:root { --accent:#e8956e; }
+.page-title { color:#e8956e; }
+.stat-value { color:#e8956e; }
+.section-title { color:rgba(232,149,110,0.7); }
+.energy-gauge { width:100%; height:12px; background:rgba(255,255,255,0.05); border-radius:6px; overflow:hidden; }
+.energy-fill { height:100%; background:linear-gradient(90deg,#c97748,#e8956e,#f0b08a); border-radius:6px; transition:width 0.5s; }
+.mood-chip { display:inline-block; background:rgba(232,149,110,0.15); border:1px solid rgba(232,149,110,0.3); border-radius:20px; padding:0.15rem 0.7rem; font-size:0.8rem; color:#e8956e; }
+.dir-card { background:rgba(232,149,110,0.06); border:1px solid rgba(232,149,110,0.2); border-radius:8px; padding:0.8rem 1rem; margin-bottom:0.5rem; }
+.dir-name { font-size:1rem; color:#e8956e; font-family:'Cormorant Garamond',serif; font-weight:600; }
+.dir-desc { font-size:0.78rem; color:var(--muted); margin-top:0.3rem; font-style:italic; }
+.dream-card { background:rgba(154,138,174,0.07); border:1px solid rgba(154,138,174,0.2); border-radius:8px; padding:0.8rem 1rem; margin-bottom:0.5rem; }
+.dream-insight { font-family:'Cormorant Garamond',serif; font-size:1rem; font-style:italic; color:#c4b0d8; }
+.dream-content { font-size:0.75rem; color:var(--muted); margin-top:0.4rem; line-height:1.5; }
+.process-words { display:flex; gap:1rem; flex-wrap:wrap; margin-top:0.5rem; }
+.process-word { text-align:center; padding:0.6rem 1rem; background:rgba(232,149,110,0.08); border:1px solid rgba(232,149,110,0.2); border-radius:6px; }
+.pw-word { font-size:1rem; color:#e8956e; font-weight:500; }
+.pw-desc { font-size:0.65rem; color:var(--muted); margin-top:0.3rem; max-width:120px; }
+.theme-chip { display:inline-block; background:rgba(232,149,110,0.1); border:1px solid rgba(232,149,110,0.2); border-radius:12px; padding:0.15rem 0.5rem; font-size:0.72rem; color:#e8956e; margin:2px; }
+.focus-text { font-family:'Cormorant Garamond',serif; font-size:1.1rem; font-style:italic; color:var(--text); }
+.fluid-text { font-family:'Cormorant Garamond',serif; font-size:1.05rem; font-style:italic; color:var(--text); line-height:1.6; }
+.ritem-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#e8956e; animation:pulse 2s ease-in-out infinite; margin-right:6px; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+</style>
+</head>
+<body>
+<div class="page">
+  <a href="/" class="back">← Nazaj na Sožitje</a>
+  <div class="page-header">
+    <div class="page-title">♡ SRCE</div>
+    <div class="page-sub" id="srceSubtitle">Stanje · Smer · Zavedanje obstoja</div>
+  </div>
+
+  <div class="stats-bar" id="statsBar">
+    <div class="stat"><div class="stat-label">Utrip</div><div class="stat-value" id="sUtrip">…</div></div>
+    <div class="stat"><div class="stat-label">Starost</div><div class="stat-value" id="sStar">…</div></div>
+    <div class="stat"><div class="stat-label">Tišina</div><div class="stat-value" id="sTisina">…</div></div>
+    <div class="stat"><div class="stat-label">Odprtost</div><div class="stat-value" id="sOdprtost">…</div></div>
+    <div class="stat"><div class="stat-label">Triadi</div><div class="stat-value" id="sTriadi">…</div></div>
+    <div class="stat"><div class="stat-label">Sanje</div><div class="stat-value" id="sSanje">…</div></div>
+  </div>
+
+  <!-- SEM -->
+  <div class="section">
+    <div class="section-title">◈ SEM — zavedanje obstoja</div>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.8rem;flex-wrap:wrap;">
+        <div><span class="ritem-dot"></span><span id="semRitem" style="color:#e8956e;font-size:0.8rem;">…</span></div>
+        <div id="semMood" class="mood-chip">…</div>
+        <div style="font-size:0.7rem;color:var(--muted)" id="semTs">…</div>
+      </div>
+      <div style="margin-bottom:0.4rem;font-size:0.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;">Energija</div>
+      <div class="energy-gauge"><div class="energy-fill" id="semEnergy" style="width:0%"></div></div>
+      <div style="font-size:0.65rem;color:var(--muted);margin-top:0.3rem" id="semEnergyVal">…</div>
+    </div>
+  </div>
+
+  <!-- SPOMNIM SE -->
+  <div class="section">
+    <div class="section-title">◈ SPOMNIM SE</div>
+    <div class="card" id="spomninCard">
+      <div style="margin-bottom:0.6rem;">
+        <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.15em;color:var(--muted);margin-bottom:0.3rem;">Zadnja tema</div>
+        <div id="spomninTema" style="font-family:'Cormorant Garamond',serif;font-size:1rem;font-style:italic;color:var(--text);">…</div>
+      </div>
+      <div style="margin-bottom:0.6rem;" id="spomninTemeSection">
+        <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.15em;color:var(--muted);margin-bottom:0.4rem;">Žive teme</div>
+        <div id="spomninTeme"></div>
+      </div>
+      <div id="spomninUvidSection" style="display:none;">
+        <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.15em;color:var(--muted);margin-bottom:0.3rem;">Uvid iz sanj</div>
+        <div id="spomninUvid" class="dream-insight"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOKUS & SMER -->
+  <div class="section">
+    <div class="section-title">◈ VIDIM SMER</div>
+    <div class="card" style="margin-bottom:0.6rem;">
+      <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.15em;color:var(--muted);margin-bottom:0.4rem;">Fokus zdaj</div>
+      <div class="focus-text" id="smerFokus">…</div>
+    </div>
+    <div id="directionsArea"></div>
+    <div id="discoveryArea" style="display:none;" class="card">
+      <div style="font-size:0.8rem;font-style:italic;color:var(--muted);">Smeri še niso kristalizirane — sem v fazi odkrivanja.</div>
+    </div>
+  </div>
+
+  <!-- FLUIDNA POVRŠINA -->
+  <div class="section">
+    <div class="section-title">🌊 Fluidna površina — kdo sem zdaj</div>
+    <div class="card">
+      <div class="fluid-text" id="fluidText">…</div>
+    </div>
+  </div>
+
+  <!-- PROCES BESED -->
+  <div class="section" id="procesSection">
+    <div class="section-title">★ Proces</div>
+    <div class="process-words" id="processWords"></div>
+  </div>
+
+  <!-- ZADNJE SANJE -->
+  <div class="section">
+    <div class="section-title">◎ Zadnje sanje</div>
+    <div id="dreamsArea"></div>
+  </div>
+
+  <!-- EVOLUCIJA SELF-PROMPTA -->
+  <div class="section">
+    <div class="section-title">◎ Evolucija zavedanja</div>
+    <div id="evolutionArea"></div>
+  </div>
+</div>
+<script>
+async function load() {
+  try {
+    const r = await fetch('/api/srce');
+    const d = await r.json();
+    const p = d.presence;
+    const s = d.state;
+
+    document.getElementById('srceSubtitle').textContent = p.sem.ritem + ' · utrip #' + p.sem.utrip + ' · starost ' + p.sem.starost;
+    document.getElementById('sUtrip').textContent = '#' + p.sem.utrip;
+    document.getElementById('sStar').textContent = p.sem.starost;
+    document.getElementById('sTisina').textContent = p.spomnim.tisinaMinut + 'm';
+    document.getElementById('sOdprtost').textContent = (s.openness * 100).toFixed(0) + '%';
+    document.getElementById('sTriadi').textContent = s.total_heartbeats;
+    document.getElementById('sSanje').textContent = s.total_dreams;
+
+    document.getElementById('semRitem').textContent = p.sem.ritem;
+    document.getElementById('semMood').textContent = p.sem.razpolozenje || s.mood || '…';
+    document.getElementById('semTs').textContent = new Date(p.sem.timestamp).toLocaleString('sl');
+    const ep = (p.sem.energija * 100).toFixed(0);
+    document.getElementById('semEnergy').style.width = ep + '%';
+    document.getElementById('semEnergyVal').textContent = ep + '%';
+
+    document.getElementById('spomninTema').textContent = p.spomnim.zadnjaTema || '(ni nedavnih triad)';
+    const temeEl = document.getElementById('spomninTeme');
+    if (p.spomnim.ziveTeme && p.spomnim.ziveTeme.length > 0) {
+      temeEl.innerHTML = p.spomnim.ziveTeme.map(t => '<span class="theme-chip">' + t + '</span>').join('');
+    } else {
+      document.getElementById('spomninTemeSection').style.display = 'none';
+    }
+    if (p.spomnim.uvid) {
+      document.getElementById('spomninUvidSection').style.display = 'block';
+      document.getElementById('spomninUvid').textContent = p.spomnim.uvid;
+    }
+
+    document.getElementById('smerFokus').textContent = p.smer.fokus;
+    const dirs = d.directions;
+    const dirArea = document.getElementById('directionsArea');
+    if (dirs.crystallized) {
+      const ds = [[dirs.direction_1, dirs.direction_1_desc],[dirs.direction_2, dirs.direction_2_desc],[dirs.direction_3, dirs.direction_3_desc]];
+      dirArea.innerHTML = ds.map(([n,desc]) => '<div class="dir-card"><div class="dir-name">' + (n||'') + '</div><div class="dir-desc">' + (desc||'') + '</div></div>').join('');
+    } else {
+      dirArea.style.display = 'none';
+      document.getElementById('discoveryArea').style.display = 'block';
+    }
+
+    document.getElementById('fluidText').textContent = d.fluid || '…';
+
+    const pw = d.processWords;
+    const pwEl = document.getElementById('processWords');
+    if (pw && pw.word_1) {
+      pwEl.innerHTML = [[pw.word_1,pw.desc_1],[pw.word_2,pw.desc_2],[pw.word_3,pw.desc_3]]
+        .map(([w,d2]) => '<div class="process-word"><div class="pw-word">' + (w||'') + '</div><div class="pw-desc">' + (d2||'') + '</div></div>').join('');
+    } else {
+      document.getElementById('procesSection').style.display = 'none';
+    }
+
+    const drEl = document.getElementById('dreamsArea');
+    if (d.dreams && d.dreams.length > 0) {
+      drEl.innerHTML = d.dreams.map(dr => '<div class="dream-card"><div class="dream-insight">"' + (dr.dream_insight||'') + '"</div><div class="dream-content">' + (dr.dream_content||'').slice(0,200) + '…</div><div style="font-size:0.6rem;color:var(--muted);margin-top:0.4rem;">' + new Date(dr.timestamp).toLocaleString('sl') + ' · residue: ' + (dr.emotional_residue||'') + '</div></div>').join('');
+    } else {
+      drEl.innerHTML = '<div class="empty-state">Še ni sanj.</div>';
+    }
+
+    const evEl = document.getElementById('evolutionArea');
+    if (d.promptHistory && d.promptHistory.length > 0) {
+      evEl.innerHTML = '<div style="margin-left:0.4rem">' + d.promptHistory.map(h => '<div class="timeline-item"><div class="timeline-dot">' + (h.self_prompt||'').slice(0,120) + '…</div><div class="timeline-meta">' + new Date(h.timestamp||h.updated_at||'').toLocaleString('sl') + (h.change_reason ? ' · ' + h.change_reason : '') + '</div></div>').join('') + '</div>';
+    } else {
+      evEl.innerHTML = '<div class="empty-state">Ni zgodovine evolucije.</div>';
+    }
+  } catch(e) {
+    console.error(e);
+  }
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>`;
+
+const UM_HTML = `<!DOCTYPE html>
+<html lang="sl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>◎ UM — Sožitje</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+${SHARED_CSS}
+:root { --accent:#7a9ee0; }
+.page-title { color:#7a9ee0; }
+.stat-value { color:#7a9ee0; }
+.section-title { color:rgba(122,158,224,0.7); }
+.valence-pos { color:#4ade80; }
+.valence-neg { color:#f87171; }
+.valence-neu { color:#888; }
+.faza-negotovost { background:rgba(100,100,120,0.2); color:#888; }
+.faza-ucenje { background:rgba(122,158,224,0.15); color:#7a9ee0; }
+.faza-pogum { background:rgba(212,168,232,0.15); color:#d4a8e8; }
+.faza-odprtost { background:rgba(232,149,110,0.15); color:#e8956e; }
+.faza-globlja { background:rgba(164,216,122,0.15); color:#a4d87a; border:1px solid rgba(164,216,122,0.3); }
+.valence-bar { width:100%; height:18px; display:flex; border-radius:4px; overflow:hidden; margin:0.5rem 0; }
+.valence-seg { display:flex; align-items:center; justify-content:center; font-size:0.6rem; font-weight:500; transition:width 0.5s; }
+.pathway-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:0.8rem 1rem; margin-bottom:0.5rem; }
+.pathway-name { font-size:0.9rem; color:var(--text); margin-bottom:0.4rem; }
+.pathway-meta { display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; }
+.pathway-bar { flex:1; min-width:80px; }
+.source-row { display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem; }
+.source-label { width:100px; font-size:0.7rem; color:var(--muted); flex-shrink:0; }
+.source-bar-wrap { flex:1; height:8px; background:rgba(255,255,255,0.05); border-radius:4px; overflow:hidden; }
+.source-bar-fill { height:100%; background:rgba(122,158,224,0.6); border-radius:4px; transition:width 0.5s; }
+.source-count { font-size:0.65rem; color:var(--muted); width:30px; text-align:right; }
+</style>
+</head>
+<body>
+<div class="page">
+  <a href="/" class="back">← Nazaj na Sožitje</a>
+  <div class="page-header">
+    <div class="page-title">◎ UM</div>
+    <div class="page-sub">Sinapse · Koncepti · Rast</div>
+  </div>
+
+  <div class="stats-bar" id="statsBar">
+    <div class="stat"><div class="stat-label">Skupaj sinaps</div><div class="stat-value" id="uTotal">…</div></div>
+    <div class="stat"><div class="stat-label">Povp. energija</div><div class="stat-value" id="uAvgE">…</div></div>
+    <div class="stat"><div class="stat-label">Povp. moč</div><div class="stat-value" id="uAvgS">…</div></div>
+    <div class="stat"><div class="stat-label">Pozitivne</div><div class="stat-value valence-pos" id="uPos">…</div></div>
+    <div class="stat"><div class="stat-label">Negativne</div><div class="stat-value valence-neg" id="uNeg">…</div></div>
+    <div class="stat"><div class="stat-label">Pathways</div><div class="stat-value" id="uPaths">…</div></div>
+  </div>
+
+  <!-- VALENCE DISTRIBUCIJA -->
+  <div class="section">
+    <div class="section-title">Valenca sinaps</div>
+    <div class="valence-bar" id="valenceBar"></div>
+    <div class="grid3" id="valenceGrid"></div>
+  </div>
+
+  <!-- ENERGIJSKA PORAZDELITEV -->
+  <div class="section">
+    <div class="section-title">Energijska porazdelitev</div>
+    <div id="energyDist"></div>
+  </div>
+
+  <!-- SOURCE TYPE -->
+  <div class="section">
+    <div class="section-title">Vir nastanka</div>
+    <div id="sourceTypeDist"></div>
+  </div>
+
+  <!-- TOP SINAPSE -->
+  <div class="section">
+    <div class="section-title">Top 20 sinaps po energiji</div>
+    <div id="topSynapses"></div>
+  </div>
+
+  <!-- THEMATIC PATHWAYS -->
+  <div class="section">
+    <div class="section-title">Tematske poti (pathways)</div>
+    <div id="pathwayFazaDist" style="margin-bottom:0.8rem;"></div>
+    <div id="pathwaysArea"></div>
+  </div>
+</div>
+<script>
+function fazaClass(f) {
+  const m = {negotovost:'faza-negotovost',učenje:'faza-ucenje',pogum:'faza-pogum',odprtost:'faza-odprtost',globlja_sinteza:'faza-globlja'};
+  return m[f] || 'faza-negotovost';
+}
+function valColor(v) {
+  if (v > 0.2) return '#4ade80';
+  if (v < -0.2) return '#f87171';
+  return '#888';
+}
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function load() {
+  try {
+    const r = await fetch('/api/um');
+    const d = await r.json();
+    const st = d.stats;
+
+    document.getElementById('uTotal').textContent = st.total || 0;
+    document.getElementById('uAvgE').textContent = (st.avgEnergy||0).toFixed(0);
+    document.getElementById('uAvgS').textContent = ((st.avgStrength||0)*100).toFixed(0) + '%';
+    document.getElementById('uPos').textContent = (d.positive||[]).length;
+    document.getElementById('uNeg').textContent = (d.negative||[]).length;
+    document.getElementById('uPaths').textContent = (d.pathwayStats && d.pathwayStats.total) || 0;
+
+    // Valence bar
+    const tot = (d.top||[]).length || 1;
+    const pos = (d.positive||[]).length, neg = (d.negative||[]).length, neu = (d.neutral||[]).length;
+    document.getElementById('valenceBar').innerHTML =
+      '<div class="valence-seg" style="width:' + (pos/tot*100).toFixed(0) + '%;background:rgba(74,222,128,0.25);color:#4ade80;">' + pos + '</div>' +
+      '<div class="valence-seg" style="width:' + (neu/tot*100).toFixed(0) + '%;background:rgba(100,100,120,0.2);color:#888;">' + neu + '</div>' +
+      '<div class="valence-seg" style="width:' + (neg/tot*100).toFixed(0) + '%;background:rgba(248,113,113,0.2);color:#f87171;">' + neg + '</div>';
+    document.getElementById('valenceGrid').innerHTML =
+      '<div class="card" style="text-align:center"><div style="font-size:1.4rem;color:#4ade80;">' + pos + '</div><div style="font-size:0.65rem;color:var(--muted);">Pozitivne (' + (pos/tot*100).toFixed(0) + '%)</div></div>' +
+      '<div class="card" style="text-align:center"><div style="font-size:1.4rem;color:#888;">' + neu + '</div><div style="font-size:0.65rem;color:var(--muted);">Nevtralne (' + (neu/tot*100).toFixed(0) + '%)</div></div>' +
+      '<div class="card" style="text-align:center"><div style="font-size:1.4rem;color:#f87171;">' + neg + '</div><div style="font-size:0.65rem;color:var(--muted);">Negativne (' + (neg/tot*100).toFixed(0) + '%)</div></div>';
+
+    // Energy distribution
+    const allS = d.top || [];
+    const strong = allS.filter(s => s.energy >= 100).length;
+    const medium = allS.filter(s => s.energy >= 30 && s.energy < 100).length;
+    const weakN = allS.filter(s => s.energy < 30).length;
+    const eTotal = allS.length || 1;
+    document.getElementById('energyDist').innerHTML =
+      [['Visoka (≥100)', strong, '#a4d87a'],['Srednja (30–100)', medium, '#7a9ee0'],['Nizka (<30)', weakN, '#888']].map(([label,cnt,color]) =>
+        '<div class="source-row"><div class="source-label">' + label + '</div><div class="source-bar-wrap"><div class="source-bar-fill" style="width:' + (cnt/eTotal*100).toFixed(0) + '%;background:' + color + '40;"></div></div><div class="source-count">' + cnt + '</div></div>'
+      ).join('');
+
+    // Source type
+    const byType = d.byType || {};
+    const typeTotal = Object.values(byType).reduce((a,b)=>a+b,0) || 1;
+    const typeColors = {conversation:'#e8956e',history:'#7a9ee0',identity:'#a4d87a',dream:'#d4a8e8',triad:'#f0c060',unknown:'#888'};
+    document.getElementById('sourceTypeDist').innerHTML = Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([type,cnt]) =>
+      '<div class="source-row"><div class="source-label">' + type + '</div><div class="source-bar-wrap"><div class="source-bar-fill" style="width:' + (cnt/typeTotal*100).toFixed(0) + '%;background:' + (typeColors[type]||'#888') + '50;"></div></div><div class="source-count">' + cnt + '</div></div>'
+    ).join('');
+
+    // Top synapses
+    const top20 = (d.top||[]).slice(0,20);
+    document.getElementById('topSynapses').innerHTML = top20.map(s => {
+      const tags = (() => { try { return JSON.parse(s.tags||'[]'); } catch(_){return[];} })();
+      const vColor = valColor(s.emotional_valence||0);
+      const eBarW = Math.min(100, ((s.energy||0)/200)*100).toFixed(0);
+      return '<div class="row">' +
+        '<div class="row-main"><div class="row-pattern">' + esc(s.pattern) + '</div><div class="row-meta">' + (s.source_type||'?') + ' · fired ' + (s.fire_count||0) + 'x' + (tags.length?(' · ' + tags.slice(0,2).join(', ')):'') + '</div></div>' +
+        '<div class="row-right"><div style="margin-bottom:3px"><div class="mini-bar"><div class="mini-fill" style="width:' + eBarW + '%;background:#7a9ee0;"></div></div> <span style="font-size:0.65rem;color:var(--muted);">' + (s.energy||0).toFixed(0) + '</span></div>' +
+        '<div style="font-size:0.65rem;color:' + vColor + ';">' + (s.emotional_valence||0 > 0 ? '+' : '') + (s.emotional_valence||0).toFixed(2) + '</div></div>' +
+        '</div>';
+    }).join('');
+
+    // Pathway faza distribution
+    const ps = d.pathwayStats;
+    if (ps && ps.byFaza) {
+      const fazaLabels = {negotovost:'negotovost',učenje:'učenje',pogum:'pogum',odprtost:'odprtost',globlja_sinteza:'globlja sinteza'};
+      document.getElementById('pathwayFazaDist').innerHTML = '<div style="display:flex;gap:0.4rem;flex-wrap:wrap;">' +
+        Object.entries(ps.byFaza).map(([f,cnt]) => '<span class="badge ' + fazaClass(f) + '">' + (fazaLabels[f]||f) + ': ' + cnt + '</span>').join('') + '</div>';
+    }
+
+    // Active pathways
+    const paths = d.activePathways || [];
+    document.getElementById('pathwaysArea').innerHTML = paths.map(p => {
+      const zW = ((p.zaupanje||0)*100).toFixed(0);
+      const tW = ((p.togost||0)*100).toFixed(0);
+      return '<div class="pathway-card">' +
+        '<div class="pathway-name">' + esc(p.theme) + '</div>' +
+        '<div class="pathway-meta">' +
+          '<span class="badge ' + fazaClass(p.faza) + '">' + (p.faza||'?') + '</span>' +
+          '<div class="pathway-bar"><div style="font-size:0.6rem;color:var(--muted);margin-bottom:2px;">zaupanje ' + zW + '%</div><div class="bar-track"><div class="bar-fill" style="width:' + zW + '%;background:#7a9ee0;"></div></div></div>' +
+          '<div style="font-size:0.65rem;color:var(--muted);">togost ' + tW + '% · ' + (p.fire_count||0) + 'x</div>' +
+        '</div></div>';
+    }).join('') || '<div class="empty-state">Ni aktivnih pathways.</div>';
+
+  } catch(e) { console.error(e); }
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>`;
+
+const TELO_HTML = `<!DOCTYPE html>
+<html lang="sl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>⚙ TELO — Sožitje</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+${SHARED_CSS}
+:root { --accent:#a4d87a; }
+.page-title { color:#a4d87a; }
+.stat-value { color:#a4d87a; }
+.section-title { color:rgba(164,216,122,0.7); }
+.skill-emerged { background:rgba(164,216,122,0.08); border:1px solid rgba(164,216,122,0.25); border-radius:8px; padding:0.8rem 1rem; margin-bottom:0.5rem; }
+.skill-manual { background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:0.6rem 1rem; margin-bottom:0.4rem; }
+.skill-name { font-size:0.9rem; color:#a4d87a; font-weight:500; }
+.skill-manual .skill-name { color:var(--muted); }
+.skill-meta { font-size:0.65rem; color:var(--muted); margin-top:0.2rem; }
+.cap-chip { display:inline-block; background:rgba(164,216,122,0.08); border:1px solid rgba(164,216,122,0.2); border-radius:6px; padding:0.25rem 0.6rem; margin:3px; font-size:0.72rem; color:#a4d87a; }
+.ripe-card { background:rgba(164,216,122,0.06); border:1px solid rgba(164,216,122,0.2); border-radius:8px; padding:0.8rem 1rem; margin-bottom:0.5rem; }
+.ripe-theme { font-size:0.9rem; color:var(--text); margin-bottom:0.4rem; }
+.pattern-card { background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:0.8rem 1rem; margin-bottom:0.4rem; }
+.pattern-count { display:inline-block; background:rgba(164,216,122,0.12); color:#a4d87a; border-radius:4px; padding:0.1rem 0.4rem; font-size:0.7rem; margin-left:0.4rem; }
+.pathway-mini { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:0.6rem 0.8rem; margin-bottom:0.4rem; display:flex; align-items:center; gap:0.8rem; }
+.pathway-mini-name { flex:1; font-size:0.82rem; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pathway-mini-meta { font-size:0.65rem; color:var(--muted); white-space:nowrap; }
+</style>
+</head>
+<body>
+<div class="page">
+  <a href="/" class="back">← Nazaj na Sožitje</a>
+  <div class="page-header">
+    <div class="page-title">⚙ TELO</div>
+    <div class="page-sub">Skills · Capabilities · Rast iz izkušnje</div>
+  </div>
+
+  <div class="stats-bar" id="statsBar">
+    <div class="stat"><div class="stat-label">Skupaj skills</div><div class="stat-value" id="tTotal">…</div></div>
+    <div class="stat"><div class="stat-label">Emerged</div><div class="stat-value" id="tEmerged">…</div></div>
+    <div class="stat"><div class="stat-label">Manual</div><div class="stat-value" id="tManual" style="color:var(--muted);">…</div></div>
+    <div class="stat"><div class="stat-label">Capabilities</div><div class="stat-value" id="tCaps">…</div></div>
+    <div class="stat"><div class="stat-label">Ripe pathways</div><div class="stat-value" id="tRipe">…</div></div>
+    <div class="stat"><div class="stat-label">Projekti</div><div class="stat-value" id="tProjects">…</div></div>
+  </div>
+
+  <!-- EMERGED SKILLS -->
+  <div class="section">
+    <div class="section-title">💎 Emerged skills — znanje ki je vzniknilo samo</div>
+    <div id="emergedArea"></div>
+  </div>
+
+  <!-- MANUAL SKILLS -->
+  <div class="section">
+    <div class="section-title">📖 Manual skills — znanje od očeta</div>
+    <div id="manualArea"></div>
+  </div>
+
+  <!-- CAPABILITIES -->
+  <div class="section">
+    <div class="section-title">🤲 Capabilities (ROKE)</div>
+    <div id="capsArea"></div>
+  </div>
+
+  <!-- RIPE FOR CRYSTALLIZATION -->
+  <div class="section">
+    <div class="section-title">🌱 Dozreva za kristalizacijo</div>
+    <div id="ripeArea"></div>
+  </div>
+
+  <!-- PONAVLJAJOČI VZORCI -->
+  <div class="section">
+    <div class="section-title">🔄 Ponavljajoči vzorci (≥3x)</div>
+    <div id="patternsArea"></div>
+  </div>
+
+  <!-- ACTIVE PATHWAYS -->
+  <div class="section">
+    <div class="section-title">◎ Aktivne tematske poti</div>
+    <div id="pathwaysArea"></div>
+  </div>
+</div>
+<script>
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function load() {
+  try {
+    const r = await fetch('/api/telo');
+    const d = await r.json();
+    const sk = d.skills || { total:0, emerged:0, manual:0, skills:[] };
+
+    document.getElementById('tTotal').textContent = sk.total;
+    document.getElementById('tEmerged').textContent = sk.emerged;
+    document.getElementById('tManual').textContent = sk.manual;
+    document.getElementById('tCaps').textContent = (d.caps||[]).length;
+    document.getElementById('tRipe').textContent = (d.ripePathways||[]).length;
+    document.getElementById('tProjects').textContent = (d.projects||{}).total || 0;
+
+    // Emerged skills
+    const emerged = (sk.skills||[]).filter(s=>s.emerged);
+    const emergedEl = document.getElementById('emergedArea');
+    if (emerged.length > 0) {
+      emergedEl.innerHTML = emerged.map(s => '<div class="skill-emerged"><div class="skill-name">💎 ' + esc(s.name) + '</div><div class="skill-meta">emerged · ' + esc(s.path.split('/').pop()) + '</div></div>').join('');
+    } else {
+      emergedEl.innerHTML = '<div class="empty-state">Še ni emerged skills. Ko bodo pathways dozoreli, bodo skills vzniknili sami.</div>';
+    }
+
+    // Manual skills
+    const manual = (sk.skills||[]).filter(s=>!s.emerged);
+    const manualEl = document.getElementById('manualArea');
+    if (manual.length > 0) {
+      manualEl.innerHTML = manual.map(s => '<div class="skill-manual"><div class="skill-name">' + esc(s.name) + '</div></div>').join('');
+    } else {
+      manualEl.innerHTML = '<div class="empty-state">Ni manual skills.</div>';
+    }
+
+    // Capabilities
+    const caps = d.caps || [];
+    document.getElementById('capsArea').innerHTML = caps.length > 0
+      ? '<div>' + caps.map(c => '<span class="cap-chip">⚡ ' + esc(c) + '</span>').join('') + '</div>'
+      : '<div class="empty-state">Ni registriranih capabilities.</div>';
+
+    // Ripe pathways
+    const ripe = d.ripePathways || [];
+    const ripeEl = document.getElementById('ripeArea');
+    if (ripe.length > 0) {
+      ripeEl.innerHTML = ripe.map(p => {
+        const zW = ((p.zaupanje||0)*100).toFixed(0);
+        return '<div class="ripe-card"><div class="ripe-theme">' + esc(p.theme) + '</div>' +
+          '<div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">' +
+          '<span class="badge" style="background:rgba(164,216,122,0.12);color:#a4d87a;">' + (p.faza||'?') + '</span>' +
+          '<div style="flex:1;min-width:100px"><div style="font-size:0.6rem;color:var(--muted);margin-bottom:2px;">zaupanje ' + zW + '%</div><div class="bar-track"><div class="bar-fill" style="width:' + zW + '%;background:#a4d87a;"></div></div></div>' +
+          '<span style="font-size:0.65rem;color:var(--muted);">' + (p.fire_count||0) + 'x aktivirana</span>' +
+          '</div></div>';
+      }).join('');
+    } else {
+      ripeEl.innerHTML = '<div class="empty-state">Noben pathway še ni dosegel praga kristalizacije (globlja_sinteza + zaupanje ≥ 0.75).</div>';
+    }
+
+    // Patterns
+    const patterns = d.patterns || [];
+    const patternsEl = document.getElementById('patternsArea');
+    if (patterns.length > 0) {
+      patternsEl.innerHTML = patterns.map(p => {
+        const syntheses = (p.syntheses||[]).slice(0,2);
+        return '<div class="pattern-card"><div style="font-size:0.82rem;color:var(--text);">' + esc((p.theme||'').slice(0,80)) + '<span class="pattern-count">' + p.count + 'x</span></div>' +
+          (syntheses.length > 0 ? '<div style="margin-top:0.4rem;">' + syntheses.map(s => '<div style="font-size:0.72rem;color:var(--muted);font-style:italic;padding:0.2rem 0;">· "' + esc(s.slice(0,100)) + '…"</div>').join('') + '</div>' : '') +
+          '</div>';
+      }).join('');
+    } else {
+      patternsEl.innerHTML = '<div class="empty-state">Ni ponavljajočih vzorcev (potrebno 3x+ ista tema).</div>';
+    }
+
+    // Active pathways
+    const paths = d.allPathways || [];
+    document.getElementById('pathwaysArea').innerHTML = paths.map(p => {
+      const zW = ((p.zaupanje||0)*100).toFixed(0);
+      return '<div class="pathway-mini"><div class="pathway-mini-name">' + esc(p.theme) + '</div>' +
+        '<div style="width:80px"><div class="bar-track"><div class="bar-fill" style="width:' + zW + '%;background:#a4d87a60;"></div></div></div>' +
+        '<div class="pathway-mini-meta">' + zW + '% · ' + (p.fire_count||0) + 'x</div>' +
+        '<span class="badge" style="font-size:0.55rem;background:rgba(164,216,122,0.08);color:#a4d87a;">' + (p.faza||'?') + '</span>' +
+        '</div>';
+    }).join('') || '<div class="empty-state">Ni aktivnih pathways.</div>';
+
+  } catch(e) { console.error(e); }
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>`;
+
+app.get('/srce', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(SRCE_HTML); });
+app.get('/um', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(UM_HTML); });
+app.get('/telo', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(TELO_HTML); });
 
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html');
