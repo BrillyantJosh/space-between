@@ -1002,7 +1002,12 @@ const memory = {
     const destroyed = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'destroyed'").get().c;
     const dormant = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'dormant'").get().c;
     const last = db.prepare('SELECT * FROM projects ORDER BY created_at DESC LIMIT 1').get() || null;
-    return { total, active, destroyed, dormant, lastCreated: last };
+    const inProgress = db.prepare(`
+      SELECT COUNT(*) as c FROM projects
+      WHERE lifecycle_state IN ('seed', 'gathering_perspectives', 'deliberating')
+      AND (destroyed_at IS NULL OR destroyed_at = '')
+    `).get().c;
+    return { total, active, destroyed, dormant, inProgress, lastCreated: last };
   },
 
   touchProjectReflection(name) {

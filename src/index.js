@@ -188,6 +188,33 @@ async function handleHeartbeat() {
     }
   }
 
+  // ── FOKUS: Timeout check za projekte brez perspektiv (vsak 50. utrip) ──
+  if (heartbeatNum % 50 === 0) {
+    try {
+      const stuckProjects = memory.getAllProjects().filter(p =>
+        p.lifecycle_state === 'gathering_perspectives' &&
+        (p.deliberation_count || 0) > 300 &&
+        (p.perspectives_count || 0) === 0
+      );
+      for (const stuck of stuckProjects) {
+        console.log(`[HEARTBEAT] ⏳ Stuck projekt: "${stuck.name}" (${stuck.deliberation_count} deliberations, 0 perspektiv)`);
+        memory.advanceProjectState(stuck.name, 'dormant');
+        memory.updateProject(stuck.name, {
+          last_error: `Timeout: ${stuck.deliberation_count} razmislekov brez perspektiv`
+        });
+        broadcast('activity', {
+          type: 'creation',
+          text: `⏳ "${stuck.display_name}" → dormant (timeout)`
+        });
+      }
+      if (stuckProjects.length > 0) {
+        console.log(`[HEARTBEAT] ⏳ ${stuckProjects.length} projektov poslanih v dormant`);
+      }
+    } catch (e) {
+      console.error('[HEARTBEAT] Timeout check napaka:', e.message);
+    }
+  }
+
   // ◈ RAG — Dnevna osvežitev Lana NOSTR znanja (vsak 1440. utrip = vsak dan)
   if (heartbeatNum % 1440 === 0) {
     try {

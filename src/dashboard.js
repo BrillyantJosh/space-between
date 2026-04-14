@@ -9,6 +9,7 @@ import { getRunningServices } from './sandbox.js';
 import fs from 'fs';
 import { getPresence } from './presence.js';
 import { getSkillsStatus } from './skills.js';
+import { getAnthropicBudgetStatus } from './llm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CREATIONS_DIR = path.join(__dirname, '..', 'data', 'creations');
@@ -464,7 +465,8 @@ app.get('/api/telo', (req, res) => {
       const projectsRaw = memory.getProjects();
       projects = { total: projectsRaw.length, active: projectsRaw.filter(p => p.lifecycle_state === 'active').length };
     } catch (_) {}
-    res.json({ skills, ripePathways, patterns, allPathways, caps, projects });
+    const anthropicBudget = getAnthropicBudgetStatus();
+    res.json({ skills, ripePathways, patterns, allPathways, caps, projects, anthropicBudget });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
