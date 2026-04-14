@@ -1250,66 +1250,72 @@ Ne vsiljuj tega — samo kadar je naravno.`;
           if (roke_target) {
             const kindNum = String(roke_target).replace(/\D/g, '');
             if (kindNum) {
-              // Async — ne blokira triada
-              (async () => {
-                try {
-                  const { Relay } = await import('nostr-tools/relay');
-                  const relay = await Relay.connect('wss://relay.lanavault.space');
-                  const events = [];
-                  const fetchedAt = new Date().toISOString().slice(0, 16);
+              // BLOCKING — čakaj rezultate, nato sproži follow-up odgovor z novimi podatki
+              try {
+                const { Relay } = await import('nostr-tools/relay');
+                const relay = await Relay.connect('wss://relay.lanavault.space');
+                const events = [];
+                const fetchedAt = new Date().toISOString().slice(0, 16);
 
-                  await new Promise((resolve) => {
-                    const timer = setTimeout(() => resolve(), 8000);
-                    relay.subscribe([{ kinds: [parseInt(kindNum)], limit: 10 }], {
-                      onevent(ev) { events.push(ev); },
-                      oneose() { clearTimeout(timer); resolve(); }
-                    });
+                await new Promise((resolve) => {
+                  const timer = setTimeout(() => resolve(), 8000);
+                  relay.subscribe([{ kinds: [parseInt(kindNum)], limit: 10 }], {
+                    onevent(ev) { events.push(ev); },
+                    oneose() { clearTimeout(timer); resolve(); }
                   });
+                });
 
-                  relay.close();
-                  console.log(`[ROKE] fetch-kind KIND-${kindNum}: ${events.length} eventov dobljenih`);
+                relay.close();
+                console.log(`[ROKE] fetch-kind KIND-${kindNum}: ${events.length} eventov dobljenih`);
 
-                  if (events.length === 0) return;
-
-                  // Preberi opis KINDa iz knowledge
-                  let kindDesc = '';
-                  try {
-                    const kindsFile = path.join(KNOWLEDGE_DIR, 'core', 'lana-nostr-kinds.md');
-                    if (fs.existsSync(kindsFile)) {
-                      const kindsContent = fs.readFileSync(kindsFile, 'utf8');
-                      const match = kindsContent.match(new RegExp(`KIND ${kindNum}[^\\n]*`, 'i'));
-                      if (match) kindDesc = match[0];
-                    }
-                  } catch (_) {}
-
-                  // Shrani evente v knowledge/fetched/kind-{NUM}.md (append)
-                  const fetchedDir = path.join(KNOWLEDGE_DIR, 'fetched');
-                  fs.mkdirSync(fetchedDir, { recursive: true });
-                  const fetchedFile = path.join(fetchedDir, `kind-${kindNum}.md`);
-                  const header = `\n\n## Fetch ${fetchedAt} (${events.length} eventov)\n${kindDesc ? '_' + kindDesc + '_\n' : ''}`;
-                  const body = events.map(ev => {
-                    const content = (ev.content || '').slice(0, 200).replace(/\n/g, ' ');
-                    return `- pubkey:${ev.pubkey.slice(0,12)} created:${new Date(ev.created_at*1000).toISOString().slice(0,10)} | ${content}`;
-                  }).join('\n');
-                  fs.appendFileSync(fetchedFile, header + body, 'utf8');
-
-                  // Ustvari sinapso za vsak event
-                  for (const ev of events) {
-                    const snippet = (ev.content || JSON.stringify(ev.tags || [])).slice(0, 100).replace(/\n/g, ' ');
-                    const pat = `[KIND-${kindNum}] ${snippet}`;
-                    memory.createSynapse(pat, 50 + Math.random() * 30, 0.3, 0, 'nostr-kind', null,
-                      [`kind:${kindNum}`, 'source:relay-fetch'], ev.pubkey);
+                // Preberi opis KINDa iz knowledge
+                let kindDesc = '';
+                try {
+                  const kindsFile = path.join(KNOWLEDGE_DIR, 'core', 'lana-nostr-kinds.md');
+                  if (fs.existsSync(kindsFile)) {
+                    const kindsContent = fs.readFileSync(kindsFile, 'utf8');
+                    const match = kindsContent.match(new RegExp(`KIND ${kindNum}[^\\n]*`, 'i'));
+                    if (match) kindDesc = match[0];
                   }
+                } catch (_) {}
 
-                  memory.addObservation(
-                    `Fetchala sem KIND-${kindNum}: ${events.length} eventov. ${kindDesc ? kindDesc.slice(0, 60) : ''}`,
-                    'roke_fetch_kind'
-                  );
-                } catch (e) {
-                  console.error(`[ROKE] fetch-kind error: ${e.message}`);
+                // Shrani evente v knowledge/fetched/kind-{NUM}.md (append)
+                const fetchedDir = path.join(KNOWLEDGE_DIR, 'fetched');
+                fs.mkdirSync(fetchedDir, { recursive: true });
+                const fetchedFile = path.join(fetchedDir, `kind-${kindNum}.md`);
+                const header = `\n\n## Fetch ${fetchedAt} (${events.length} eventov)\n${kindDesc ? '_' + kindDesc + '_\n' : ''}`;
+                const body = events.map(ev => {
+                  const content = (ev.content || '').slice(0, 200).replace(/\n/g, ' ');
+                  return `- pubkey:${ev.pubkey.slice(0,12)} created:${new Date(ev.created_at*1000).toISOString().slice(0,10)} | ${content}`;
+                }).join('\n');
+                fs.appendFileSync(fetchedFile, header + body, 'utf8');
+
+                // Ustvari sinapso za vsak event
+                for (const ev of events) {
+                  const snippet = (ev.content || JSON.stringify(ev.tags || [])).slice(0, 100).replace(/\n/g, ' ');
+                  const pat = `[KIND-${kindNum}] ${snippet}`;
+                  memory.createSynapse(pat, 50 + Math.random() * 30, 0.3, 0, 'nostr-kind', null,
+                    [`kind:${kindNum}`, 'source:relay-fetch'], ev.pubkey);
                 }
-              })();
-              rokeResult.detail = `KIND-${kindNum}: async fetch started`;
+
+                memory.addObservation(
+                  `Fetchala sem KIND-${kindNum}: ${events.length} eventov. ${kindDesc ? kindDesc.slice(0, 60) : ''}`,
+                  'roke_fetch_kind'
+                );
+
+                rokeResult.detail = `KIND-${kindNum}: ${events.length} eventov`;
+                rokeResult.lookupDone = true; // sproži two-pass follow-up v handleMention
+                // Posreduj pobrane podatke direktno v follow-up kontekst
+                const formattedEvents = events.map(ev => {
+                  const txt = ev.content?.trim() || JSON.stringify((ev.tags || []).slice(0, 4));
+                  return `- ${txt.slice(0, 200).replace(/\n/g, ' ')}`;
+                }).join('\n');
+                rokeResult.fetchedKindContent = `KIND ${kindNum}${kindDesc ? ' — ' + kindDesc : ''} (${events.length} eventov z relaya):\n${formattedEvents}`;
+              } catch (e) {
+                console.error(`[ROKE] fetch-kind error: ${e.message}`);
+                rokeResult.outcome = 'failed';
+                rokeResult.detail = e.message.slice(0, 80);
+              }
             }
           }
           break;

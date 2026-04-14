@@ -265,6 +265,46 @@ export async function fetchProfiles(pubkeys) {
 }
 
 
+// ═══════════════════════════════════════════════════
+// LIVE SUBSCRIPTIONS — KIND 76523 (Awareness) + KIND 99991 (Knowledge)
+// Kliče se ob vsakem novem eventu — sproži ingestion v RAG
+// ═══════════════════════════════════════════════════
+
+export function subscribeToLiveKinds(onAwareness, onKnowledge, singleUrl = null, singleRelay = null) {
+  const since = Math.floor(Date.now() / 1000); // samo NOVI eventi od zagona
+  const targets = singleUrl ? [[singleUrl, singleRelay]] : [...relays];
+
+  for (const [url, relay] of targets) {
+    try {
+      relay.subscribe(
+        [{ kinds: [76523], since }],
+        {
+          onevent(event) {
+            if (_seenEvents.has(event.id)) return;
+            _seenEvents.add(event.id);
+            console.log(`[NOSTR] 📡 KIND 76523 (Awareness) od ${event.pubkey.slice(0, 12)}... na ${url}`);
+            if (onAwareness) onAwareness(event);
+          }
+        }
+      );
+      relay.subscribe(
+        [{ kinds: [99991], since }],
+        {
+          onevent(event) {
+            if (_seenEvents.has(event.id)) return;
+            _seenEvents.add(event.id);
+            console.log(`[NOSTR] 📡 KIND 99991 (Knowledge) od ${event.pubkey.slice(0, 12)}... na ${url}`);
+            if (onKnowledge) onKnowledge(event);
+          }
+        }
+      );
+      console.log(`[NOSTR] Subscribed to KIND 76523 + 99991 live na ${url}`);
+    } catch (err) {
+      console.error(`[NOSTR] Live kinds subscribe napaka na ${url}:`, err.message);
+    }
+  }
+}
+
 // ═══ LIVING MEMORY — KIND 1078 CORE MEMORIES ═══
 // KIND 1078 = Regular event — vsak spomin ostane za vedno
 export async function publishMemoryArchive(synapse) {

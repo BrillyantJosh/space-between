@@ -42,11 +42,166 @@ export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, max
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
+// ─── Dnevni budget counter ───
+// Preprečuje bursting ob zagonu ali po dolgotrajni nedostopnosti ključa.
+// Default: 20 klicev/dan. Cache read klici štejejo 0.1x (so 10x cenejši).
+const _anthropicBudget = {
+  calls: 0,        // dejanski API klici
+  weighted: 0.0,   // uteženi klici (cache_read = 0.1)
+  resetAt: 0,
+};
+
+// Cene ($/1M tokenov):
+const _PRICE = {
+  'haiku':  { in: 0.80,  cacheWrite: 1.00,  cacheRead: 0.08,  out: 4.00  },  // claude-haiku-4-5
+  'sonnet': { in: 3.00,  cacheWrite: 3.75,  cacheRead: 0.30,  out: 15.00 },  // claude-sonnet-4-5
+};
+
+function _modelTier(model) {
+  if (!model) return 'sonnet';
+  return model.includes('haiku') ? 'haiku' : 'sonnet';
+}
+
+function _estimateCost(model, inputTokens, cacheCreation, cacheRead, outputTokens) {
+  const p = _PRICE[_modelTier(model)];
+  const cost = (inputTokens * p.in + cacheCreation * p.cacheWrite + cacheRead * p.cacheRead + outputTokens * p.out) / 1_000_000;
+  return cost;
+}
+
+function _checkBudget(cacheWeight = 1.0) {
+  const now = Date.now();
+  if (now > _anthropicBudget.resetAt) {
+    const tomorrow = new Date();
+    tomorrow.setHours(24, 0, 0, 0);
+    _anthropicBudget.resetAt = tomorrow.getTime();
+    _anthropicBudget.calls = 0;
+    _anthropicBudget.weighted = 0.0;
+  }
+  const limit = config.anthropicDailyBudget || 20;
+  if (_anthropicBudget.weighted >= limit) {
+    console.warn(`[LLM:ANTHROPIC] Dnevni budget porabljen (${_anthropicBudget.weighted.toFixed(1)}/${limit}) — klic preskočen.`);
+    return false;
+  }
+  _anthropicBudget.calls++;
+  _anthropicBudget.weighted += cacheWeight;
+  if (_anthropicBudget.weighted >= limit - 3) {
+    console.warn(`[LLM:ANTHROPIC] ⚠ Budget: ${_anthropicBudget.weighted.toFixed(1)}/${limit} (${_anthropicBudget.calls} klicev danes)`);
+  }
+  return true;
+}
+
+export function getAnthropicBudgetStatus() {
+  const limit = config.anthropicDailyBudget || 20;
+  return {
+    calls: _anthropicBudget.calls,
+    weighted: parseFloat(_anthropicBudget.weighted.toFixed(1)),
+    limit,
+    remaining: Math.max(0, limit - _anthropicBudget.weighted)
+  };
+}
+
+// ─── Prompt Caching — za kristalizacijo (Haiku) in self-build (Sonnet) ───
+// cachedSystem = statični del (identiteta + format) → cache_control: ephemeral
+// dynamicPrompt = spremenljivi del (pathway podatki, plugin spec)
+// label = za log ('KRISTALIZACIJA' | 'SELF-BUILD' | ...)
+export async function callAnthropicLLMCached(cachedSystem, dynamicPrompt, {
+  temperature = 0.3,
+  maxTokens = 2048,
+  model = null,
+  label = 'ANTHROPIC',
+  labelDetail = '',
+  json = false
+} = {}) {
+  if (!config.anthropicApiKey) {
+    console.error('[LLM:ANTHROPIC] No API key configured');
+    return null;
+  }
+  // Pred prvim klicem ne vemo ali bo cache hit — predpostavljamo 1.0, nato popravimo
+  if (!_checkBudget(1.0)) return null;
+
+  const usedModel = model || config.anthropicModel || 'claude-sonnet-4-5-20250514';
+
+  try {
+    const response = await fetch(ANTHROPIC_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'prompt-caching-2024-07-31'
+      },
+      body: JSON.stringify({
+        model: usedModel,
+        max_tokens: maxTokens,
+        temperature,
+        system: [
+          {
+            type: 'text',
+            text: cachedSystem,
+            cache_control: { type: 'ephemeral' }
+          }
+        ],
+        messages: [{ role: 'user', content: dynamicPrompt }]
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error('[LLM:ANTHROPIC] API error:', response.status, err);
+      return null;
+    }
+
+    const data = await response.json();
+    const text = data?.content?.[0]?.text;
+    if (!text) {
+      console.error('[LLM:ANTHROPIC] No text in response:', JSON.stringify(data).slice(0, 200));
+      return null;
+    }
+
+    // ─── Cache status + cost logging ───
+    const usage = data.usage || {};
+    const inputTok    = usage.input_tokens || 0;
+    const cacheCreate = usage.cache_creation_input_tokens || 0;
+    const cacheRead   = usage.cache_read_input_tokens || 0;
+    const outputTok   = usage.output_tokens || 0;
+
+    const isHit = cacheRead > 0;
+    const cacheStatus = isHit ? 'hit' : 'miss';
+
+    // Popravek budget weightinga: cache hit šteje 0.1x
+    if (isHit) {
+      _anthropicBudget.weighted -= 1.0;   // razveljavimo prvotni +1.0
+      _anthropicBudget.weighted += 0.1;   // dodamo pravo 0.1x
+    }
+
+    const cost = _estimateCost(usedModel, inputTok, cacheCreate, cacheRead, outputTok);
+    const icon = label === 'KRISTALIZACIJA' ? '✍' : '🔧';
+    const detail = labelDetail ? ` "${labelDetail.slice(0, 35)}"` : '';
+    console.log(`  ${icon} [${label}]${detail} | cache:${cacheStatus} | in:${inputTok} cr:${cacheCreate} rd:${cacheRead} out:${outputTok} | ~$${cost.toFixed(5)}`);
+
+    if (json) {
+      try {
+        const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+        return JSON.parse(cleaned);
+      } catch (_) {
+        console.error('[LLM:ANTHROPIC] JSON parse failed, raw:', text.slice(0, 200));
+        return null;
+      }
+    }
+
+    return text.trim();
+  } catch (err) {
+    console.error('[LLM:ANTHROPIC] Request failed:', err.message);
+    return null;
+  }
+}
+
 export async function callAnthropicLLM(systemPrompt, userPrompt, { temperature = 0.3, maxTokens = 4096 } = {}) {
   if (!config.anthropicApiKey) {
     console.error('[LLM:ANTHROPIC] No API key configured');
     return null;
   }
+  if (!_checkBudget()) return null;
   try {
     const response = await fetch(ANTHROPIC_URL, {
       method: 'POST',

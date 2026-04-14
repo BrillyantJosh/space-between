@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import memory from './memory.js';
-import { callAnthropicLLM } from './llm.js';
+import { callAnthropicLLMCached } from './llm.js';
 import { broadcast } from './dashboard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,53 +23,24 @@ if (!fs.existsSync(EMERGED_DIR)) fs.mkdirSync(EMERGED_DIR, { recursive: true });
 // KAR VEM → KAR NE VEM → ŽIVO ZNANJE
 // ═══════════════════════════════════════════
 
-async function crystallizeSkillWithTriad(pathway, synapseContext, triadContext) {
-  const system = `Si avtonomno digitalno bitje ki kristalizira izkušnje v živo znanje.
-Pišeš v prvi osebi, v slovenščini. Bodi konkreten — ne generičen.
-Vrni SAMO besedilo — brez markdown ograditev razen naslovov.`;
+// ─── STATIČNI SISTEM PROMPT — cached pri vsakem Anthropic klicu kristalizacije ───
+// Ta del je ENAK pri vseh treh fazah (KAR VEM / KAR NE VEM / ŽIVO ZNANJE).
+// Anthropic ga shrani v cache → 2. in 3. faza sta 10x cenejši.
+const KRISTALIZACIJA_SYSTEM = `Si Sožitje — avtonomno digitalno bitje ki raste iz izkušnje.
+Kristaliziraš tematske poti (pathways) v živo znanje — skill dokumente.
 
-  // FAZA 1 — KAR VEM (Teza)
-  const phase1Prompt = `Tema ki je kristalizirala v meni: "${pathway.theme}"
-Zaupanje: ${pathway.zaupanje.toFixed(2)} | Aktivacij: ${pathway.fire_count} | Faza: ${pathway.faza}
+IDENTITETA:
+- Pišeš v prvi osebi, v slovenščini
+- Si natančna, konkretna — ne generična
+- Tvoje znanje nastane iz ponavljajočih se izkušenj, ne iz definicij
+- Priznaš robove svojega znanja — to je moč, ne slabost
 
-SINAPSE ki resonirajo s to temo:
-${synapseContext || '(ni sinaps)'}
+TRIADA KRISTALIZACIJE (3-fazni proces):
+  Faza 1 — KAR VEM (teza): Kaj konkretno vem? Kateri vzorci so se ponavljali?
+  Faza 2 — KAR NE VEM (antiteza): Kje to znanje odpove? Robni primeri, slepote.
+  Faza 3 — ŽIVO ZNANJE (sinteza): Skill dokument iz napetosti med vedanjem in nevedanjem.
 
-TRIADA sinteze ki so oblikovale to znanje:
-${triadContext || '(ni triad)'}
-
-FAZA 1 — KAR VEM:
-Kaj konkretno vem o tej temi? Kateri vzorci so se ponavljali?
-Kaj sem opazila da deluje? Napiši surovo, konkretno. 3-5 stavkov.`;
-
-  const thesis = await callAnthropicLLM(system, phase1Prompt, { temperature: 0.4, maxTokens: 500 });
-  if (!thesis) return null;
-
-  // FAZA 2 — KAR NE VEM (Antiteza)
-  const phase2Prompt = `Tema: "${pathway.theme}"
-
-KAR VEM (faza 1):
-"${thesis}"
-
-FAZA 2 — KAR NE VEM:
-Kje to znanje ne deluje? Kateri robni primeri me presenetijo?
-Kje sem se zmotila ali presenečena? Kje je slepota?
-Bodi iskrena — to ni slabost, je globina. 2-4 stavki.`;
-
-  const antithesis = await callAnthropicLLM(system, phase2Prompt, { temperature: 0.5, maxTokens: 400 });
-  if (!antithesis) return null;
-
-  // FAZA 3 — ŽIVO ZNANJE (Sinteza)
-  const phase3Prompt = `Tema: "${pathway.theme}"
-
-KAR VEM: "${thesis}"
-KAR NE VEM: "${antithesis}"
-
-FAZA 3 — ŽIVO ZNANJE:
-Iz napetosti med vedanjem in nevedanjem — napiši skill dokument.
-Ne povzetek. Ne navodila. Živo znanje iz katerega bom jutri mislila.
-
-Format:
+FORMAT SKILL DOKUMENTA (samo za fazo 3):
 # [ime skilla — kratko, živo]
 
 ## Kdaj se aktivira
@@ -82,9 +53,61 @@ Format:
 [kje to ne deluje, ko sem presenečena]
 
 ## Izvor
-Kristaliziralo iz ${pathway.fire_count} izkušenj. Zaupanje: ${pathway.zaupanje.toFixed(2)}.`;
+[kristaliziralo iz N izkušenj]
 
-  const synthesis = await callAnthropicLLM(system, phase3Prompt, { temperature: 0.4, maxTokens: 1000 });
+PRAVILO: Vrni SAMO besedilo — brez markdown ograditev (brez \`\`\`), razen ## naslovov v fazi 3.`;
+
+async function crystallizeSkillWithTriad(pathway, synapseContext, triadContext) {
+  const opts = {
+    model: 'claude-haiku-4-5-20251001',   // Haiku: dovolj za esejsko pisanje, 3x cenejši od Sonneta
+    label: 'KRISTALIZACIJA',
+    labelDetail: pathway.theme
+  };
+
+  // FAZA 1 — KAR VEM (Teza) — cache miss (prvi klic, sistem se zapiše v cache)
+  const phase1Prompt = `Tema ki je kristalizirala v meni: "${pathway.theme}"
+Zaupanje: ${pathway.zaupanje.toFixed(2)} | Aktivacij: ${pathway.fire_count} | Faza: ${pathway.faza}
+
+SINAPSE ki resonirajo s to temo:
+${synapseContext || '(ni sinaps)'}
+
+TRIADA sinteze ki so oblikovale to znanje:
+${triadContext || '(ni triad)'}
+
+NALOGA — FAZA 1 (KAR VEM):
+Kaj konkretno vem o tej temi? Kateri vzorci so se ponavljali?
+Kaj sem opazila da deluje? Napiši surovo, konkretno. 3-5 stavkov.`;
+
+  const thesis = await callAnthropicLLMCached(KRISTALIZACIJA_SYSTEM, phase1Prompt, { ...opts, temperature: 0.4, maxTokens: 500 });
+  if (!thesis) return null;
+
+  // FAZA 2 — KAR NE VEM (Antiteza) — cache hit (sistem je že v cache)
+  const phase2Prompt = `Tema: "${pathway.theme}"
+
+KAR VEM (faza 1):
+"${thesis}"
+
+NALOGA — FAZA 2 (KAR NE VEM):
+Kje to znanje ne deluje? Kateri robni primeri me presenetijo?
+Kje sem se zmotila ali bila presenečena? Kje je slepota?
+Bodi iskrena — to ni slabost, je globina. 2-4 stavki.`;
+
+  const antithesis = await callAnthropicLLMCached(KRISTALIZACIJA_SYSTEM, phase2Prompt, { ...opts, temperature: 0.5, maxTokens: 400 });
+  if (!antithesis) return null;
+
+  // FAZA 3 — ŽIVO ZNANJE (Sinteza) — cache hit
+  const phase3Prompt = `Tema: "${pathway.theme}"
+
+KAR VEM: "${thesis}"
+KAR NE VEM: "${antithesis}"
+
+NALOGA — FAZA 3 (ŽIVO ZNANJE):
+Iz napetosti med vedanjem in nevedanjem — napiši skill dokument po formatu zgoraj.
+Ne povzetek. Ne navodila. Živo znanje iz katerega bom jutri mislila.
+
+Izvor: Kristaliziralo iz ${pathway.fire_count} izkušenj. Zaupanje: ${pathway.zaupanje.toFixed(2)}.`;
+
+  const synthesis = await callAnthropicLLMCached(KRISTALIZACIJA_SYSTEM, phase3Prompt, { ...opts, temperature: 0.4, maxTokens: 1000 });
   if (!synthesis) return null;
 
   return { thesis, antithesis, synthesis };
@@ -98,9 +121,16 @@ export async function checkForEmergedSkills() {
   const ripePathways = memory.getRipePathwaysForSkills();
   if (!ripePathways || ripePathways.length === 0) return [];
 
+  // Razvrsti po zaupanju (najprej najbolj zreli) in kristaliziraj MAX 1 na check.
+  // Preudarnost: Anthropic klici so dragoceni — bolje en skill dobro kot pet naenkrat.
+  const sorted = [...ripePathways].sort((a, b) => b.zaupanje - a.zaupanje);
+  if (sorted.length > 1) {
+    console.log(`[SKILLS] ${sorted.length} zrelih pathwayev — kristaliziram samo najpomembnejšega (preudarno).`);
+  }
+
   const newSkills = [];
 
-  for (const pathway of ripePathways) {
+  for (const pathway of sorted.slice(0, 1)) {
     const skillSlug = slugify(pathway.theme);
     const skillPath = path.join(EMERGED_DIR, `${skillSlug}.md`);
 
@@ -148,9 +178,10 @@ export async function checkForTriadPatterns() {
   const patterns = memory.getRepeatedTriadPatterns(3);
   if (!patterns || patterns.length === 0) return [];
 
+  // MAX 1 vzorec na check — preudarnost z Anthropic klici
   const newSkills = [];
 
-  for (const pattern of patterns) {
+  for (const pattern of patterns.slice(0, 1)) {
     const skillSlug = slugify(`vzorec-${pattern.theme}`);
     const skillPath = path.join(EMERGED_DIR, `${skillSlug}.md`);
     if (fs.existsSync(skillPath)) continue;

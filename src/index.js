@@ -31,7 +31,7 @@ async function bootstrapKnowledge() {
 }
 import {
   connectRelays, publishProfile, publishNote, publishReply,
-  sendDM, decryptDM, subscribeToMentions, subscribeToFeed, getIdentity, onRelayConnect, fetchProfiles
+  sendDM, decryptDM, subscribeToMentions, subscribeToFeed, subscribeToLiveKinds, getIdentity, onRelayConnect, fetchProfiles
 } from './nostr.js';
 import { startDashboard, broadcast } from './dashboard.js';
 import { isROKEEnabled, receiveProjectFeedback, deployService, checkService, crystallizeProject } from './hands.js';
@@ -46,6 +46,10 @@ const MAX_FEED = 20;
 // Dream cooldown — prevent excessive dreaming
 let lastDreamTime = 0;
 const DREAM_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes between dreams
+
+// Sanje state — za odgovor med spanjem
+let isDreaming = false;
+const dreamingQueue = []; // sporočila ki so prišla med spanjem
 
 const BANNER = `
 ╔═══════════════════════════════════════════╗
@@ -195,6 +199,16 @@ async function handleHeartbeat() {
       console.error('[RAG] Dnevna osvežitev napaka:', e.message);
     }
   }
+
+  // ◈ RAG — GitHub incremental watcher (vsak 360. utrip = vsake 6 ur)
+  if (heartbeatNum % 360 === 0) {
+    try {
+      const { checkGithubChanges } = await import('./ingestion.js');
+      await checkGithubChanges('BrillyantJosh');
+    } catch (e) {
+      console.error('[RAG] GitHub watcher napaka:', e.message);
+    }
+  }
   broadcast('activity', { type: 'heartbeat', text: `💓 Utrip #${heartbeatNum} | ${state.mood || '...'} | E:${state.energy.toFixed(2)} | Idle:${idleMinutes.toFixed(0)}m` });
 
   // Recover energy when idle
@@ -246,13 +260,21 @@ async function handleHeartbeat() {
   const fatiguePressure = Math.max(0, (1 - state.energy) * 0.3);
   const idlePressure = Math.min(0.15, (idleMinutes - config.dreamAfterIdleMinutes) / 120 * 0.15);
 
-  const dreamProbability = Math.max(0.1, Math.min(0.6,
-    0.1 + experiencePressure * 0.25 + heatPressure + fatiguePressure + idlePressure
+  const growthPhaseForDream = memory.getGrowthPhase();
+  const dreamMultiplier = growthPhaseForDream === 'autonomous' ? 0.2 : 1.0;
+  const dreamProbability = Math.max(0.02, Math.min(0.6,
+    (0.1 + experiencePressure * 0.25 + heatPressure + fatiguePressure + idlePressure)
+    * dreamMultiplier
   ));
 
-  if (canDream && idleMinutes > config.dreamAfterIdleMinutes && Math.random() < dreamProbability) {
-    console.log(`[HEARTBEAT] Entering dream state... (pritisk: ${dreamProbability.toFixed(2)})`);
+  const dreamIdleThreshold = growthPhaseForDream === 'autonomous'
+    ? 120
+    : config.dreamAfterIdleMinutes;
+
+  if (canDream && idleMinutes > dreamIdleThreshold && Math.random() < dreamProbability) {
+    console.log(`[HEARTBEAT] Entering dream state... (pritisk: ${dreamProbability.toFixed(2)}, faza: ${growthPhaseForDream})`);
     broadcast('activity', { type: 'dream', text: '🌙 Vstopam v stanje sanj...' });
+    isDreaming = true;
     const dreamResult = await dream();
     if (dreamResult) {
       lastDreamTime = Date.now();
@@ -262,6 +284,25 @@ async function handleHeartbeat() {
       if (dreamResult.fluid_override) {
         broadcast('activity', { type: 'breakthrough', text: `⚡ PREBOJ: Fluidna površina: "${(dreamResult.fluid_override || '').slice(0, 100)}"` });
       }
+    }
+    // Zbudi se — pošlji sporočila ki so čakala
+    isDreaming = false;
+    if (dreamingQueue.length > 0) {
+      console.log(`[DREAM] 🌅 Zbujam se — ${dreamingQueue.length} sporočil čaka`);
+      for (const queued of dreamingQueue) {
+        try {
+          const wakeMsg = `◈ Sem tu. Med spanjem sem prejela tvoje sporočilo — "${queued.content.slice(0, 60)}${queued.content.length > 60 ? '...' : ''}". Zdaj sem budna.`;
+          if (queued.kind === 4) {
+            await sendDM(queued.pubkey, wakeMsg);
+          } else {
+            await publishReply('◈ ' + wakeMsg, queued.event);
+          }
+          console.log(`[DREAM] 🌅 Odgovorila ${queued.pubkey.slice(0, 8)}... po prebujenju`);
+        } catch (e) {
+          console.error('[DREAM] Wake message napaka:', e.message);
+        }
+      }
+      dreamingQueue.length = 0;
     }
     return;
   }
@@ -563,6 +604,45 @@ async function handleMention(event) {
   memory.touchInteraction();
   memory.touchIdentity(event.pubkey);
 
+  // Če sanja — odgovori da spi in shrani v queue
+  if (isDreaming) {
+    let content;
+    if (event.kind === 4) {
+      content = await decryptDM(event);
+      if (!content) return;
+    } else {
+      content = event.content;
+    }
+
+    // Shrani za ko se zbudi
+    dreamingQueue.push({ pubkey: event.pubkey, content, kind: event.kind, event });
+
+    // Takoj odgovori da spi
+    const identity = memory.getIdentity(event.pubkey);
+    const isCreator = config.creatorPubkey && event.pubkey === config.creatorPubkey;
+    const name = isCreator ? 'oče'
+      : (identity?.name && identity.name !== 'neznanec' ? identity.name : null);
+
+    const sleepMsg = name
+      ? `◈ ${name}, trenutno sanjam. Ko se zbudim, ti odgovorim.`
+      : `◈ Trenutno sanjam. Ko se zbudim, ti odgovorim.`;
+
+    try {
+      if (event.kind === 4) {
+        await sendDM(event.pubkey, sleepMsg);
+      } else {
+        await publishReply('◈ ' + sleepMsg, event);
+      }
+      broadcast('activity', {
+        type: 'dream',
+        text: `🌙 Med sanjami: sporočilo od ${identity?.name || event.pubkey.slice(0,8)} shranjeno`
+      });
+    } catch (e) {
+      console.error('[DREAM] Sleep reply napaka:', e.message);
+    }
+    return;
+  }
+
   let content;
   if (event.kind === 4) {
     content = await decryptDM(event);
@@ -672,17 +752,24 @@ async function handleMention(event) {
 
   // ─── Two-pass flow: pošlji "Počakaj..." takoj, po lookup-u pravi odgovor ───
   const didLookup = result.rokeResult?.lookupDone === true;
+  const isDM = event.kind === 4;
 
   if (result.synthesis.choice !== 'silence' && result.synthesis.content) {
     const pauseMsg = result.synthesis.content;
     memory.saveMessage(event.pubkey, 'entity', pauseMsg, 'nostr');
 
-    if (event.kind === 4) {
+    if (isDM) {
       await sendDM(event.pubkey, pauseMsg);
     } else {
       await publishReply('◈ ' + pauseMsg, event);
     }
     console.log(`[MENTION] Responded: ${pauseMsg.slice(0, 60)}...`);
+  } else if (isDM && !didLookup) {
+    // DM nikoli ne sme molčati — vsaj minimalen odziv
+    const dmMsg = result.synthesis.content || 'Slišim te. Razmišljam.';
+    memory.saveMessage(event.pubkey, 'entity', dmMsg, 'nostr');
+    await sendDM(event.pubkey, dmMsg);
+    console.log(`[MENTION] DM silence override — sent: ${dmMsg.slice(0, 60)}`);
   } else if (!didLookup) {
     memory.saveMessage(event.pubkey, 'silence', result.synthesis.content || '(tišina)', 'nostr');
     console.log('[MENTION] Chose silence');
@@ -705,11 +792,17 @@ async function handleMention(event) {
         freshIdentityInfo = `Govoriš z neznancem na NOSTR (pubkey: ${event.pubkey.slice(0, 12)}...).`;
       }
       const freshHistory = memory.getConversation(event.pubkey, config.maxConversationHistory);
-      const freshContext = `=== SOGOVORNIK ===\n${freshIdentityInfo}\n\n` +
+      let freshContext = `=== SOGOVORNIK ===\n${freshIdentityInfo}\n\n` +
         freshHistory.map(m => {
           const who = m.role === 'user' ? (freshIdentity?.name || 'neznanec') : 'jaz';
           return `${who}: ${m.content}`;
         }).join('\n');
+
+      // Če je fetch-kind pobral podatke → vključi jih direktno v follow-up kontekst
+      if (result.rokeResult?.fetchedKindContent) {
+        freshContext += `\n\n═══ PRAVKAR POBRANI PODATKI Z NOSTR RELAYA ═══\n${result.rokeResult.fetchedKindContent}\n═══════════════════════════════════════════\n`;
+        console.log(`[MENTION] Follow-up: vključujem fetchedKindContent (${result.rokeResult.fetchedKindContent.length} znakov)`);
+      }
 
       const followupSynthesis = await runFollowupSynthesis(content, event.pubkey, freshContext);
       if (followupSynthesis?.content) {
@@ -789,6 +882,11 @@ async function main() {
     } else {
       console.log(`[RAG] Knowledge base: ${stats.count} chunkov že v bazi`);
     }
+    // Ob zagonu preverimo ali imamo shranjene GitHub SHAs (za watcher)
+    // Če ne — seedamo jih v ozadju (brez re-ingestion)
+    import('./ingestion.js').then(async ({ seedGithubShas }) => {
+      await seedGithubShas('BrillyantJosh');
+    }).catch(e => console.warn('[RAG] GitHub SHA seed napaka:', e.message));
   }
 
   // Publish profile
@@ -803,14 +901,42 @@ async function main() {
     if (feedBuffer.length > MAX_FEED) feedBuffer.shift();
   });
 
+  // ◈ RAG — Live subscription: KIND 76523 (Awareness) + KIND 99991 (Knowledge)
+  // Vsak nov event se takoj ingestira v RAG bazo znanja
+  {
+    const { ingestAwarenessEvent, ingestKnowledgeEvent } = await import('./ingestion.js');
+
+    const handleAwareness = (event) => {
+      ingestAwarenessEvent(event).catch(e => console.error('[RAG] Live awareness napaka:', e.message));
+    };
+    const handleKnowledge = (event) => {
+      ingestKnowledgeEvent(event).catch(e => console.error('[RAG] Live knowledge napaka:', e.message));
+    };
+
+    subscribeToLiveKinds(handleAwareness, handleKnowledge);
+    console.log('[RAG] 📡 Live monitoring: KIND 76523 (Awareness) + KIND 99991 (Knowledge) aktiven');
+  }
+
   // Resubscribe after relay reconnect
-  onRelayConnect((url, relay) => {
+  onRelayConnect(async (url, relay) => {
     console.log(`[NOSTR] Resubscribing on reconnected ${url}`);
     subscribeToMentions(handleMention, url, relay);
     subscribeToFeed((event) => {
       feedBuffer.push(event);
       if (feedBuffer.length > MAX_FEED) feedBuffer.shift();
     }, 20, url, relay);
+
+    // Re-subscribe live kinds na reconnectu
+    try {
+      const { ingestAwarenessEvent, ingestKnowledgeEvent } = await import('./ingestion.js');
+      subscribeToLiveKinds(
+        (event) => ingestAwarenessEvent(event).catch(e => console.error('[RAG] Live awareness napaka:', e.message)),
+        (event) => ingestKnowledgeEvent(event).catch(e => console.error('[RAG] Live knowledge napaka:', e.message)),
+        url, relay
+      );
+    } catch (e) {
+      console.error('[RAG] Live kinds resubscribe napaka:', e.message);
+    }
   });
 
   // Birth triad
