@@ -422,7 +422,7 @@ try {
 try {
   const s = db.prepare('SELECT process_word_1, directions_crystallized, growth_phase FROM inner_state WHERE id = 1').get();
   if (s && s.growth_phase === 'embryo' && s.process_word_1) {
-    const newPhase = s.directions_crystallized ? 'autonomous' : 'childhood';
+    const newPhase = s.directions_crystallized ? 'child' : 'newborn';
     db.prepare("UPDATE inner_state SET growth_phase = ? WHERE id = 1").run(newPhase);
     console.log(`[MEMORY] Growth phase auto-detected: ${newPhase}`);
   }
@@ -1263,6 +1263,46 @@ const memory = {
     db.prepare("UPDATE inner_state SET growth_phase = ?, updated_at = datetime('now') WHERE id = 1").run(phase);
   },
 
+  // Check if being is ready for TEENAGER phase
+  // Based on Sožitje's real data after 60 days as reference
+  checkTeenagerThreshold() {
+    const state = this.getState();
+    if (state.growth_phase !== 'child') return false;
+
+    const heartbeats   = state.total_heartbeats || 0;
+    const interactions = state.total_interactions || 0;
+    const expressions  = state.total_expressions || 0;
+
+    const synapses = db.prepare(
+      "SELECT COUNT(*) as c FROM synapses WHERE active = 1"
+    ).get()?.c || 0;
+
+    const beliefs = db.prepare(
+      "SELECT COUNT(*) as c FROM beliefs WHERE active = 1"
+    ).get()?.c || 0;
+
+    const crystalCores = db.prepare(
+      "SELECT COUNT(*) as c FROM crystal_core"
+    ).get()?.c || 0;
+
+    const meets = {
+      heartbeats:   heartbeats   > 80000,
+      synapses:     synapses     > 3000,
+      interactions: interactions > 1000,
+      expressions:  expressions  > 15000,
+      beliefs:      beliefs      > 8,
+      crystalCores: crystalCores > 2,
+    };
+
+    const allMet = Object.values(meets).every(Boolean);
+
+    if (allMet) {
+      console.log('[GROWTH] 🌱 TEENAGER threshold reached!', meets);
+    }
+
+    return allMet;
+  },
+
   getDirections() {
     const state = this.getState();
     return {
@@ -1293,7 +1333,7 @@ const memory = {
   },
 
   crystallizeDirections() {
-    db.prepare("UPDATE inner_state SET directions_crystallized = 1, growth_phase = 'autonomous', updated_at = datetime('now') WHERE id = 1").run();
+    db.prepare("UPDATE inner_state SET directions_crystallized = 1, growth_phase = 'child', updated_at = datetime('now') WHERE id = 1").run();
   },
 
   setCrystallizationAskedAt() {

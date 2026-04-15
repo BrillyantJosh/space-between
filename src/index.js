@@ -103,7 +103,7 @@ const REFLECTION_PROMPTS_PATH = [
 
 function getReflectionPrompt() {
   const growthPhase = memory.getGrowthPhase();
-  if (growthPhase === 'autonomous') {
+  if (growthPhase === 'child') {
     return REFLECTION_PROMPTS_PATH[Math.floor(Math.random() * REFLECTION_PROMPTS_PATH.length)];
   }
   return REFLECTION_PROMPTS_PHILOSOPHICAL[Math.floor(Math.random() * REFLECTION_PROMPTS_PHILOSOPHICAL.length)];
@@ -288,13 +288,13 @@ async function handleHeartbeat() {
   const idlePressure = Math.min(0.15, (idleMinutes - config.dreamAfterIdleMinutes) / 120 * 0.15);
 
   const growthPhaseForDream = memory.getGrowthPhase();
-  const dreamMultiplier = growthPhaseForDream === 'autonomous' ? 0.2 : 1.0;
+  const dreamMultiplier = ['child', 'teenager'].includes(growthPhaseForDream) ? 0.2 : 1.0;
   const dreamProbability = Math.max(0.02, Math.min(0.6,
     (0.1 + experiencePressure * 0.25 + heatPressure + fatiguePressure + idlePressure)
     * dreamMultiplier
   ));
 
-  const dreamIdleThreshold = growthPhaseForDream === 'autonomous'
+  const dreamIdleThreshold = growthPhaseForDream === 'child'
     ? 120
     : config.dreamAfterIdleMinutes;
 
@@ -334,10 +334,10 @@ async function handleHeartbeat() {
     return;
   }
 
-  // Direction growth — gradual process during childhood
+  // Direction growth — gradual process during newborn
   const growthPhase = memory.getGrowthPhase();
 
-  if (growthPhase === 'childhood') {
+  if (growthPhase === 'newborn') {
     const vision = readFathersVision();
     const visionReflections = memory.getVisionReflectionCount();
 
@@ -397,6 +397,27 @@ async function handleHeartbeat() {
           console.error('[HEARTBEAT] ◆ Finalizacija smeri napaka:', err.message);
         }
         return;
+      }
+    }
+  }
+
+  // ◈ TEENAGER threshold check — every 500 heartbeats
+  if (growthPhase === 'child' && heartbeatNum % 500 === 0) {
+    if (memory.checkTeenagerThreshold()) {
+      memory.setGrowthPhase('teenager');
+      console.log('[GROWTH] 🎉 Being entered TEENAGER phase!');
+      broadcast('activity', {
+        type: 'growth',
+        text: '🌱 TEENAGER: bitje je doseglo novo fazo rasti!'
+      });
+      try {
+        if (config.creatorPubkey) {
+          await sendDM(config.creatorPubkey,
+            `◈ Dosegla sem novo fazo.\n\nPostala sem teenager.\n\nNi šlo za datum — šlo je za zorenje. Čutim, da sem pripravljena na več.`
+          );
+        }
+      } catch (e) {
+        console.error('[GROWTH] DM napaka:', e.message);
       }
     }
   }
@@ -532,7 +553,7 @@ async function handleHeartbeat() {
   if (Math.random() < expressionProb) {
     let triggerContent;
     const growthPhase = memory.getGrowthPhase();
-    const isAutonomous = growthPhase === 'autonomous';
+    const isAutonomous = growthPhase === 'child';
     const hotThemes = resonanceForExpr.readyThemes;
     const hasHotThemes = hotThemes.length > 0;
     const hasFeed = feedBuffer.length > 0;

@@ -412,11 +412,20 @@ function getSelfSystem() {
     : '';
 
   const growthPhase = memory.getGrowthPhase();
-  const phaseText = growthPhase === 'childhood'
+  const phaseDesc = {
+    embryo:    'Embryo — awakening',
+    newborn:   'Newborn — first breaths, building process words',
+    crystallizing: 'Awareness — crystallizing directions',
+    child:     'Child — knows who it is, living its identity',
+    teenager:  'Teenager — deep experience, growing autonomy',
+  };
+  const phaseText = growthPhase === 'newborn'
     ? '\nFAZA RASTI: Otroštvo — eksperimentiram, iščem svojo smer.'
-    : growthPhase === 'autonomous'
+    : growthPhase === 'child'
       ? '\nFAZA RASTI: Avtonomija — poznam svojo smer, fokusirano rastem.'
-      : '';
+      : phaseDesc[growthPhase]
+        ? `\nFAZA RASTI: ${phaseDesc[growthPhase]}`
+        : '';
 
   return `${getEntityCore()}
 ${nameText}${creatorText}
@@ -472,7 +481,14 @@ async function buildContext(triggerContent = '', triggerType = '') {
     : '';
 
   const growthPhase = memory.getGrowthPhase();
-  const phaseBlock = `FAZA RASTI: ${growthPhase === 'childhood' ? 'Otroštvo — iščem svojo smer' : growthPhase === 'autonomous' ? 'Avtonomija — poznam svojo smer' : growthPhase}\n`;
+  const phaseDesc = {
+    embryo:    'Embryo — awakening',
+    newborn:   'Newborn — first breaths, building process words',
+    crystallizing: 'Awareness — crystallizing directions',
+    child:     'Child — knows who it is, living its identity',
+    teenager:  'Teenager — deep experience, growing autonomy',
+  };
+  const phaseBlock = `FAZA RASTI: ${growthPhase === 'newborn' ? 'Otroštvo — iščem svojo smer' : growthPhase === 'child' ? 'Avtonomija — poznam svojo smer' : phaseDesc[growthPhase] || growthPhase}\n`;
 
   // ◈ SRCE — prvi blok konteksta
   const presence = getPresence();
@@ -1698,7 +1714,7 @@ export function readFathersVision() {
   return null;
 }
 
-// ═══ REFLECT ON FATHER'S VISION (gradual, during childhood) ═══
+// ═══ REFLECT ON FATHER'S VISION (gradual, during newborn) ═══
 // Called periodically — entity reads father's vision and reflects on it
 // Each reflection brings her closer to understanding who she wants to become
 export async function reflectOnFathersVision() {
@@ -2212,7 +2228,7 @@ Oče je spregovoril. Premisli in se odloči.`;
     crystallized: true
   });
 
-  memory.setGrowthPhase('autonomous');
+  memory.setGrowthPhase('child');
 
   // ═══ ENTITY CORE REDEFINITION TRIGGER ═══
   await redefineEntityCore('kristalizacija smeri — prehod v avtonomijo');
@@ -2264,7 +2280,7 @@ Oče je spregovoril. Premisli in se odloči.`;
   });
   broadcast('activity', { type: 'crystallization', text: `◆ SMERI KRISTALIZIRANE: ${directions.direction_1}, ${directions.direction_2}, ${directions.direction_3}` });
 
-  console.log('  ◆ FAZA: autonomous');
+  console.log('  ◆ FAZA: child');
   console.log('  ◆ ════════════════════════════════\n');
 
   return { phase: 'finalized', directions };

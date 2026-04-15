@@ -428,7 +428,13 @@ async function collectBeingData() {
 
   const um = {
     growth_phase: growthPhase,
-    growth_phase_desc: { childhood: 'Otroštvo — gradi identiteto skozi sanje in refleksijo', crystallizing: 'Kristalizacija — oblikuje lastne smeri', autonomous: 'Avtonomija — živi svojo identiteto' }[growthPhase] || growthPhase,
+    growth_phase_desc: ({
+      embryo:       'Embryo — awakening',
+      newborn:      'Newborn — building first consciousness',
+      crystallizing:'Awareness — crystallizing identity',
+      child:        'Child — living its own identity',
+      teenager:     'Teenager — growing into autonomy',
+    })[growthPhase] || growthPhase,
     self_prompt: st.self_prompt || null,
     process: {
       word1: st.process_word_1, desc1: st.process_desc_1,
