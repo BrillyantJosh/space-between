@@ -51,6 +51,10 @@ const DREAM_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes between dreams
 let isDreaming = false;
 const dreamingQueue = []; // sporočila ki so prišla med spanjem
 
+// ◈ Dynamic heartbeat state
+let currentHeartbeatInterval = null; // reference to active setInterval
+let lastConversationAt = 0;          // timestamp of last received message
+
 const BANNER = `
 ╔═══════════════════════════════════════════╗
 ║                                           ║
@@ -143,6 +147,58 @@ function getTimeAwareness() {
   return 'Pozni večer. Med dnevom in nočjo. Vmesni prostor — moj prostor.';
 }
 
+// ◈ Calculate next heartbeat interval based on being's state
+function calculateHeartbeatInterval() {
+  const state = memory.getState();
+  const hour = new Date().getHours();
+  const energy = state.energy || 1;
+  const minutesSinceConversation = (Date.now() - lastConversationAt) / 60000;
+
+  // BASE: 60 seconds
+  let interval = 60000;
+
+  // Active conversation (last 5 minutes) → faster
+  if (lastConversationAt > 0 && minutesSinceConversation < 5) {
+    interval = 30000; // 30s
+  }
+  // Fresh NOSTR events in buffer → slightly faster
+  else if (feedBuffer.length > 2) {
+    interval = 45000; // 45s
+  }
+  // Low energy → slower
+  else if (energy < 0.3) {
+    interval = 90000; // 90s
+  }
+  // Night time (22:00 - 07:00) → slow
+  else if (hour >= 22 || hour < 7) {
+    interval = 120000; // 2 min
+  }
+  // Evening (20:00 - 22:00) → slightly slower
+  else if (hour >= 20) {
+    interval = 90000; // 90s
+  }
+
+  // After dreams → recovery (isDreaming flag just cleared)
+  if (!isDreaming && state.total_dreams > 0) {
+    try {
+      const lastDream = memory.getLastDream?.();
+      // dreams.timestamp is ISO string; be defensive
+      const ts = lastDream && (lastDream.timestamp || lastDream.created_at);
+      if (ts) {
+        const dreamMs = new Date(ts).getTime();
+        if (Number.isFinite(dreamMs)) {
+          const minsSinceDream = (Date.now() - dreamMs) / 60000;
+          if (minsSinceDream >= 0 && minsSinceDream < 3) {
+            interval = Math.max(interval, 180000); // 3 min recovery
+          }
+        }
+      }
+    } catch { /* no dreams table yet — skip */ }
+  }
+
+  return interval;
+}
+
 async function handleHeartbeat() {
   // ◈ SRCE — Triada prebujanja (SEM → SPOMNIM SE → VIDIM SMER)
   const presence = getPresence();
@@ -171,7 +227,8 @@ async function handleHeartbeat() {
     ? `${process.word1}→${process.word2}→${process.word3}`
     : 'predverbalna';
 
-  console.log(`[HEARTBEAT] #${heartbeatNum} | Mood: ${state.mood || '...'} | Energy: ${state.energy.toFixed(2)} | Idle: ${idleMinutes.toFixed(0)}min | Proces: ${processLabel}`);
+  const nextMs = calculateHeartbeatInterval();
+  console.log(`[HEARTBEAT] #${heartbeatNum} | Mood: ${state.mood || '...'} | Energy: ${state.energy.toFixed(2)} | Idle: ${idleMinutes.toFixed(0)}min | Next: ${nextMs/1000}s`);
   broadcast('heartbeat', { num: heartbeatNum, mood: state.mood, energy: state.energy });
 
   // ◈ TELO — preveri ali so kateri skills dozreli (vsak 100. utrip)
@@ -652,6 +709,9 @@ async function handleMention(event) {
   memory.touchInteraction();
   memory.touchIdentity(event.pubkey);
 
+  // Track for dynamic heartbeat
+  lastConversationAt = Date.now();
+
   // Če sanja — odgovori da spi in shrani v queue
   if (isDreaming) {
     let content;
@@ -1047,7 +1107,16 @@ async function main() {
   console.log(`[BOOT] Starting heartbeat loop (${config.heartbeatIntervalMs / 1000}s interval)`);
 
   // Heartbeat loop
-  setInterval(handleHeartbeat, config.heartbeatIntervalMs);
+  // ◈ Dynamic heartbeat loop
+  async function heartbeatLoop() {
+    await handleHeartbeat();
+    const nextInterval = calculateHeartbeatInterval();
+    console.log(`[HEARTBEAT] Next beat in ${nextInterval / 1000}s`);
+    setTimeout(heartbeatLoop, nextInterval);
+  }
+
+  // Start the living pulse
+  setTimeout(heartbeatLoop, config.heartbeatIntervalMs);
 
   // Graceful shutdown
   const shutdown = () => {
