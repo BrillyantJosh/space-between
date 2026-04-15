@@ -1273,17 +1273,26 @@ const memory = {
     const interactions = state.total_interactions || 0;
     const expressions  = state.total_expressions || 0;
 
-    const synapses = db.prepare(
-      "SELECT COUNT(*) as c FROM synapses WHERE active = 1"
-    ).get()?.c || 0;
+    // synapses: table has `active` column
+    let synapses = 0;
+    try {
+      synapses = db.prepare("SELECT COUNT(*) as c FROM synapses WHERE active = 1").get()?.c || 0;
+    } catch (e) { /* table may not exist on older beings */ }
 
-    const beliefs = db.prepare(
-      "SELECT COUNT(*) as c FROM beliefs WHERE active = 1"
-    ).get()?.c || 0;
+    // beliefs: JSON column on inner_state, not a table
+    let beliefs = 0;
+    try {
+      const parsed = JSON.parse(state.beliefs || '[]');
+      if (Array.isArray(parsed)) beliefs = parsed.length;
+    } catch (e) { /* malformed JSON → 0 */ }
 
-    const crystalCores = db.prepare(
-      "SELECT COUNT(*) as c FROM crystal_core"
-    ).get()?.c || 0;
+    // crystallized_core: the actual table name (crystal_core doesn't exist)
+    let crystalCores = 0;
+    try {
+      crystalCores = db.prepare(
+        "SELECT COUNT(*) as c FROM crystallized_core WHERE dissolved_at IS NULL"
+      ).get()?.c || 0;
+    } catch (e) { /* table may not exist on older beings */ }
 
     const meets = {
       heartbeats:   heartbeats   > 80000,
