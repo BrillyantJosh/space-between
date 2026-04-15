@@ -1,0 +1,39 @@
+name: Deploy space-between
+
+# Push to main = auto-deploy to both targets via the same pipeline
+# a developer would run locally (deploy.sh). GitHub is the single
+# source of truth: no ad-hoc local pushes.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-space-between
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node (for syntax check in deploy.sh)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Run deploy.sh
+        run: bash deploy.sh --force
