@@ -2544,9 +2544,9 @@ const UI_STRINGS = {
     notShared: '⚠️ Ni deljeno', openProject: '↗ Odpri projekt',
     statusLabel: 'Stanje:', directionLabel: 'Smer:', timeline: '📅 Časovnica', noSteps: 'Ni korakov.',
     // Growth phases
-    embryo: '🥒 Embrij', childhood: '🌱 Otroštvo — iščem svojo smer',
+    embryo: '🥒 Embrij', newborn: '🌱 Novorojenec — iščem svojo smer',
     crystallizing: '◆ Kristalizacija smeri — čakam na odgovor očeta...',
-    autonomous: '◈ Avtonomija — poznam svojo smer',
+    child: '◈ Otrok — poznam svojo smer', teenager: '✦ Najstnik — rastem v globino',
     // Valence labels
     veryPositive: '🟢 Zelo pozitiven vpliv', positive: '🟢 Pozitiven vpliv',
     neutral: '⚪ Nevtralen vpliv', negative: '🔴 Negativen vpliv',
@@ -2621,9 +2621,9 @@ const UI_STRINGS = {
     notShared: '⚠️ Not shared', openProject: '↗ Open project',
     statusLabel: 'Status:', directionLabel: 'Direction:', timeline: '📅 Timeline', noSteps: 'No steps.',
     // Growth phases
-    embryo: '🥒 Embryo', childhood: '🌱 Childhood — searching for my direction',
+    embryo: '🥒 Embryo', newborn: '🌱 Newborn — searching for my direction',
     crystallizing: "◆ Crystallizing direction — awaiting father's response...",
-    autonomous: '◈ Autonomy — I know my direction',
+    child: '◈ Child — I know my direction', teenager: '✦ Teenager — growing into depth',
     // Valence labels
     veryPositive: '🟢 Very positive influence', positive: '🟢 Positive influence',
     neutral: '⚪ Neutral influence', negative: '🔴 Negative influence',
@@ -2738,9 +2738,10 @@ function updateGrowthSection(growthPhase, directions) {
 
   var phaseLabels = {
     'embryo': '🥒 Embrij',
-    'childhood': '🌱 Otroštvo — iščem svojo smer',
+    'newborn': '🌱 Novorojenec — iščem svojo smer',
     'crystallizing': '◆ Kristalizacija smeri — čakam na odgovor očeta...',
-    'autonomous': '◈ Avtonomija — poznam svojo smer'
+    'child': '◈ Otrok — poznam svojo smer',
+    'teenager': '✦ Najstnik — rastem v globino'
   };
 
   if (growthPhase && growthPhase !== 'embryo') {
@@ -3349,9 +3350,10 @@ async function loadIdentity() {
     // ═══ GROWTH PHASE & DIRECTIONS ═══
     if (d.growthPhase && d.growthPhase !== 'embryo') {
       var phaseLabels = {
-        'childhood': t('childhood'),
+        'newborn': t('newborn'),
         'crystallizing': t('crystallizing'),
-        'autonomous': t('autonomous')
+        'child': t('child'),
+        'teenager': t('teenager')
       };
       html += '<div class="id-card" style="border-color:rgba(122,216,216,0.3);">';
       html += '<div class="id-card-title" style="color:#7ad8d8;">' + t('growthPhase') + '</div>';

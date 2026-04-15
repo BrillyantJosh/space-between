@@ -14,6 +14,12 @@ COPY src/ ./src/
 
 RUN mkdir -p data data/creations /tmp/sandbox && chmod 777 /tmp/sandbox
 
+# Stamp the image with its source version so a running being can announce
+# which code it's built from. Set via `docker build --build-arg BEING_VERSION=<sha>-<date>`
+# by deploy.sh; falls back to 'dev' for local builds.
+ARG BEING_VERSION=dev
+ENV BEING_VERSION=${BEING_VERSION}
+
 # Main dashboard port + service ports for entity's creations
 EXPOSE 3333 4001-4020
 

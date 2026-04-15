@@ -965,6 +965,7 @@ async function handleMention(event) {
 
 async function main() {
   console.log(BANNER);
+  console.log(`[BOOT] space-between version: ${process.env.BEING_VERSION || 'dev'}`);
   console.log(`[BOOT] Starting...`);
   console.log(`[BOOT] Dashboard port: ${config.dashboardPort}`);
 
