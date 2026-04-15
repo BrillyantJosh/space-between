@@ -96,6 +96,7 @@ ok "all src/*.js parse clean"
 RSYNC_FLAGS=(-az --delete
   --exclude=node_modules --exclude=.git --exclude=data --exclude=knowledge
   --exclude='.env' --exclude='.DS_Store' --exclude='*.log'
+  --exclude='src/config.js'
 )
 
 # ─── LIVING BEING ─────────────────────────────────────────────
