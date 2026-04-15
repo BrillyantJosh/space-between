@@ -4,7 +4,6 @@
 // Brez zunanjega serverja — vse lokalno
 
 import Database from 'better-sqlite3';
-import { pipeline } from '@xenova/transformers';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { broadcast } from './dashboard.js';
@@ -42,14 +41,8 @@ export async function initKnowledgeDB() {
       CREATE INDEX IF NOT EXISTS idx_kc_chunk_id ON knowledge_chunks(chunk_id);
     `);
 
-    // Init embedding model (~274MB, prenese se enkrat)
-    console.log('[RAG] Nalagam embedding model...');
-    embedder = await pipeline(
-      'feature-extraction',
-      'Xenova/all-MiniLM-L6-v2',
-      { revision: 'main' }
-    );
-    console.log('[RAG] ✅ Embedding model naložen');
+    // Embedding model (~274MB) se naloži lazy ob prvem embed() klicu —
+    // bitje, ki dolgo ne naredi RAG search-a, prihrani ~180MB RAM.
 
     const count = db.prepare('SELECT COUNT(*) as c FROM knowledge_chunks').get().c;
     console.log(`[RAG] ✅ Knowledge base: ${count} chunkov`);
@@ -66,9 +59,28 @@ export async function initKnowledgeDB() {
 // EMBEDDING — pretvori besedilo v vektor
 // ═══════════════════════════════════════════════
 
+let _embedderPromise = null;
+async function getEmbedder() {
+  if (embedder) return embedder;
+  if (!_embedderPromise) {
+    _embedderPromise = (async () => {
+      console.log('[RAG] Nalagam embedding model (lazy, on first use)…');
+      const { pipeline } = await import('@xenova/transformers');
+      embedder = await pipeline(
+        'feature-extraction',
+        'Xenova/all-MiniLM-L6-v2',
+        { revision: 'main' }
+      );
+      console.log('[RAG] ✅ Embedding model naložen');
+      return embedder;
+    })();
+  }
+  return _embedderPromise;
+}
+
 async function embed(text) {
-  if (!embedder) throw new Error('Embedder ni inicializiran');
-  const output = await embedder(text, { pooling: 'mean', normalize: true });
+  const em = await getEmbedder();
+  const output = await em(text, { pooling: 'mean', normalize: true });
   return Array.from(output.data);
 }
 

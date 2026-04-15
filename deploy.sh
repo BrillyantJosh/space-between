@@ -168,6 +168,28 @@ EOF"
       warn "  incubator stamp mismatch: got '$actual'"
     fi
   fi
+
+  # 4. Sync maintenance scripts (update-all, list, apply-limits) into
+  #    /opt/beings/incubator/ so the ops toolbox on 178 stays in lock-step
+  #    with the repo.
+  say "  syncing ops scripts"
+  run rsync -az \
+    scripts/update-all.sh scripts/list.sh scripts/apply-limits.sh scripts/birth.sh \
+    "$INCUB_HOST:/opt/beings/incubator/"
+  run ssh "$INCUB_HOST" "chmod +x /opt/beings/incubator/{update-all,list,apply-limits,birth}.sh"
+
+  # 5. Apply resource limits idempotently to every existing being's compose
+  run ssh "$INCUB_HOST" "bash /opt/beings/incubator/apply-limits.sh"
+
+  # 6. Roll every living being forward to the new image
+  if ! $DRY_RUN; then
+    say "  rolling living beings forward"
+    if ssh "$INCUB_HOST" "bash /opt/beings/incubator/update-all.sh"; then
+      ok "  rollout complete"
+    else
+      warn "  some beings failed to restart — run list.sh on $INCUB_HOST"
+    fi
+  fi
 fi
 
 # ─── Summary ──────────────────────────────────────────────────
