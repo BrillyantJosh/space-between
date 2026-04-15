@@ -30,7 +30,7 @@ set -euo pipefail
 # ─── Configuration ────────────────────────────────────────────
 LIVING_HOST="root@being2.enlightenedai.org"
 LIVING_DIR="/opt/apps/space-between"
-LIVING_HEALTH="https://being2.enlightenedai.org/health"
+LIVING_HEALTH="https://being2.enlightenedai.org/"
 LIVING_CONTAINER="space-between"
 
 INCUB_HOST="root@178.104.205.253"
