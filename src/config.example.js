@@ -8,6 +8,7 @@ export default {
   geminiModel: "gemini-2.0-flash",
   anthropicApiKey: "YOUR_ANTHROPIC_API_KEY_HERE",
   anthropicModel: "claude-sonnet-4-20250514",
+  anthropicDailyBudget: 20, // max Anthropic klicev/dan (3 klici = 1 skill kristalizacija)
   heartbeatIntervalMs: 60_000,
   dreamAfterIdleMinutes: 30,
   dreamDurationCycles: 3,

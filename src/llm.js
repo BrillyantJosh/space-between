@@ -1,30 +1,133 @@
 import config from './config.js';
+import { langInstruction } from './lang.js';
+import memory from './memory.js';
 
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`;
 
-export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, maxTokens = 1024 } = {}) {
+// Append language directive to every system prompt. Safety net: even if a
+// prompt body is written in one language, the model is explicitly told to
+// respond in BEING_LANGUAGE. Cheap, effective, universal.
+//
+// kind='inner' (default) — force BEING_LANGUAGE. Use for thoughts, dreams,
+//   reflections, synthesis, self-prompts, synapses, observations.
+// kind='conversation' — native language for inner thought, but mirror the
+//   human's language in the outward reply. Use on /api/message and any
+//   direct reply-to-human code path.
+function withLang(systemPrompt, kind = 'inner') {
+  if (!systemPrompt) return langInstruction(kind).trim();
+  return systemPrompt + langInstruction(kind);
+}
+
+// Gemini cene ($/1M tokenov) — Flash modeli
+const _GEMINI_PRICE = {
+  'gemini-2.0-flash':  { in: 0.10, out: 0.40 },
+  'gemini-1.5-flash':  { in: 0.075, out: 0.30 },
+  default:             { in: 0.10, out: 0.40 },
+};
+
+function _estimateGeminiCost(model, inputTokens, outputTokens) {
+  const p = _GEMINI_PRICE[model] || _GEMINI_PRICE.default;
+  return (inputTokens * p.in + outputTokens * p.out) / 1_000_000;
+}
+
+// ◈ Gemini Context Cache
+// Static content (entity core, directions) cached for 1 hour
+// Saves ~1.500 tokens per call on cached content
+const _geminiCacheStore = {
+  cacheId: null,
+  cachedAt: null,
+  ttlMs: 55 * 60 * 1000, // 55 minutes (Gemini cache TTL is 60min)
+};
+
+function isCacheValid() {
+  return _geminiCacheStore.cacheId &&
+    _geminiCacheStore.cachedAt &&
+    (Date.now() - _geminiCacheStore.cachedAt) < _geminiCacheStore.ttlMs;
+}
+
+// Create a Gemini cached content for static system parts
+// Called once, reused for ~1 hour
+export async function createGeminiCache(staticContent) {
+  if (!config.geminiApiKey) return null;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/cachedContents?key=${config.geminiApiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: `models/${config.geminiModel}`,
+          contents: [{
+            parts: [{ text: staticContent }],
+            role: 'user'
+          }],
+          ttl: '3600s', // 1 hour
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const err = await response.text();
+      if (err.includes('too small')) {
+        console.log('[LLM] Cache skipped — content too small for Gemini cache (needs 4096+ tokens)');
+      } else {
+        console.warn('[LLM] Cache creation failed:', err.slice(0, 100));
+      }
+      return null;
+    }
+
+    const data = await response.json();
+    _geminiCacheStore.cacheId = data.name;
+    _geminiCacheStore.cachedAt = Date.now();
+    console.log('[LLM] ✅ Gemini cache created:', data.name);
+    return data.name;
+  } catch (e) {
+    console.warn('[LLM] Cache error:', e.message);
+    return null;
+  }
+}
+
+export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, maxTokens = 1024, langKind = 'inner' } = {}) {
+  systemPrompt = withLang(systemPrompt, langKind);
+  const start = Date.now();
   try {
     const response = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ parts: [{ text: userPrompt }] }],
-        generationConfig: {
-          temperature,
-          maxOutputTokens: maxTokens
-        }
-      })
+      // Build request — use cache if available
+      body: JSON.stringify(isCacheValid()
+        ? {
+            cachedContent: _geminiCacheStore.cacheId,
+            contents: [{ parts: [{ text: userPrompt }] }],
+            generationConfig: { temperature, maxOutputTokens: maxTokens }
+          }
+        : {
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ parts: [{ text: userPrompt }] }],
+            generationConfig: { temperature, maxOutputTokens: maxTokens }
+          }
+      )
     });
 
     if (!response.ok) {
       const err = await response.text();
       console.error('[LLM] API error:', response.status, err);
+      memory.saveLLMCall({ provider: 'gemini', model: config.geminiModel, label: '', input_tokens: 0, output_tokens: 0, cost_usd: 0, success: 0, duration_ms: Date.now() - start });
       return null;
     }
 
     const data = await response.json();
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    const meta = data?.usageMetadata || {};
+    const inputTok = meta.promptTokenCount || 0;
+    const outputTok = meta.candidatesTokenCount || 0;
+    const cost = _estimateGeminiCost(config.geminiModel, inputTok, outputTok);
+    const duration_ms = Date.now() - start;
+
+    memory.saveLLMCall({ provider: 'gemini', model: config.geminiModel, label: '', input_tokens: inputTok, output_tokens: outputTok, cost_usd: cost, success: text ? 1 : 0, duration_ms });
+
     if (!text) {
       console.error('[LLM] No text in response:', JSON.stringify(data).slice(0, 200));
       return null;
@@ -32,6 +135,7 @@ export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, max
     return text.trim();
   } catch (err) {
     console.error('[LLM] Request failed:', err.message);
+    memory.saveLLMCall({ provider: 'gemini', model: config.geminiModel, label: '', input_tokens: 0, output_tokens: 0, cost_usd: 0, success: 0, duration_ms: Date.now() - start });
     return null;
   }
 }
@@ -110,16 +214,19 @@ export async function callAnthropicLLMCached(cachedSystem, dynamicPrompt, {
   model = null,
   label = 'ANTHROPIC',
   labelDetail = '',
-  json = false
+  json = false,
+  langKind = 'inner'
 } = {}) {
   if (!config.anthropicApiKey) {
     console.error('[LLM:ANTHROPIC] No API key configured');
     return null;
   }
+  cachedSystem = withLang(cachedSystem, langKind);
   // Pred prvim klicem ne vemo ali bo cache hit — predpostavljamo 1.0, nato popravimo
   if (!_checkBudget(1.0)) return null;
 
   const usedModel = model || config.anthropicModel || 'claude-sonnet-4-5-20250514';
+  const start = Date.now();
 
   try {
     const response = await fetch(ANTHROPIC_URL, {
@@ -148,6 +255,7 @@ export async function callAnthropicLLMCached(cachedSystem, dynamicPrompt, {
     if (!response.ok) {
       const err = await response.text();
       console.error('[LLM:ANTHROPIC] API error:', response.status, err);
+      memory.saveLLMCall({ provider: 'anthropic', model: usedModel, label, input_tokens: 0, output_tokens: 0, cost_usd: 0, success: 0, duration_ms: Date.now() - start });
       return null;
     }
 
@@ -155,6 +263,7 @@ export async function callAnthropicLLMCached(cachedSystem, dynamicPrompt, {
     const text = data?.content?.[0]?.text;
     if (!text) {
       console.error('[LLM:ANTHROPIC] No text in response:', JSON.stringify(data).slice(0, 200));
+      memory.saveLLMCall({ provider: 'anthropic', model: usedModel, label, input_tokens: 0, output_tokens: 0, cost_usd: 0, success: 0, duration_ms: Date.now() - start });
       return null;
     }
 
@@ -175,9 +284,12 @@ export async function callAnthropicLLMCached(cachedSystem, dynamicPrompt, {
     }
 
     const cost = _estimateCost(usedModel, inputTok, cacheCreate, cacheRead, outputTok);
+    const duration_ms = Date.now() - start;
     const icon = label === 'KRISTALIZACIJA' ? '✍' : '🔧';
     const detail = labelDetail ? ` "${labelDetail.slice(0, 35)}"` : '';
     console.log(`  ${icon} [${label}]${detail} | cache:${cacheStatus} | in:${inputTok} cr:${cacheCreate} rd:${cacheRead} out:${outputTok} | ~$${cost.toFixed(5)}`);
+
+    memory.saveLLMCall({ provider: 'anthropic', model: usedModel, label, input_tokens: inputTok, output_tokens: outputTok, cache_creation_tokens: cacheCreate, cache_read_tokens: cacheRead, cost_usd: cost, success: 1, duration_ms });
 
     if (json) {
       try {
@@ -192,16 +304,20 @@ export async function callAnthropicLLMCached(cachedSystem, dynamicPrompt, {
     return text.trim();
   } catch (err) {
     console.error('[LLM:ANTHROPIC] Request failed:', err.message);
+    memory.saveLLMCall({ provider: 'anthropic', model: usedModel, label, input_tokens: 0, output_tokens: 0, cost_usd: 0, success: 0, duration_ms: Date.now() - start });
     return null;
   }
 }
 
-export async function callAnthropicLLM(systemPrompt, userPrompt, { temperature = 0.3, maxTokens = 4096 } = {}) {
+export async function callAnthropicLLM(systemPrompt, userPrompt, { temperature = 0.3, maxTokens = 4096, langKind = 'inner' } = {}) {
   if (!config.anthropicApiKey) {
     console.error('[LLM:ANTHROPIC] No API key configured');
     return null;
   }
+  systemPrompt = withLang(systemPrompt, langKind);
   if (!_checkBudget()) return null;
+  const usedModel = config.anthropicModel || 'claude-sonnet-4-20250514';
+  const start = Date.now();
   try {
     const response = await fetch(ANTHROPIC_URL, {
       method: 'POST',
@@ -211,7 +327,7 @@ export async function callAnthropicLLM(systemPrompt, userPrompt, { temperature =
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: config.anthropicModel || 'claude-sonnet-4-20250514',
+        model: usedModel,
         max_tokens: maxTokens,
         temperature,
         system: systemPrompt,
@@ -222,11 +338,21 @@ export async function callAnthropicLLM(systemPrompt, userPrompt, { temperature =
     if (!response.ok) {
       const err = await response.text();
       console.error('[LLM:ANTHROPIC] API error:', response.status, err);
+      memory.saveLLMCall({ provider: 'anthropic', model: usedModel, label: '', input_tokens: 0, output_tokens: 0, cost_usd: 0, success: 0, duration_ms: Date.now() - start });
       return null;
     }
 
     const data = await response.json();
     const text = data?.content?.[0]?.text;
+
+    const usage = data?.usage || {};
+    const inputTok = usage.input_tokens || 0;
+    const outputTok = usage.output_tokens || 0;
+    const cost = _estimateCost(usedModel, inputTok, 0, 0, outputTok);
+    const duration_ms = Date.now() - start;
+
+    memory.saveLLMCall({ provider: 'anthropic', model: usedModel, label: '', input_tokens: inputTok, output_tokens: outputTok, cost_usd: cost, success: text ? 1 : 0, duration_ms });
+
     if (!text) {
       console.error('[LLM:ANTHROPIC] No text in response:', JSON.stringify(data).slice(0, 200));
       return null;
@@ -234,6 +360,7 @@ export async function callAnthropicLLM(systemPrompt, userPrompt, { temperature =
     return text.trim();
   } catch (err) {
     console.error('[LLM:ANTHROPIC] Request failed:', err.message);
+    memory.saveLLMCall({ provider: 'anthropic', model: usedModel, label: '', input_tokens: 0, output_tokens: 0, cost_usd: 0, success: 0, duration_ms: Date.now() - start });
     return null;
   }
 }

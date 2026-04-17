@@ -65,6 +65,8 @@ export default {
 
     memory.addObservation(`Fetchala sem KIND-${kindNum}: ${events.length} eventov`, 'roke_fetch_kind');
     console.log(`[ROKE] fetch-kind KIND-${kindNum}: ${events.length} eventov`);
-    return { outcome: 'success', detail: `KIND-${kindNum}: ${events.length} eventov` };
+    // lookupDone: true → sproži two-pass follow-up v handleMention
+    // (enako kot relay-refresh: pošlje "Počakaj..." takoj, nato pravi odgovor z novimi podatki)
+    return { outcome: 'success', detail: `KIND-${kindNum}: ${events.length} eventov`, lookupDone: true };
   }
 };

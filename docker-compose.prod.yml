@@ -8,6 +8,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./knowledge:/app/knowledge
+    env_file:
+      - .env
     environment:
       - VIRTUAL_HOST=being2.enlightenedai.org
       - VIRTUAL_PORT=3333

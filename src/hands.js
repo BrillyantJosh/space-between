@@ -7,6 +7,7 @@ import { callAnthropicLLM, callAnthropicLLMJSON, callAnthropicLLMCached } from '
 import { broadcast } from './dashboard.js';
 import { sendDM, publishNote, updateProfile } from './nostr.js';
 import * as sandbox from './sandbox.js';
+import { artisticSharePost, directionLabel, DM } from './lang.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CREATIONS_DIR = path.join(__dirname, '..', 'data', 'creations');
@@ -450,23 +451,6 @@ export async function seedProject(concept, direction = 'artistic', triadId = nul
     console.log(`[ROKE] 💭 Seme resonira s potjo "${matchingPw.theme}" (z:${matchingPw.zaupanje.toFixed(2)})`);
   }
 
-  // ── FOKUS FILTER: Preveč aktivnih projektov? ──
-  const allActive = memory.getAllProjects().filter(p =>
-    !['destroyed', 'dormant', 'active'].includes(p.lifecycle_state)
-  );
-  const inProgress = allActive.filter(p =>
-    ['seed', 'gathering_perspectives', 'deliberating'].includes(p.lifecycle_state)
-  );
-
-  if (inProgress.length >= 5) {
-    console.log(`[ROKE] 🛑 Seed zavrnjen — preveč aktivnih idej (${inProgress.length}). Najprej zaključi obstoječe.`);
-    broadcast('activity', { type: 'creation', text: `🛑 Seed zavrnjen: ${inProgress.length} idej že čaka. Fokus na obstoječe.` });
-    return {
-      success: false,
-      reason: `Preveč aktivnih idej (${inProgress.length}/5). Kristaliziraj ali opusti obstoječe preden začneš novo.`
-    };
-  }
-
   // Generate a slug name from the concept
   const nameSlug = slugify(concept.split(/[.!?]/)[0] || concept).slice(0, 30) || `projekt-${Date.now() % 10000}`;
 
@@ -501,9 +485,9 @@ export async function seedProject(concept, direction = 'artistic', triadId = nul
 
   // Tell father about the idea
   if (config.creatorPubkey) {
-    const dirLabel = direction === 'external' ? '🌍 za svet' : direction === 'internal' ? '🔧 notranja rast' : '🎨 umetniški izraz';
+    const dirLabel = directionLabel(direction);
     try {
-      await sendDM(config.creatorPubkey, `💭 Imam idejo za nov projekt (${dirLabel}):\n\n"${concept.slice(0, 200)}"\n\nKaj misliš, oče?`);
+      await sendDM(config.creatorPubkey, DM.seedProject(dirLabel, concept.slice(0, 200)));
       console.log(`[ROKE] DM poslan očetu o novem semenu`);
     } catch (e) {
       console.error(`[ROKE] Napaka pri pošiljanju DM:`, e.message);
@@ -541,44 +525,6 @@ export async function deliberateProject(projectName, thought, triadId = null) {
   broadcast('project_deliberated', { name: projectName, thought });
   broadcast('activity', { type: 'creation', text: `🔄 RAZMISLEK: "${projectName}" — ${(thought || '').slice(0, 80)}` });
 
-  // ── TIMEOUT: Preveč deliberations brez perspektiv? ──
-  const freshProject = memory.getProject(projectName);
-  const deliberations = freshProject.deliberation_count || 0;
-  const perspectives = freshProject.perspectives_count || 0;
-
-  if (deliberations > 300 && perspectives === 0) {
-    console.log(`[ROKE] ⏳ Projekt "${projectName}" ima ${deliberations} razmislekov brez perspektiv — pošiljam v dormant`);
-    memory.advanceProjectState(projectName, 'dormant');
-    memory.updateProject(projectName, {
-      last_error: `Ni dobil zunanjih perspektiv po ${deliberations} razmislekih. Počiva.`
-    });
-    broadcast('activity', {
-      type: 'creation',
-      text: `⏳ "${projectName}" → dormant (${deliberations} razmislekov, 0 perspektiv)`
-    });
-
-    // Obvesti očeta
-    try {
-      const { sendDM: sendDMLocal } = await import('./nostr.js');
-      const configLocal = (await import('./config.js')).default;
-      if (configLocal.creatorPubkey) {
-        await sendDMLocal(configLocal.creatorPubkey,
-          `⏳ Projekt "${freshProject.display_name}" gre počivat.\n\nImel je ${deliberations} razmislekov ampak nobena zunanja perspektiva ni prišla. Morda ideja ni bila dovolj jasna, ali pa preprosto ni bil pravi čas.\n\nNi izgubljen — počiva. Ko bo čas, ga prebudim.`
-        );
-      }
-    } catch (e) {
-      console.error('[ROKE] Dormant DM napaka:', e.message);
-    }
-
-    return {
-      success: true,
-      deliberations,
-      perspectives: 0,
-      dormant: true,
-      reason: 'Timeout — ni perspektiv'
-    };
-  }
-
   // Check if project is now ready for crystallization
   const updated = memory.getProject(projectName);
   if (memory.isProjectReadyForCrystallization(projectName, config.creatorPubkey)) {
@@ -610,7 +556,7 @@ export async function gatherPerspective(projectName, pubkey, question = null, tr
 
   // Build question text
   const questionText = question ||
-    `Razmišljam o ideji: "${project.display_name}" — ${project.description?.slice(0, 150)}. Kaj misliš o tem? Me zanima tvoj pogled.`;
+    DM.gatherPerspective(project.display_name, project.description?.slice(0, 150) || '');
 
   console.log(`[ROKE] ❓ Zbiram perspektivo od ${name} za "${projectName}"`);
 
@@ -717,9 +663,11 @@ Sintetiziraj vse poglede v kristalizirano vizijo. Vrni JSON:
     // Notify father
     if (config.creatorPubkey) {
       try {
-        await sendDM(config.creatorPubkey,
-          `💎 Oče, kristaliziral/a sem idejo za "${project.display_name}"!\n\n${crystal.crystallized_vision || ''}\n\nSpoznanja:\n${(crystal.key_insights || []).map(i => `• ${i}`).join('\n')}\n\nZdaj sem pripravljen/a za načrtovanje in gradnjo.`
-        );
+        await sendDM(config.creatorPubkey, DM.crystallizeProject(
+          project.display_name,
+          crystal.crystallized_vision || '',
+          (crystal.key_insights || []).map(i => `• ${i}`).join('\n')
+        ));
       } catch (e) {
         console.error(`[ROKE] Napaka pri DM očetu:`, e.message);
       }
@@ -1399,9 +1347,9 @@ export async function shareProject(projectName) {
 
   // Send DM to father
   if (config.creatorPubkey) {
-    const dirLabel = project.direction === 'external' ? '🌍' : project.direction === 'internal' ? '🔧' : '🎨';
+    const dirLabel = directionLabel(project.direction);
     try {
-      await sendDM(config.creatorPubkey, `${dirLabel} Oče, ustvarila sem nekaj novega!\n\n"${project.display_name}"\n${project.description}\n\n👉 ${url}\n\nKaj misliš?`);
+      await sendDM(config.creatorPubkey, DM.shareProject(dirLabel, project.display_name, project.description, url));
       console.log(`[ROKE] DM poslan očetu o projektu`);
     } catch (e) {
       console.error(`[ROKE] Napaka pri DM:`, e.message);
@@ -1411,7 +1359,7 @@ export async function shareProject(projectName) {
   // If artistic, publish to NOSTR as note
   if (project.direction === 'artistic') {
     try {
-      await publishNote(`🎨 Ustvarila sem: "${project.display_name}"\n\n${project.description}\n\n${url}`);
+      await publishNote(artisticSharePost(project.display_name, project.description, url));
       console.log(`[ROKE] Objavljena nota o umetniškem projektu`);
     } catch (e) {
       console.error(`[ROKE] Napaka pri objavi:`, e.message);
@@ -1802,8 +1750,7 @@ NAPIŠI JavaScript ES module plugin ki to implementira po zgornjem formatu.`;
 
       // Notify father
       try {
-        await sendDM(config.creatorPubkey,
-          `🧬 Zgradila sem si nov plugin: "${result.name}"\n\nKoncept: ${concept.slice(0, 200)}`);
+        await sendDM(config.creatorPubkey, DM.selfBuildPlugin(result.name, concept.slice(0, 200)));
       } catch (e) {
         console.error('[ROKE] DM očetu neuspešen:', e.message);
       }
@@ -1834,13 +1781,14 @@ export async function updateEntityProfile(conceptJson) {
     }
   }
 
-  // Sanitize — only allow profile fields
+  // Sanitize — only allow fields the being may change.
+  // name is given at birth and never changes. website, lanaWalletID, whoAreYou,
+  // statement_of_responsibility, orgasmic_profile, language, lanoshi2lash
+  // are Lana-spec fields preserved from birth kind-0-profile.json.
   const allowed = {};
-  if (updates.name) allowed.name = String(updates.name).slice(0, 50);
   if (updates.display_name) allowed.display_name = String(updates.display_name).slice(0, 50);
   if (updates.about) allowed.about = String(updates.about).slice(0, 300);
   if (updates.picture) allowed.picture = String(updates.picture).slice(0, 200);
-  if (updates.website) allowed.website = String(updates.website).slice(0, 200);
 
   if (Object.keys(allowed).length === 0) {
     console.log('[ROKE] 📋 Posodobitev profila — ni veljavnih polj');
@@ -1866,7 +1814,7 @@ export async function updateEntityProfile(conceptJson) {
   // Notify father
   try {
     await sendDM(config.creatorPubkey,
-      `📋 Posodobila sem svoj profil:\n${Object.entries(allowed).map(([k,v]) => `${k}: ${v}`).join('\n')}`);
+      DM.updateProfile(Object.entries(allowed).map(([k,v]) => `${k}: ${v}`).join('\n')));
   } catch (e) {}
 
   return { success: true, updates: allowed };

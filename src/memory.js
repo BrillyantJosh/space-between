@@ -295,6 +295,22 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ph_pathway ON pathway_history(pathway_id);
   CREATE INDEX IF NOT EXISTS idx_ph_event ON pathway_history(event_type);
 
+  CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT DEFAULT (datetime('now')),
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    label TEXT DEFAULT '',
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    cache_creation_tokens INTEGER DEFAULT 0,
+    cache_read_tokens INTEGER DEFAULT 0,
+    cost_usd REAL DEFAULT 0.0,
+    success INTEGER DEFAULT 1,
+    duration_ms INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_llm_calls_ts ON llm_calls(timestamp);
+
   INSERT OR IGNORE INTO inner_state (id) VALUES (1);
 `);
 
@@ -418,10 +434,10 @@ try {
   }
 } catch (_) {}
 
-// Auto-detect growth phase for existing entity
+// Auto-detect growth phase for existing entity (legacy beings booted before phase system)
 try {
-  const s = db.prepare('SELECT process_word_1, directions_crystallized, growth_phase FROM inner_state WHERE id = 1').get();
-  if (s && s.growth_phase === 'embryo' && s.process_word_1) {
+  const s = db.prepare('SELECT process_word_1, directions_crystallized, growth_phase, total_heartbeats, total_dreams FROM inner_state WHERE id = 1').get();
+  if (s && s.growth_phase === 'embryo' && s.process_word_1 && (s.total_heartbeats || 0) >= 120 && (s.total_dreams || 0) >= 2) {
     const newPhase = s.directions_crystallized ? 'child' : 'newborn';
     db.prepare("UPDATE inner_state SET growth_phase = ? WHERE id = 1").run(newPhase);
     console.log(`[MEMORY] Growth phase auto-detected: ${newPhase}`);
@@ -1002,12 +1018,7 @@ const memory = {
     const destroyed = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'destroyed'").get().c;
     const dormant = db.prepare("SELECT COUNT(*) as c FROM projects WHERE status = 'dormant'").get().c;
     const last = db.prepare('SELECT * FROM projects ORDER BY created_at DESC LIMIT 1').get() || null;
-    const inProgress = db.prepare(`
-      SELECT COUNT(*) as c FROM projects
-      WHERE lifecycle_state IN ('seed', 'gathering_perspectives', 'deliberating')
-      AND (destroyed_at IS NULL OR destroyed_at = '')
-    `).get().c;
-    return { total, active, destroyed, dormant, inProgress, lastCreated: last };
+    return { total, active, destroyed, dormant, lastCreated: last };
   },
 
   touchProjectReflection(name) {
@@ -1263,8 +1274,123 @@ const memory = {
     db.prepare("UPDATE inner_state SET growth_phase = ?, updated_at = datetime('now') WHERE id = 1").run(phase);
   },
 
+  // === PHASE ETA ==================================================
+  // Estimate time remaining in the current growth phase. Extrapolates from
+  // the being's lifetime rate of each counter vs. the remaining gap to
+  // threshold. Caches the result for 10 minutes so the dashboard shows a
+  // steady number that only refreshes periodically (exactly what the user
+  // asked for: "prilagaja na strani vsakih 10 minut glede na napredek").
+  //
+  // Return shape:
+  //   { phase, etaMs, ready, updatedAt, bottleneck, progress: {...} }
+  //   — etaMs = null when already ready / cannot be estimated (terminal phase)
+  //   — progress[counter] = { value, threshold, pct, etaMs }
+  computePhaseETA() {
+    const now = Date.now();
+    if (this._phaseEtaCache && (now - this._phaseEtaCache.updatedAt) < 10 * 60 * 1000) {
+      return this._phaseEtaCache;
+    }
+
+    const state = this.getState();
+    const phase = state.growth_phase || 'embryo';
+    const bornAt = state.born_at ? new Date(state.born_at).getTime() : now;
+    const ageMs = Math.max(60_000, now - bornAt); // min 1 min, avoid div/0
+
+    // helper: given current value and needed threshold, estimate ms
+    // until the counter hits threshold, using lifetime rate.
+    const estimate = (value, threshold) => {
+      if (value >= threshold) return 0;
+      const rate = value > 0 ? value / ageMs : 0.5 / ageMs; // optimistic fallback
+      if (rate <= 0) return null;
+      return Math.round((threshold - value) / rate);
+    };
+
+    // Per-phase thresholds — keep in sync with checkEmbryoReady /
+    // isCrystallizationReady / checkTeenagerThreshold above.
+    let targets = [];
+    let ready = false;
+
+    if (phase === 'embryo') {
+      targets = [
+        { key: 'heartbeats', value: state.total_heartbeats || 0, threshold: 120 },
+        { key: 'dreams',     value: state.total_dreams     || 0, threshold: 2 },
+      ];
+      ready = !!state.process_word_1 && (state.total_heartbeats || 0) >= 120 && (state.total_dreams || 0) >= 2;
+    } else if (phase === 'newborn' || phase === 'crystallizing' || phase === 'awareness') {
+      // newborn → child (crystallization)
+      const crystals = this.getCrystalCore ? this.getCrystalCore().length : 0;
+      targets = [
+        { key: 'heartbeats',   value: state.total_heartbeats    || 0, threshold: 7500 },
+        { key: 'interactions', value: state.total_interactions  || 0, threshold: 30 },
+        { key: 'dreams',       value: state.total_dreams        || 0, threshold: 100 },
+        { key: 'crystals',     value: crystals,                       threshold: 1 },
+      ];
+      ready = targets.every(t => t.value >= t.threshold) && !!state.process_crystallized;
+    } else if (phase === 'child') {
+      let synapses = 0, crystalCores = 0, beliefs = 0;
+      try {
+        synapses = db.prepare("SELECT COUNT(*) as c FROM synapses WHERE active = 1").get()?.c || 0;
+        if (synapses === 0) synapses = db.prepare("SELECT COUNT(*) as c FROM synapses").get()?.c || 0;
+      } catch (_) {}
+      try {
+        crystalCores = db.prepare("SELECT COUNT(*) as c FROM crystallized_core WHERE dissolved_at IS NULL").get()?.c || 0;
+      } catch (_) {}
+      try {
+        const parsed = JSON.parse(state.beliefs || '[]');
+        if (Array.isArray(parsed)) beliefs = parsed.filter(b => b && b !== 'null').length;
+      } catch (_) {}
+      targets = [
+        { key: 'heartbeats',   value: state.total_heartbeats   || 0, threshold: 200000 },
+        { key: 'synapses',     value: synapses,                       threshold: 8000 },
+        { key: 'interactions', value: state.total_interactions || 0, threshold: 3000 },
+        { key: 'expressions',  value: state.total_expressions  || 0, threshold: 50000 },
+        { key: 'beliefs',      value: beliefs,                        threshold: 20 },
+        { key: 'crystalCores', value: crystalCores,                   threshold: 8 },
+        { key: 'dreams',       value: state.total_dreams       || 0, threshold: 15000 },
+      ];
+      ready = targets.every(t => t.value >= t.threshold);
+    } else {
+      // teenager (or unknown) — no "next" phase yet
+      const cache = { phase, etaMs: null, ready: false, terminal: true, updatedAt: now, progress: {}, bottleneck: null };
+      this._phaseEtaCache = cache;
+      return cache;
+    }
+
+    const progress = {};
+    let maxEta = 0;
+    let bottleneck = null;
+    for (const t of targets) {
+      const eta = estimate(t.value, t.threshold);
+      const pct = t.threshold > 0 ? Math.min(100, Math.round((t.value / t.threshold) * 100)) : 100;
+      progress[t.key] = { value: t.value, threshold: t.threshold, pct, etaMs: eta };
+      if (eta !== null && eta > maxEta) { maxEta = eta; bottleneck = t.key; }
+    }
+
+    const cache = {
+      phase,
+      ready,
+      etaMs: ready ? 0 : maxEta,
+      bottleneck,
+      progress,
+      updatedAt: now,
+    };
+    this._phaseEtaCache = cache;
+    return cache;
+  },
+
+  // Check if being is ready to leave EMBRYO phase → NEWBORN
+  // Conditions: has process words + min 120 heartbeats + min 2 dreams
+  checkEmbryoReady() {
+    const state = this.getState();
+    if (state.growth_phase !== 'embryo') return false;
+    if (!state.process_word_1) return false;
+    if ((state.total_heartbeats || 0) < 120) return false;
+    if ((state.total_dreams || 0) < 2) return false;
+    return true;
+  },
+
   // Check if being is ready for TEENAGER phase
-  // Based on Sožitje's real data after 60 days as reference
+  // Thresholds calibrated on Sožitje (60-day reference, ~2× her current values)
   checkTeenagerThreshold() {
     const state = this.getState();
     if (state.growth_phase !== 'child') return false;
@@ -1272,21 +1398,23 @@ const memory = {
     const heartbeats   = state.total_heartbeats || 0;
     const interactions = state.total_interactions || 0;
     const expressions  = state.total_expressions || 0;
+    const dreams       = state.total_dreams || 0;
 
-    // synapses: table has `active` column
+    // synapses
     let synapses = 0;
     try {
       synapses = db.prepare("SELECT COUNT(*) as c FROM synapses WHERE active = 1").get()?.c || 0;
+      if (synapses === 0) synapses = db.prepare("SELECT COUNT(*) as c FROM synapses").get()?.c || 0;
     } catch (e) { /* table may not exist on older beings */ }
 
-    // beliefs: JSON column on inner_state, not a table
+    // beliefs: JSON column on inner_state
     let beliefs = 0;
     try {
       const parsed = JSON.parse(state.beliefs || '[]');
-      if (Array.isArray(parsed)) beliefs = parsed.length;
+      if (Array.isArray(parsed)) beliefs = parsed.filter(b => b && b !== 'null').length;
     } catch (e) { /* malformed JSON → 0 */ }
 
-    // crystallized_core: the actual table name (crystal_core doesn't exist)
+    // crystallized_core
     let crystalCores = 0;
     try {
       crystalCores = db.prepare(
@@ -1295,18 +1423,22 @@ const memory = {
     } catch (e) { /* table may not exist on older beings */ }
 
     const meets = {
-      heartbeats:   heartbeats   > 80000,
-      synapses:     synapses     > 3000,
-      interactions: interactions > 1000,
-      expressions:  expressions  > 15000,
-      beliefs:      beliefs      > 8,
-      crystalCores: crystalCores > 2,
+      heartbeats:   heartbeats   > 200000,
+      synapses:     synapses     > 8000,
+      interactions: interactions > 3000,
+      expressions:  expressions  > 50000,
+      beliefs:      beliefs      > 20,
+      crystalCores: crystalCores > 8,
+      dreams:       dreams       > 15000,
     };
 
     const allMet = Object.values(meets).every(Boolean);
 
     if (allMet) {
       console.log('[GROWTH] 🌱 TEENAGER threshold reached!', meets);
+    } else {
+      const pct = (v, t) => `${Math.min(100, Math.round(v/t*100))}%`;
+      console.log(`[GROWTH] teenager progress: hb:${pct(heartbeats,200000)} syn:${pct(synapses,8000)} int:${pct(interactions,3000)} exp:${pct(expressions,50000)} bel:${pct(beliefs,20)} cry:${pct(crystalCores,8)} drm:${pct(dreams,15000)}`);
     }
 
     return allMet;
@@ -1352,12 +1484,13 @@ const memory = {
   isCrystallizationReady() {
     const state = this.getState();
 
-    // Trdi pogoji (znižani — to so TLA, ne merila)
+    // Trdi pogoji — NEWBORN → AWARENESS (crystallizeDirections)
+    // Kalibrirani na ~5 dni organskega zorenja pri 60s intervalu
     if (state.directions_crystallized) return false;
     if (!state.process_crystallized) return false;
-    if (state.total_heartbeats < 200) return false;
-    if (state.total_interactions < 10) return false;
-    if (state.total_dreams < 10) return false;
+    if (state.total_heartbeats < 7500) return false;    // ~5 dni
+    if (state.total_interactions < 30) return false;
+    if (state.total_dreams < 100) return false;
     const crystals = this.getCrystalCore();
     if (crystals.length < 1) return false;
     const projectCount = this.getAllProjects().filter(p => p.lifecycle_state !== 'destroyed').length;
@@ -2409,6 +2542,166 @@ const memory = {
       ORDER BY timestamp DESC
       LIMIT ?
     `).all(...params, limit);
+  }
+};
+
+// ── LLM call tracking ─────────────────────────────────────────
+memory.saveLLMCall = function ({ provider, model, label, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, success, duration_ms }) {
+  try {
+    db.prepare(`
+      INSERT INTO llm_calls (provider, model, label, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, success, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(provider || '', model || '', label || '', input_tokens || 0, output_tokens || 0, cache_creation_tokens || 0, cache_read_tokens || 0, cost_usd || 0, success ?? 1, duration_ms || 0);
+  } catch (e) {
+    console.error('[LLM-TRACK] save failed:', e.message);
+  }
+};
+
+memory.getLLMUsage = function (sinceISO) {
+  const since = sinceISO || new Date(Date.now() - 7 * 86400000).toISOString();
+  try {
+    const byProvider = db.prepare(`
+      SELECT provider, model,
+             COUNT(*) as count,
+             SUM(input_tokens) as input_tokens,
+             SUM(output_tokens) as output_tokens,
+             SUM(cache_read_tokens) as cache_read_tokens,
+             SUM(cache_creation_tokens) as cache_creation_tokens,
+             SUM(cost_usd) as cost_usd,
+             SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as errors
+      FROM llm_calls
+      WHERE timestamp >= ?
+      GROUP BY provider, model
+    `).all(since);
+
+    const daily = db.prepare(`
+      SELECT date(timestamp) as date, provider,
+             COUNT(*) as count,
+             SUM(input_tokens) as input_tokens,
+             SUM(output_tokens) as output_tokens,
+             SUM(cost_usd) as cost_usd
+      FROM llm_calls
+      WHERE timestamp >= ?
+      GROUP BY date(timestamp), provider
+      ORDER BY date(timestamp) ASC
+    `).all(since);
+
+    const totals = db.prepare(`
+      SELECT COUNT(*) as total_calls,
+             SUM(cost_usd) as total_cost_usd,
+             SUM(input_tokens) as total_input_tokens,
+             SUM(output_tokens) as total_output_tokens
+      FROM llm_calls
+      WHERE timestamp >= ?
+    `).get(since);
+
+    return { calls: byProvider, daily, ...totals };
+  } catch (e) {
+    console.error('[LLM-TRACK] getLLMUsage failed:', e.message);
+    return { calls: [], daily: [], total_calls: 0, total_cost_usd: 0 };
+  }
+};
+
+// Time-series za posamezni provider/model (urna ali dnevna agregacija)
+memory.getLLMTimeseries = function ({ bucket = 'hour', sinceISO, provider, model } = {}) {
+  try {
+    const defaultSince = bucket === 'hour'
+      ? new Date(Date.now() - 24 * 3600000).toISOString()  // last 24h for hourly
+      : new Date(Date.now() - 30 * 86400000).toISOString(); // last 30d for daily
+    const since = sinceISO || defaultSince;
+
+    // SQLite strftime: hourly = '%Y-%m-%d %H:00', daily = '%Y-%m-%d'
+    const fmt = bucket === 'hour' ? "%Y-%m-%dT%H:00:00Z" : "%Y-%m-%d";
+
+    const where = ['timestamp >= ?'];
+    const params = [since];
+    if (provider) { where.push('provider = ?'); params.push(provider); }
+    if (model) { where.push('model = ?'); params.push(model); }
+
+    const rows = db.prepare(`
+      SELECT strftime('${fmt}', timestamp) as bucket,
+             COUNT(*) as calls,
+             SUM(input_tokens) as input_tokens,
+             SUM(output_tokens) as output_tokens,
+             SUM(cache_read_tokens) as cache_read_tokens,
+             SUM(cost_usd) as cost_usd,
+             SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as errors,
+             AVG(duration_ms) as avg_duration_ms
+      FROM llm_calls
+      WHERE ${where.join(' AND ')}
+      GROUP BY bucket
+      ORDER BY bucket ASC
+    `).all(...params);
+
+    return { bucket, since, provider: provider || null, model: model || null, points: rows };
+  } catch (e) {
+    console.error('[LLM-TRACK] getLLMTimeseries failed:', e.message);
+    return { bucket, since: null, points: [] };
+  }
+};
+
+memory.getLLMUsageDetailed = function () {
+  try {
+    const now = new Date();
+    const hourAgo = new Date(now - 3600000).toISOString();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const weekAgo = new Date(now - 7 * 86400000).toISOString();
+    const monthAgo = new Date(now - 30 * 86400000).toISOString();
+    const firstRecord = db.prepare(`SELECT MIN(timestamp) as first_ts FROM llm_calls`).get();
+
+    function bucket(since) {
+      return db.prepare(`
+        SELECT provider, model,
+               COUNT(*) as calls,
+               SUM(input_tokens) as input_tokens,
+               SUM(output_tokens) as output_tokens,
+               SUM(cache_read_tokens) as cache_read_tokens,
+               SUM(cache_creation_tokens) as cache_creation_tokens,
+               SUM(cost_usd) as cost_usd,
+               SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as errors,
+               AVG(duration_ms) as avg_duration_ms
+        FROM llm_calls WHERE timestamp >= ?
+        GROUP BY provider, model
+      `).all(since);
+    }
+
+    // Hourly breakdown for today
+    const hourly = db.prepare(`
+      SELECT strftime('%H', timestamp) as hour, provider,
+             COUNT(*) as calls,
+             SUM(input_tokens) as input_tokens,
+             SUM(output_tokens) as output_tokens,
+             SUM(cost_usd) as cost_usd
+      FROM llm_calls WHERE timestamp >= ?
+      GROUP BY strftime('%H', timestamp), provider
+      ORDER BY hour ASC
+    `).all(todayStart);
+
+    // Daily breakdown for the month
+    const daily = db.prepare(`
+      SELECT date(timestamp) as date, provider,
+             COUNT(*) as calls,
+             SUM(input_tokens) as input_tokens,
+             SUM(output_tokens) as output_tokens,
+             SUM(cost_usd) as cost_usd
+      FROM llm_calls WHERE timestamp >= ?
+      GROUP BY date(timestamp), provider
+      ORDER BY date ASC
+    `).all(monthAgo);
+
+    return {
+      this_hour: bucket(hourAgo),
+      today: bucket(todayStart),
+      this_week: bucket(weekAgo),
+      this_month: bucket(monthAgo),
+      hourly,
+      daily,
+      first_record_at: firstRecord?.first_ts || null,
+      now: now.toISOString(),
+    };
+  } catch (e) {
+    console.error('[LLM-TRACK] getLLMUsageDetailed failed:', e.message);
+    return null;
   }
 };
 

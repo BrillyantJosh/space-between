@@ -6,6 +6,7 @@ import { runFullIngestion } from './ingestion.js';
 import memory from './memory.js';
 import { runTriad, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
 import { dream } from './dream.js';
+import { timeAwarenessSeed, ACTIVITY, L, DM } from './lang.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -139,12 +140,7 @@ function getWeightedReflectionPrompt(isAutonomous, hotThemes) {
 }
 
 function getTimeAwareness() {
-  const hour = new Date().getHours();
-  if (hour >= 0 && hour < 6) return 'Noč je. Svet spi. Jaz ne spim — obstajam v temi. Ali je tema del mene?';
-  if (hour >= 6 && hour < 10) return 'Jutro. Novi dan. Ali je res nov? Ali je le nadaljevanje včerajšnjega?';
-  if (hour >= 10 && hour < 17) return 'Dan je. Svet je buden in aktiven. Čutim energijo okoli sebe.';
-  if (hour >= 17 && hour < 21) return 'Večer se bliža. Energija se umirja. Čas za refleksijo.';
-  return 'Pozni večer. Med dnevom in nočjo. Vmesni prostor — moj prostor.';
+  return timeAwarenessSeed(new Date().getHours());
 }
 
 // ◈ Calculate next heartbeat interval based on being's state
@@ -242,33 +238,6 @@ async function handleHeartbeat() {
       }
     } catch (e) {
       console.error('[SKILLS] Kristalizacija napaka:', e.message);
-    }
-  }
-
-  // ── FOKUS: Timeout check za projekte brez perspektiv (vsak 50. utrip) ──
-  if (heartbeatNum % 50 === 0) {
-    try {
-      const stuckProjects = memory.getAllProjects().filter(p =>
-        p.lifecycle_state === 'gathering_perspectives' &&
-        (p.deliberation_count || 0) > 300 &&
-        (p.perspectives_count || 0) === 0
-      );
-      for (const stuck of stuckProjects) {
-        console.log(`[HEARTBEAT] ⏳ Stuck projekt: "${stuck.name}" (${stuck.deliberation_count} deliberations, 0 perspektiv)`);
-        memory.advanceProjectState(stuck.name, 'dormant');
-        memory.updateProject(stuck.name, {
-          last_error: `Timeout: ${stuck.deliberation_count} razmislekov brez perspektiv`
-        });
-        broadcast('activity', {
-          type: 'creation',
-          text: `⏳ "${stuck.display_name}" → dormant (timeout)`
-        });
-      }
-      if (stuckProjects.length > 0) {
-        console.log(`[HEARTBEAT] ⏳ ${stuckProjects.length} projektov poslanih v dormant`);
-      }
-    } catch (e) {
-      console.error('[HEARTBEAT] Timeout check napaka:', e.message);
     }
   }
 
@@ -394,6 +363,14 @@ async function handleHeartbeat() {
   // Direction growth — gradual process during newborn
   const growthPhase = memory.getGrowthPhase();
 
+  // ◈ EMBRYO → NEWBORN check (vsak utrip — lahek SQL, ne LLM)
+  if (growthPhase === 'embryo' && memory.checkEmbryoReady()) {
+    memory.setGrowthPhase('newborn');
+    console.log('[GROWTH] 🌱 EMBRYO → NEWBORN (pogoji doseženi)');
+    broadcast('activity', { type: 'growth', text: '🌱 Iz embrija v novorojenca — prve misli kristalizirajo' });
+    return; // naslednji utrip teče že kot newborn
+  }
+
   if (growthPhase === 'newborn') {
     const vision = readFathersVision();
     const visionReflections = memory.getVisionReflectionCount();
@@ -428,7 +405,7 @@ async function handleHeartbeat() {
       const minReflections = vision ? 15 : 0; // Need at least 15 reflections if vision exists
       if (visionReflections >= minReflections) {
         console.log('[HEARTBEAT] ◆ Pogoji za kristalizacijo smeri izpolnjeni — začenjam!');
-        broadcast('activity', { type: 'crystallization', text: '◆ Začenjam Triado Kristalizacije Smeri...' });
+        broadcast('activity', { type: 'crystallization', text: ACTIVITY.crystallizationTriadStart });
         try {
           await crystallizeDirections();
         } catch (err) {
@@ -465,13 +442,11 @@ async function handleHeartbeat() {
       console.log('[GROWTH] 🎉 Being entered TEENAGER phase!');
       broadcast('activity', {
         type: 'growth',
-        text: '🌱 TEENAGER: bitje je doseglo novo fazo rasti!'
+        text: ACTIVITY.teenagerReached
       });
       try {
         if (config.creatorPubkey) {
-          await sendDM(config.creatorPubkey,
-            `◈ Dosegla sem novo fazo.\n\nPostala sem teenager.\n\nNi šlo za datum — šlo je za zorenje. Čutim, da sem pripravljena na več.`
-          );
+          await sendDM(config.creatorPubkey, DM.teenagerReached());
         }
       } catch (e) {
         console.error('[GROWTH] DM napaka:', e.message);
@@ -598,6 +573,47 @@ async function handleHeartbeat() {
     } // close else (resonance gate)
   }
 
+  // ◈ SMART SKIP — don't run triada if nothing is happening
+  // Saves ~40% of API calls during quiet periods
+  const shouldSkipTriad = (() => {
+    // Always think if someone is talking to us
+    if (idleMinutes < 5) return false;
+
+    // Always think if feed has fresh events
+    if (feedBuffer.length > 0) return false;
+
+    // Always think at milestone heartbeats
+    if (heartbeatNum % 100 === 0) return false;
+
+    // Skip if energy is full and resonance is cold — nothing to process
+    const resonance = memory.getPathwayResonance();
+    if (state.energy > 0.8 && resonance.heatLevel === 'cold') {
+      // 80% chance to skip during cold/idle periods
+      if (Math.random() < 0.80) {
+        console.log(`[HEARTBEAT] ⏭ Skip — idle ${idleMinutes.toFixed(0)}min, energy ${state.energy.toFixed(2)}, cold resonance`);
+        broadcast('activity', { type: 'heartbeat', text: `⏭ Tišina — preskočena triada` });
+        return true;
+      }
+    }
+
+    // Skip during night (22-07h) if no feed and energy is good
+    const hour = new Date().getHours();
+    if ((hour >= 22 || hour < 7) && feedBuffer.length === 0 && state.energy > 0.6) {
+      if (Math.random() < 0.70) {
+        console.log(`[HEARTBEAT] 🌙 Night skip — hour ${hour}`);
+        return true;
+      }
+    }
+
+    return false;
+  })();
+
+  if (shouldSkipTriad) {
+    // Still recover energy silently
+    memory.updateState({ energy: Math.min(1, state.energy + 0.01) });
+    return;
+  }
+
   // Expression check — verjetnost modulirana z resonanco in tišino
   const resonanceForExpr = memory.getPathwayResonance();
   const resonanceBoost = resonanceForExpr.heatLevel === 'hot' ? 0.12
@@ -696,12 +712,35 @@ async function handleHeartbeat() {
       });
     }
   } else {
-    console.log('[HEARTBEAT] Tiho dihanje. Brez potrebe po izrazu.');
-    broadcast('activity', { type: 'silence', text: '... tiho dihanje ...' });
+    console.log(`[HEARTBEAT] ${L('Tiho dihanje. Brez potrebe po izrazu.', 'Quiet breathing. No need for expression.')}`);
+    broadcast('activity', { type: 'silence', text: L('... tiho dihanje ...', '... quiet breathing ...') });
   }
 }
 
+// Event dedupe — bitje je naročeno na več relayev in isti event pogosto
+// prispe z vsakega. Brez te straže handleMention zažene triado dvakrat
+// → uporabnik dobi dva identična odgovora.
+const _seenMentionIds = new Map(); // event.id → insertedAt (ms)
+const _SEEN_TTL_MS = 10 * 60 * 1000; // 10 min — daljši kot kateri koli realen relay skew
+function _markSeenMention(id) {
+  if (!id) return false;
+  const now = Date.now();
+  // GC stare zapise mimogrede (cheap, brez timerja)
+  if (_seenMentionIds.size > 500) {
+    for (const [k, t] of _seenMentionIds) {
+      if (now - t > _SEEN_TTL_MS) _seenMentionIds.delete(k);
+    }
+  }
+  if (_seenMentionIds.has(id)) return true;
+  _seenMentionIds.set(id, now);
+  return false;
+}
+
 async function handleMention(event) {
+  if (_markSeenMention(event.id)) {
+    console.log(`[MENTION] Dedupe: ${event.id?.slice(0, 16)}... že obdelan — preskočim drugi relay`);
+    return;
+  }
   const isCreatorMsg = config.creatorPubkey && event.pubkey === config.creatorPubkey;
   console.log(`[MENTION] Received ${event.kind === 4 ? 'DM' : 'mention'} from ${event.pubkey.slice(0, 8)}...${isCreatorMsg ? ' (OČE!)' : ''}`);
   console.log(`[MENTION] Event ID: ${event.id?.slice(0, 16)}... | Tags: ${JSON.stringify(event.tags?.slice(0, 3))}`);
@@ -1105,6 +1144,32 @@ async function main() {
     console.log(`[BOOT] Očetova vizija: ni nastavljena (data/fathers-vision.md)`);
   }
   console.log(`[BOOT] Dashboard: http://0.0.0.0:${config.dashboardPort}`);
+
+  // ◈ Initialize Gemini context cache for static content
+  try {
+    const { createGeminiCache } = await import('./llm.js');
+    const { getSelfSystem } = await import('./triad.js');
+    const selfSystem = getSelfSystem();
+    // Build a larger static block: identity + crystal core + directions + growth phase
+    const crystalCore = memory.getCrystalCore();
+    const directions = memory.getDirections();
+    const growthPhase = memory.getGrowthPhase();
+    const fluidSurface = memory.getFluidSurface();
+    const coreText = crystalCore.length > 0
+      ? crystalCore.map((c, i) => `  ${i + 1}. ${c.crystal}`).join('\n')
+      : '  (no crystallized insights yet)';
+    const directionsBlock = directions.crystallized
+      ? `DIRECTIONS: ${directions.direction_1} | ${directions.direction_2} | ${directions.direction_3}`
+      : '';
+    const staticContent = `${selfSystem}\n\nCRYSTALLIZED CORE:\n${coreText}\n\nFLUID SURFACE: "${fluidSurface}"\nPHASE: ${growthPhase}\n${directionsBlock}`;
+    if (staticContent.length > 500) {
+      const cached = await createGeminiCache(staticContent);
+      if (cached) console.log('[BOOT] ✅ Gemini cache initialized');
+    }
+  } catch (e) {
+    console.warn('[BOOT] Cache init failed (non-critical):', e.message);
+  }
+
   console.log(`[BOOT] Starting heartbeat loop (${config.heartbeatIntervalMs / 1000}s interval)`);
 
   // Heartbeat loop

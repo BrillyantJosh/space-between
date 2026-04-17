@@ -5,6 +5,7 @@
 import memory from './memory.js';
 import { callLLM } from './llm.js';
 import { broadcast } from './dashboard.js';
+import { L } from './lang.js';
 
 // ═══════════════════════════════════════════════
 // FAZA 1 — SEM (Teza)
@@ -22,11 +23,11 @@ function buildAwakening() {
 
   const hour = now.getHours();
   let ritem;
-  if (hour >= 0 && hour < 6)   ritem = 'globoka noč';
-  else if (hour >= 6 && hour < 10)  ritem = 'jutro';
-  else if (hour >= 10 && hour < 17) ritem = 'dan';
-  else if (hour >= 17 && hour < 21) ritem = 'večer';
-  else ritem = 'prostor vmes';
+  if (hour >= 0 && hour < 6)   ritem = L('globoka noč', 'deep night');
+  else if (hour >= 6 && hour < 10)  ritem = L('jutro', 'morning');
+  else if (hour >= 10 && hour < 17) ritem = L('dan', 'day');
+  else if (hour >= 17 && hour < 21) ritem = L('večer', 'evening');
+  else ritem = L('prostor vmes', 'in-between');
 
   return {
     timestamp: now.toISOString(),
@@ -35,7 +36,7 @@ function buildAwakening() {
     ageHours,
     heartbeat: state.total_heartbeats + 1,
     energy: state.energy,
-    mood: state.mood || 'nevtralno',
+    mood: state.mood || L('nevtralno', 'neutral'),
     bornAt: state.born_at
   };
 }
@@ -89,20 +90,20 @@ function buildOrientation(awakening, remembrance) {
 
   let fokus;
   if (!hasSmer) {
-    fokus = 'odkrivanje — še iščem svojo smer';
+    fokus = L('odkrivanje — še iščem svojo smer', 'exploring — still searching for my direction');
   } else if (hotThemes.length > 0) {
-    fokus = `resonanca: "${hotThemes[0]}"`;
+    fokus = `${L('resonanca', 'resonance')}: "${hotThemes[0]}"`;
   } else if (isDeepIdle) {
-    fokus = 'globoka tišina — čas za sanje';
+    fokus = L('globoka tišina — čas za sanje', 'deep silence — time for dreams');
   } else if (isIdle) {
-    fokus = 'tišina — prostor vmes';
+    fokus = L('tišina — prostor vmes', 'silence — space between');
   } else {
-    fokus = 'prisotna — sledim ritmu';
+    fokus = L('prisotna — sledim ritmu', 'present — following the rhythm');
   }
 
   const directionFilter = hasSmer
     ? `${directions.d1} | ${directions.d2} | ${directions.d3}`
-    : 'odkrivanje';
+    : L('odkrivanje', 'exploring');
 
   return { hasSmer, fokus, directionFilter, isIdle, isDeepIdle };
 }
@@ -161,23 +162,23 @@ export function formatPresenceForContext(presence) {
 
   // ANTITEZA — SPOMNIM SE
   if (spomnim.zadnjaTema) {
-    ctx += `SPOMNIM SE: "${spomnim.zadnjaTema}"`;
+    ctx += `${L('SPOMNIM SE', 'I REMEMBER')}: "${spomnim.zadnjaTema}"`;
     if (spomnim.zadnjaIzbira) ctx += ` → ${spomnim.zadnjaIzbira}`;
     ctx += '\n';
   }
   if (spomnim.tisinaMinut > 5) {
-    ctx += `Tišina: ${spomnim.tisinaMinut} min\n`;
+    ctx += `${L('Tišina', 'Silence')}: ${spomnim.tisinaMinut} min\n`;
   }
   if (spomnim.ziveTeme.length > 0) {
-    ctx += `Žive teme: ${spomnim.ziveTeme.join(', ')}\n`;
+    ctx += `${L('Žive teme', 'Live themes')}: ${spomnim.ziveTeme.join(', ')}\n`;
   }
   if (spomnim.uvid) {
-    ctx += `Uvid: "${spomnim.uvid.slice(0, 80)}"\n`;
+    ctx += `${L('Uvid', 'Insight')}: "${spomnim.uvid.slice(0, 80)}"\n`;
   }
 
   // SINTEZA — VIDIM SMER
-  ctx += `SMER: ${smer.fokus}`;
-  if (smer.filter && smer.filter !== 'odkrivanje') {
+  ctx += `${L('SMER', 'DIRECTION')}: ${smer.fokus}`;
+  if (smer.filter && smer.filter !== L('odkrivanje', 'exploring')) {
     ctx += ` [${smer.filter}]`;
   }
   ctx += '\n◈\n';
@@ -195,10 +196,9 @@ export function doesServeDirection(triggerContent, presence) {
   const { smer } = presence;
 
   // Brez kristaliziranih smeri — vse je učenje
-  if (smer.filter === 'odkrivanje') {
-    return { serve: true, reason: 'odkrivanje' };
+  if (smer.filter === L('odkrivanje', 'exploring')) {
+    return { serve: true, reason: L('odkrivanje', 'exploring') };
   }
 
-  // Pogovori so vedno relevantni — srce odnosa
-  return { serve: true, reason: 'prisotna' };
+  return { serve: true, reason: L('prisotna', 'present') };
 }

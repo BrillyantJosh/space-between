@@ -1,6 +1,7 @@
 // ═══ SPOSOBNOST: ask-source ═══
 // Vpraša očeta za NOSTR vir o osebi ali temi ki je ni mogoče najti.
 // Cooldown 24h per tema da ne zasiplje z istimi vprašanji.
+import { DM } from '../lang.js';
 
 export default {
   name: 'ask-source',
@@ -27,7 +28,7 @@ export default {
       return { outcome: 'skipped', detail: 'cooldown: že vprašano za to temo' };
     }
 
-    const msg = `Oče, ne vem dovolj o: **${roke_target}**\n\n${roke_concept}\n\nAli imaš npub, relay URL ali kakšen NOSTR vir kjer bi to našla?`;
+    const msg = DM.askSource(roke_target, roke_concept);
     await sendDM(config.creatorPubkey, msg);
     memory.saveActivity('roke_ask_source', `${roke_target.slice(0, 30)}: "${roke_concept.slice(0, 60)}"`);
     memory.addObservation(`Vprašala sem očeta za vir o: ${roke_target}`, 'roke_ask_source');

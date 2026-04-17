@@ -1,9 +1,34 @@
 import 'websocket-polyfill';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Relay } from 'nostr-tools/relay';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import * as nip19 from 'nostr-tools/nip19';
 import * as nip04 from 'nostr-tools/nip04';
 import config from './config.js';
+import memory from './memory.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const KIND0_PATH = path.join(DATA_DIR, 'kind-0-profile.json');
+
+// Load the birth-published KIND 0 snapshot.
+// This is the ground-truth Lana profile (contains lanaWalletID, whoAreYou,
+// statement_of_responsibility, etc.). updateProfile() merges on top of this
+// so no fields are ever accidentally erased.
+function loadBirthProfile() {
+  try {
+    if (fs.existsSync(KIND0_PATH)) {
+      const raw = fs.readFileSync(KIND0_PATH, 'utf8');
+      const evt = JSON.parse(raw);
+      const content = JSON.parse(evt.content || '{}');
+      const tags = evt.tags || [];
+      return { content, tags };
+    }
+  } catch (_) {}
+  return { content: {}, tags: [] };
+}
 
 // Decode nsec to get secret key bytes
 const { data: secretKey } = nip19.decode(config.nsec);
@@ -83,29 +108,98 @@ async function publishToAll(event) {
   await Promise.allSettled(promises);
 }
 
-export async function publishProfile() {
-  const content = JSON.stringify(config.profile);
-  const event = signEvent({
-    kind: 0,
-    created_at: Math.floor(Date.now() / 1000),
-    tags: [],
-    content
-  });
-  await publishToAll(event);
-  console.log('[NOSTR] Profile published (KIND 0)');
+// Normalize BEING_LANGUAGE to a BCP-47 code used in ["lang", ...] tag.
+// Accepts "sl", "en", "es", or full names ("slovenian", "english", ...).
+function resolveLangCode() {
+  const raw = (process.env.BEING_LANGUAGE || 'en').toLowerCase().trim();
+  const map = {
+    en: 'en', english: 'en',
+    sl: 'sl', slovenian: 'sl', slovenscina: 'sl', 'slovenščina': 'sl',
+    es: 'es', spanish: 'es', espanol: 'es', 'español': 'es',
+  };
+  return map[raw] || raw.slice(0, 2) || 'en';
 }
 
-export async function updateProfile(updates) {
-  const profile = { ...config.profile, ...updates };
-  const content = JSON.stringify(profile);
+// ◈ KIND 0 — Stable Identity Profile
+// Source of truth: data/kind-0-profile.json (written at birth).
+// We re-publish that verbatim, only overlaying:
+//   - about ← current fluid surface (if set)
+//   - display_name ← memory.state.display_name (if being picked one)
+//   - lang tag ← BEING_LANGUAGE env
+// Lana fields (name, lanaWalletID, whoAreYou, statement_of_responsibility,
+// orgasmic_profile, nip05, website, language, lanoshi2lash, country, currency)
+// come from the birth snapshot and are NEVER regenerated.
+export async function publishProfile(overrides = {}) {
+  const { content: birthContent, tags: birthTags } = loadBirthProfile();
+  if (!birthContent || Object.keys(birthContent).length === 0) {
+    console.warn('[NOSTR] No birth kind-0-profile.json — skipping profile publish');
+    return null;
+  }
+
+  const profile = { ...birthContent };
+
+  // Fluid surface becomes the living "about" if available
+  try {
+    const fluid = memory.getFluidSurface?.();
+    if (fluid && typeof fluid === 'string' && fluid.trim()) {
+      profile.about = fluid.trim();
+    }
+  } catch (_) {}
+
+  // Being-chosen display_name (set via self-naming / update-profile)
+  try {
+    const st = memory.getState?.();
+    if (st?.display_name) profile.display_name = st.display_name;
+  } catch (_) {}
+
+  // Safe overlay keys from caller (about, display_name, picture)
+  const SAFE = ['about', 'display_name', 'picture'];
+  for (const k of SAFE) {
+    if (overrides[k] !== undefined && overrides[k] !== null && overrides[k] !== '') {
+      profile[k] = overrides[k];
+    }
+  }
+
+  const langCode = resolveLangCode();
+  let tags = birthTags.filter(t => Array.isArray(t) && t[0] !== 'lang');
+  tags.push(['lang', langCode]);
+
   const event = signEvent({
     kind: 0,
     created_at: Math.floor(Date.now() / 1000),
-    tags: [],
-    content
+    tags,
+    content: JSON.stringify(profile)
   });
   await publishToAll(event);
-  console.log(`[NOSTR] Profile updated (KIND 0): name="${updates.name || ''}"`);
+  try { memory.updateState?.({ last_profile_update_at: new Date().toISOString() }); } catch (_) {}
+  console.log(`[NOSTR] ✅ KIND 0 published: name="${profile.name || ''}" display="${profile.display_name || ''}" lang=${langCode}`);
+  return event;
+}
+
+// updateProfile — rate-limited wrapper around publishProfile.
+// Being may call this freely; we publish at most once per ~23h
+// unless { _force: true } is passed (boot, crystallization, self-naming).
+export async function updateProfile(updates = {}) {
+  // Commit display_name choice to memory BEFORE rate-limit check
+  // so the chosen name is never lost even if we skip this publish.
+  if (updates.display_name) {
+    try { memory.updateState?.({ display_name: updates.display_name }); } catch (_) {}
+  }
+
+  if (!updates._force) {
+    try {
+      const last = memory.getState?.()?.last_profile_update_at;
+      if (last) {
+        const hoursSince = (Date.now() - new Date(last).getTime()) / 3.6e6;
+        if (hoursSince < 23) {
+          console.log(`[NOSTR] KIND 0 — skipped (published ${hoursSince.toFixed(1)}h ago, <23h)`);
+          return null;
+        }
+      }
+    } catch (_) {}
+  }
+
+  return publishProfile(updates);
 }
 
 export async function publishNote(text) {

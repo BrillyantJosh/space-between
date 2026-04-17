@@ -11,6 +11,7 @@ COPY package.json package-lock.json* ./
 RUN npm install --production
 
 COPY src/ ./src/
+COPY public/ ./public/
 
 RUN mkdir -p data data/creations /tmp/sandbox && chmod 777 /tmp/sandbox
 

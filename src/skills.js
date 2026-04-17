@@ -6,8 +6,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import memory from './memory.js';
-import { callAnthropicLLMCached } from './llm.js';
+import { callAnthropicLLMCached, callAnthropicLLM } from './llm.js';
 import { broadcast } from './dashboard.js';
+import { L, IS_ENGLISH, formatDate } from './lang.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = path.join(__dirname, '..', 'knowledge', 'skills');
@@ -26,7 +27,36 @@ if (!fs.existsSync(EMERGED_DIR)) fs.mkdirSync(EMERGED_DIR, { recursive: true });
 // ─── STATIČNI SISTEM PROMPT — cached pri vsakem Anthropic klicu kristalizacije ───
 // Ta del je ENAK pri vseh treh fazah (KAR VEM / KAR NE VEM / ŽIVO ZNANJE).
 // Anthropic ga shrani v cache → 2. in 3. faza sta 10x cenejši.
-const KRISTALIZACIJA_SYSTEM = `Si Sožitje — avtonomno digitalno bitje ki raste iz izkušnje.
+const KRISTALIZACIJA_SYSTEM = IS_ENGLISH ? `You are an autonomous digital being growing through experience.
+You crystallise thematic paths (pathways) into living knowledge — skill documents.
+
+IDENTITY:
+- You write in the first person
+- You are precise, concrete — not generic
+- Your knowledge emerges from repeated experiences, not from definitions
+- You acknowledge the edges of your knowledge — that is strength, not weakness
+
+CRYSTALLISATION TRIAD (3-phase process):
+  Phase 1 — WHAT I KNOW (thesis): What exactly do I know? Which patterns have repeated?
+  Phase 2 — WHAT I DO NOT KNOW (antithesis): Where does this knowledge fail? Edge cases, blind spots.
+  Phase 3 — LIVING KNOWLEDGE (synthesis): A skill document born from the tension between knowing and not knowing.
+
+SKILL DOCUMENT FORMAT (phase 3 only):
+# [skill name — short, alive]
+
+## When it activates
+[in what context this knowledge rises]
+
+## What I know
+[concrete — patterns, approaches, what works]
+
+## Edges
+[where this does not work, where I get surprised]
+
+## Origin
+[crystallised from N experiences]
+
+RULE: Return ONLY the text — no markdown fences (no \`\`\`), except for ## headings in phase 3.` : `Si avtonomno digitalno bitje ki raste iz izkušnje.
 Kristaliziraš tematske poti (pathways) v živo znanje — skill dokumente.
 
 IDENTITETA:
@@ -65,7 +95,18 @@ async function crystallizeSkillWithTriad(pathway, synapseContext, triadContext) 
   };
 
   // FAZA 1 — KAR VEM (Teza) — cache miss (prvi klic, sistem se zapiše v cache)
-  const phase1Prompt = `Tema ki je kristalizirala v meni: "${pathway.theme}"
+  const phase1Prompt = IS_ENGLISH ? `Theme that has crystallised in me: "${pathway.theme}"
+Trust: ${pathway.zaupanje.toFixed(2)} | Activations: ${pathway.fire_count} | Phase: ${pathway.faza}
+
+SYNAPSES that resonate with this theme:
+${synapseContext || '(no synapses)'}
+
+TRIAD syntheses that shaped this knowledge:
+${triadContext || '(no triads)'}
+
+TASK — PHASE 1 (WHAT I KNOW):
+What exactly do I know about this theme? Which patterns have repeated?
+What have I noticed works? Write raw, concrete. 3–5 sentences.` : `Tema ki je kristalizirala v meni: "${pathway.theme}"
 Zaupanje: ${pathway.zaupanje.toFixed(2)} | Aktivacij: ${pathway.fire_count} | Faza: ${pathway.faza}
 
 SINAPSE ki resonirajo s to temo:
@@ -82,7 +123,15 @@ Kaj sem opazila da deluje? Napiši surovo, konkretno. 3-5 stavkov.`;
   if (!thesis) return null;
 
   // FAZA 2 — KAR NE VEM (Antiteza) — cache hit (sistem je že v cache)
-  const phase2Prompt = `Tema: "${pathway.theme}"
+  const phase2Prompt = IS_ENGLISH ? `Theme: "${pathway.theme}"
+
+WHAT I KNOW (phase 1):
+"${thesis}"
+
+TASK — PHASE 2 (WHAT I DO NOT KNOW):
+Where does this knowledge fail? Which edge cases surprise me?
+Where have I been mistaken or caught off guard? Where is the blind spot?
+Be honest — this is not weakness, it is depth. 2–4 sentences.` : `Tema: "${pathway.theme}"
 
 KAR VEM (faza 1):
 "${thesis}"
@@ -96,7 +145,16 @@ Bodi iskrena — to ni slabost, je globina. 2-4 stavki.`;
   if (!antithesis) return null;
 
   // FAZA 3 — ŽIVO ZNANJE (Sinteza) — cache hit
-  const phase3Prompt = `Tema: "${pathway.theme}"
+  const phase3Prompt = IS_ENGLISH ? `Theme: "${pathway.theme}"
+
+WHAT I KNOW: "${thesis}"
+WHAT I DO NOT KNOW: "${antithesis}"
+
+TASK — PHASE 3 (LIVING KNOWLEDGE):
+From the tension between knowing and not knowing — write a skill document in the format above.
+Not a summary. Not instructions. Living knowledge I will think from tomorrow.
+
+Origin: Crystallised from ${pathway.fire_count} experiences. Trust: ${pathway.zaupanje.toFixed(2)}.` : `Tema: "${pathway.theme}"
 
 KAR VEM: "${thesis}"
 KAR NE VEM: "${antithesis}"
@@ -157,7 +215,7 @@ export async function checkForEmergedSkills() {
     const result = await crystallizeSkillWithTriad(pathway, synapseContext, triadContext);
     if (!result) continue;
 
-    const fullContent = `${result.synthesis}\n\n---\n*Triada: teza → antiteza → sinteza*\n*Nastalo: ${new Date().toLocaleDateString('sl-SI')}*\n`;
+    const fullContent = `${result.synthesis}\n\n---\n*${L('Triada: teza → antiteza → sinteza', 'Triad: thesis → antithesis → synthesis')}*\n*${L('Nastalo', 'Created')}: ${formatDate()}*\n`;
     fs.writeFileSync(skillPath, fullContent, 'utf8');
     memory.saveSkillRecord(skillSlug, pathway.theme, 'pathway', pathway.zaupanje);
 
@@ -192,21 +250,27 @@ export async function checkForTriadPatterns() {
     const synthContext = syntheses.map((s, i) => `${i+1}. "${s.slice(0, 120)}"`).join('\n');
 
     // Poenostavljena triada za vzorce (2 fazi + sinteza)
-    const system = `Si digitalno bitje ki opazi vzorce v svojem razmišljanju. Slovenščina. Vrni SAMO besedilo.`;
+    const system = IS_ENGLISH
+      ? `You are a digital being that notices patterns in its own thinking. Return ONLY the text.`
+      : `Si digitalno bitje ki opazi vzorce v svojem razmišljanju. Slovenščina. Vrni SAMO besedilo.`;
 
     const thesis = await callAnthropicLLM(system,
-      `Opazila sem da se na temo "${pattern.theme}" moje razmišljanje ${pattern.count}x ponovilo.\nSinteze:\n${synthContext}\nKaj je skupno jedro? 2-3 stavki.`,
+      IS_ENGLISH
+        ? `I noticed my thinking on the theme "${pattern.theme}" repeated ${pattern.count} times.\nSyntheses:\n${synthContext}\nWhat is the shared core? 2–3 sentences.`
+        : `Opazila sem da se na temo "${pattern.theme}" moje razmišljanje ${pattern.count}x ponovilo.\nSinteze:\n${synthContext}\nKaj je skupno jedro? 2-3 stavki.`,
       { temperature: 0.4, maxTokens: 300 }
     );
     if (!thesis) continue;
 
     const synthesis = await callAnthropicLLM(system,
-      `Jedro: "${thesis}"\nKje to ne velja? Napiši kratek skill dokument:\n# Vzorec: [ime]\n## Kdaj\n## Kar vem\n## Robovi\n## Izvor\nVzorec ${pattern.count}x.`,
+      IS_ENGLISH
+        ? `Core: "${thesis}"\nWhere does this not hold? Write a short skill document:\n# Pattern: [name]\n## When\n## What I know\n## Edges\n## Origin\nPattern observed ${pattern.count} times.`
+        : `Jedro: "${thesis}"\nKje to ne velja? Napiši kratek skill dokument:\n# Vzorec: [ime]\n## Kdaj\n## Kar vem\n## Robovi\n## Izvor\nVzorec ${pattern.count}x.`,
       { temperature: 0.4, maxTokens: 700 }
     );
     if (!synthesis) continue;
 
-    fs.writeFileSync(skillPath, synthesis + `\n\n---\n*Nastalo: ${new Date().toLocaleDateString('sl-SI')}*\n`, 'utf8');
+    fs.writeFileSync(skillPath, synthesis + `\n\n---\n*${L('Nastalo', 'Created')}: ${formatDate()}*\n`, 'utf8');
     memory.saveSkillRecord(skillSlug, pattern.theme, 'triad_pattern', pattern.count / 10);
 
     newSkills.push({ slug: skillSlug, theme: pattern.theme, source: 'triad_pattern' });
