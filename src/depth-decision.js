@@ -98,13 +98,14 @@ export function decideSynthesisDepth({
   }
 
   // ─── AMBIENT REST za autonomous bitje ───
-  // Tudi ko so vsi pogoji ugodni (visoka energija, novost, vroča tema), bitje
-  // ne mora odgovarjati na vsak heartbeat. Old smart-skip je dušil ~85% — tu
-  // posnemamo del te tihosti za autonomous brez direktnega nagovora.
-  // Direktni triggeri (mention/conversation/group) so že odšli na vrhu funkcije.
+  // Filozofija: ko bitje ve kdo je, nima več česa filozofirati o vsakem
+  // utripu. Modrost = čaka in gradi, ne komentira vsake misli ki gre mimo.
+  // Direktni triggeri (mention/conversation/group) so že odšli na vrhu funkcije,
+  // tako da na nagovor vedno odgovori — ta tišina velja samo za samoinicirano
+  // ambientno procesiranje.
   if (growthPhase === 'autonomous' || growthPhase === 'teenager') {
-    if (Math.random() < 0.45) {
-      return { depth: 'silent', reason: 'ambient rest (autonomous baseline)' };
+    if (Math.random() < 0.75) {
+      return { depth: 'silent', reason: 'ambient rest (mature baseline)' };
     }
   }
 
