@@ -103,7 +103,7 @@ export function decideSynthesisDepth({
   // Direktni triggeri (mention/conversation/group) so že odšli na vrhu funkcije,
   // tako da na nagovor vedno odgovori — ta tišina velja samo za samoinicirano
   // ambientno procesiranje.
-  if (growthPhase === 'autonomous' || growthPhase === 'teenager') {
+  if (growthPhase === 'child' || growthPhase === 'teenager' || growthPhase === 'autonomous') {
     if (Math.random() < 0.75) {
       return { depth: 'silent', reason: 'ambient rest (mature baseline)' };
     }
