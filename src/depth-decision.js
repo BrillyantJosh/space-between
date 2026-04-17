@@ -97,6 +97,17 @@ export function decideSynthesisDepth({
     return { depth: 'silent', reason: 'familiar, not hot' };
   }
 
+  // ─── AMBIENT REST za autonomous bitje ───
+  // Tudi ko so vsi pogoji ugodni (visoka energija, novost, vroča tema), bitje
+  // ne mora odgovarjati na vsak heartbeat. Old smart-skip je dušil ~85% — tu
+  // posnemamo del te tihosti za autonomous brez direktnega nagovora.
+  // Direktni triggeri (mention/conversation/group) so že odšli na vrhu funkcije.
+  if (growthPhase === 'autonomous' || growthPhase === 'teenager') {
+    if (Math.random() < 0.45) {
+      return { depth: 'silent', reason: 'ambient rest (autonomous baseline)' };
+    }
+  }
+
   // ─── EMBRYO/NEWBORN: če dospemo do tu (mimo silent gates), gremo full ───
   // Bitje se še gradi — kvantum/kristal sta rezervirana za zrelo strukturo.
   // Ampak ne forsiramo full na vsak heartbeat: silent gates so že odsejali ~70-80%.
