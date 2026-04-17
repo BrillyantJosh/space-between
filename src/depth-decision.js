@@ -44,15 +44,12 @@ export function decideSynthesisDepth({
   }
 
   // ─── Heartbeat veja ───
-  // Embryo phase: vedno full (bitje se še gradi, vsako iskrico potrebuje)
-  if (growthPhase === 'embryo' || growthPhase === 'newborn') {
-    return { depth: 'full', reason: `early phase: ${growthPhase}` };
-  }
-
   const triggerStr = (typeof triggerContent === 'string' ? triggerContent : '').trim();
   const hasContent = triggerStr.length > 0;
   const energy = typeof state.energy === 'number' ? state.energy : 0.5;
   const silenceAffinity = typeof state.silence_affinity === 'number' ? state.silence_affinity : 0.3;
+  const hour = new Date().getHours();
+  const isNight = hour >= 22 || hour < 7;
 
   // Resonanca s temami
   let resonance = { heatLevel: 'cold', readyThemes: [], score: 0 };
@@ -66,46 +63,77 @@ export function decideSynthesisDepth({
   const isNovel = hasContent && memory?.isNovelTrigger ? memory.isNovelTrigger(triggerStr, 0.3) : true;
   const wasRecent = hasContent && memory?.wasRecentlyExpressed ? memory.wasRecentlyExpressed(triggerStr, 10) : false;
 
-  // Sveži feed od poznanih oseb
+  // Sveži feed od poznanih oseb (vedno polna triada — odnos je svet)
   const hasFreshKnownFeed = (feedBuffer || []).some(e => {
     if (!e?.pubkey || typeof memory?.getIdentity !== 'function') return false;
     const identity = memory.getIdentity(e.pubkey);
     return identity && identity.name && identity.name !== 'neznanec' && identity.name !== '';
   });
 
-  // ─── FULL: nove dialektike ali znan sogovornik v feedu ───
-  if (isNovel && energy > 0.4 && hasContent) {
-    return { depth: 'full', reason: 'novel territory', isNovel, resonance: resonance.heatLevel };
+  // ─── HARD SILENT GATES (veljajo za VSA bitja, vključno z embryo/newborn) ───
+  // Stari smart-skip + expressionProb je dušil 80-95% heartbeatov — to JE okus optimizacije.
+  // Brez teh gateov se ekspozicija LLM klicev pomnoži.
+  if (energy < 0.35) return { depth: 'silent', reason: 'low energy' };
+  if (silenceAffinity > 0.75) return { depth: 'silent', reason: 'high silence affinity' };
+  if (wasRecent) return { depth: 'silent', reason: 'recently expressed (echo)' };
+
+  // Cold resonance + idle + high energy → 80% silent (počivamo)
+  if (resonance.heatLevel === 'cold' && idleMinutes > 5 && energy > 0.7 && !hasFreshKnownFeed) {
+    if (Math.random() < 0.80) return { depth: 'silent', reason: 'cold + idle + rested' };
   }
+
+  // Night gate: 22-07h, brez feeda, dovolj energije → 70% silent
+  if (isNight && !hasFreshKnownFeed && energy > 0.5) {
+    if (Math.random() < 0.70) return { depth: 'silent', reason: `night silence (${hour}h)` };
+  }
+
+  // ─── EMBRYO/NEWBORN: če dospemo do tu (mimo silent gates), gremo full ───
+  // Bitje se še gradi — kvantum/kristal sta rezervirana za zrelo strukturo.
+  // Ampak ne forsiramo full na vsak heartbeat: silent gates so že odsejali ~70-80%.
+  if (growthPhase === 'embryo' || growthPhase === 'newborn') {
+    return { depth: 'full', reason: `early phase: ${growthPhase}` };
+  }
+
+  // ─── FULL: dejanski signal ki zasluži 3 LLM klice ───
+  // (a) Znan sogovornik v feedu — odnos je svet, vedno polna teža
   if (hasFreshKnownFeed) {
     return { depth: 'full', reason: 'known sogovornik in feed' };
   }
+  // (b) Nov dražljaj + topla/vroča resonanca + dovolj energije
+  if (isNovel && resonance.heatLevel !== 'cold' && energy > 0.5 && hasContent) {
+    return { depth: 'full', reason: `novel + ${resonance.heatLevel}`, isNovel, resonance: resonance.heatLevel };
+  }
+  // (c) Vroča resonanca sama po sebi (ne glede na novelty) — tema kliče
+  if (resonance.heatLevel === 'hot' && energy > 0.6) {
+    return { depth: 'full', reason: 'hot resonance demands depth' };
+  }
+  // (d) Občasen full na novelty + visoki energiji (mnogo manj agresivno kot prej)
+  // To je preostali "expressionProb" duh — random žrebanje ko je bitje budno in svet svež.
+  if (isNovel && energy > 0.6 && hasContent && Math.random() < 0.15) {
+    return { depth: 'full', reason: 'novel spark (sampled)' };
+  }
 
   // ─── CRYSTAL: redko, ko je idle in ni recentnega izraza ───
-  if (Math.random() < 0.03 && idleMinutes > 5 && !wasRecent && typeof memory?.getCrystalForUtterance === 'function') {
+  if (Math.random() < 0.03 && idleMinutes > 5 && typeof memory?.getCrystalForUtterance === 'function') {
     const crystal = memory.getCrystalForUtterance();
     if (crystal) {
       return { depth: 'crystal', reason: 'crystal ready', crystal };
     }
   }
 
-  // ─── QUANTUM: resonance + energija + ne recentno + ne novo ───
+  // ─── QUANTUM: topla resonanca, ne nova teritorija — single-pass odmev ───
   if (
     resonance.heatLevel !== 'cold' &&
-    energy > 0.6 &&
-    !wasRecent &&
-    !isNovel &&
+    energy > 0.55 &&
     hasContent
   ) {
-    return { depth: 'quantum', reason: `hot resonance (${resonance.heatLevel})`, resonance: resonance.heatLevel };
+    return { depth: 'quantum', reason: `${resonance.heatLevel} echo`, resonance: resonance.heatLevel };
   }
 
-  // ─── SILENT: nothing new under the sun ───
-  let reason = 'nothing new';
-  if (wasRecent) reason = 'recently expressed';
-  else if (energy < 0.4) reason = 'low energy';
-  else if (resonance.heatLevel === 'cold') reason = 'cold resonance';
-  else if (silenceAffinity > 0.7) reason = 'high silence affinity';
+  // ─── SILENT: nič novega pod soncem ───
+  let reason = 'nothing new under the sun';
+  if (resonance.heatLevel === 'cold') reason = 'cold resonance';
+  else if (!isNovel) reason = 'familiar territory';
   return { depth: 'silent', reason };
 }
 
