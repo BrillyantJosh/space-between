@@ -2801,6 +2801,9 @@ memory.markCrystalUttered = function (synapseId) {
 };
 
 // Razporeditev synthesis_depth za zadnje N ur — za dashboard / monitoring
+// NOTE: triads.timestamp je shranjen kot SQLite `datetime('now')` (npr. "2026-04-17 05:30:00"),
+// medtem ko parameter pride v ISO obliki z 'T' in 'Z'. Lexicographic primerjava bi izločila
+// vse vrstice (presledek < 'T'). Zato `datetime(?)` coerce-a parameter v isti format.
 memory.getSynthesisDepthDistribution = function (hours = 24) {
   try {
     const since = new Date(Date.now() - hours * 3600000).toISOString();
@@ -2810,7 +2813,7 @@ memory.getSynthesisDepthDistribution = function (hours = 24) {
         COUNT(*) as count,
         SUM(CASE WHEN synthesis_choice IN ('express','respond') THEN 1 ELSE 0 END) as expressed
       FROM triads
-      WHERE timestamp >= ?
+      WHERE datetime(timestamp) >= datetime(?)
       GROUP BY COALESCE(synthesis_depth, 'full')
       ORDER BY count DESC
     `).all(since);
