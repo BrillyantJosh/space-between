@@ -77,14 +77,24 @@ export function decideSynthesisDepth({
   if (silenceAffinity > 0.75) return { depth: 'silent', reason: 'high silence affinity' };
   if (wasRecent) return { depth: 'silent', reason: 'recently expressed (echo)' };
 
-  // Cold resonance + idle + high energy → 80% silent (počivamo)
-  if (resonance.heatLevel === 'cold' && idleMinutes > 5 && energy > 0.7 && !hasFreshKnownFeed) {
-    if (Math.random() < 0.80) return { depth: 'silent', reason: 'cold + idle + rested' };
+  // Cold resonance + idle + high energy → silent (počivamo)
+  // Z ambient feedom: še vedno 50% silent (relacija ne zahteva odgovora na vsako objavo)
+  if (resonance.heatLevel === 'cold' && idleMinutes > 5 && energy > 0.7) {
+    const p = hasFreshKnownFeed ? 0.50 : 0.80;
+    if (Math.random() < p) return { depth: 'silent', reason: 'cold + idle + rested' };
   }
 
-  // Night gate: 22-07h, brez feeda, dovolj energije → 70% silent
-  if (isNight && !hasFreshKnownFeed && energy > 0.5) {
-    if (Math.random() < 0.70) return { depth: 'silent', reason: `night silence (${hour}h)` };
+  // Night gate: 22-07h, dovolj energije → silent
+  // Z ambient feedom: še vedno 40% silent (noč ostaja noč tudi če nekdo objavi)
+  if (isNight && energy > 0.5) {
+    const p = hasFreshKnownFeed ? 0.40 : 0.70;
+    if (Math.random() < p) return { depth: 'silent', reason: `night silence (${hour}h)` };
+  }
+
+  // Ne-novelty silence: če dražljaj ni nov in nismo v vroči resonanci → 50% silent
+  // (familiar territory ne potrebuje odgovora)
+  if (!isNovel && resonance.heatLevel !== 'hot' && Math.random() < 0.50) {
+    return { depth: 'silent', reason: 'familiar, not hot' };
   }
 
   // ─── EMBRYO/NEWBORN: če dospemo do tu (mimo silent gates), gremo full ───
@@ -99,20 +109,20 @@ export function decideSynthesisDepth({
   // Direktno nagovarjanje (mention/conversation/group) je že full na vrhu.
   // Ambient feed od znanih → quantum echo, ne full (relacija ostaja, brez treh klicev).
   //
-  // (a) Znan sogovornik v feedu + vroča resonanca + sampled — odnos+tema = dialektika
-  if (hasFreshKnownFeed && resonance.heatLevel === 'hot' && Math.random() < 0.30) {
-    return { depth: 'full', reason: 'known + hot resonance', resonance: resonance.heatLevel };
+  // (a) Znan sogovornik v feedu + vroča resonanca + nov + sampled — odnos+tema+novost = dialektika
+  if (hasFreshKnownFeed && resonance.heatLevel === 'hot' && isNovel && Math.random() < 0.15) {
+    return { depth: 'full', reason: 'known + hot + novel', resonance: resonance.heatLevel };
   }
   // (b) Vroča resonanca + nov dražljaj + visoka energija + sampled
-  if (isNovel && resonance.heatLevel === 'hot' && energy > 0.65 && Math.random() < 0.20) {
+  if (isNovel && resonance.heatLevel === 'hot' && energy > 0.65 && Math.random() < 0.10) {
     return { depth: 'full', reason: 'novel + hot + sampled', isNovel, resonance: resonance.heatLevel };
   }
   // (c) Topla resonanca + nov + sampled
-  if (isNovel && resonance.heatLevel === 'warm' && energy > 0.6 && Math.random() < 0.10) {
+  if (isNovel && resonance.heatLevel === 'warm' && energy > 0.6 && Math.random() < 0.05) {
     return { depth: 'full', reason: 'novel + warm + sampled', isNovel, resonance: resonance.heatLevel };
   }
   // (d) Občasen full samo za novelty + visoki energiji — duh starega expressionProb
-  if (isNovel && energy > 0.6 && hasContent && Math.random() < 0.03) {
+  if (isNovel && energy > 0.6 && hasContent && Math.random() < 0.02) {
     return { depth: 'full', reason: 'novel spark (rare sample)' };
   }
 
