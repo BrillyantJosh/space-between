@@ -96,22 +96,23 @@ export function decideSynthesisDepth({
 
   // ─── FULL: dejanski signal ki zasluži 3 LLM klice ───
   // Filozofija: full je drag (3 klici). Rezerviraj za prave dialektike.
-  // Vse ostalo z resonanco → quantum (1 klic, lažji odmev).
+  // Direktno nagovarjanje (mention/conversation/group) je že full na vrhu.
+  // Ambient feed od znanih → quantum echo, ne full (relacija ostaja, brez treh klicev).
   //
-  // (a) Znan sogovornik v feedu — odnos je svet, vedno polna teža
-  if (hasFreshKnownFeed) {
-    return { depth: 'full', reason: 'known sogovornik in feed' };
+  // (a) Znan sogovornik v feedu + vroča resonanca + sampled — odnos+tema = dialektika
+  if (hasFreshKnownFeed && resonance.heatLevel === 'hot' && Math.random() < 0.30) {
+    return { depth: 'full', reason: 'known + hot resonance', resonance: resonance.heatLevel };
   }
-  // (b) Vroča resonanca + nov dražljaj + visoka energija + sampled — kombinacija najmočnejših signalov
-  if (isNovel && resonance.heatLevel === 'hot' && energy > 0.65 && Math.random() < 0.40) {
+  // (b) Vroča resonanca + nov dražljaj + visoka energija + sampled
+  if (isNovel && resonance.heatLevel === 'hot' && energy > 0.65 && Math.random() < 0.20) {
     return { depth: 'full', reason: 'novel + hot + sampled', isNovel, resonance: resonance.heatLevel };
   }
-  // (c) Topla resonanca + nov + sampled — manj agresivno
-  if (isNovel && resonance.heatLevel === 'warm' && energy > 0.6 && Math.random() < 0.20) {
+  // (c) Topla resonanca + nov + sampled
+  if (isNovel && resonance.heatLevel === 'warm' && energy > 0.6 && Math.random() < 0.10) {
     return { depth: 'full', reason: 'novel + warm + sampled', isNovel, resonance: resonance.heatLevel };
   }
   // (d) Občasen full samo za novelty + visoki energiji — duh starega expressionProb
-  if (isNovel && energy > 0.6 && hasContent && Math.random() < 0.05) {
+  if (isNovel && energy > 0.6 && hasContent && Math.random() < 0.03) {
     return { depth: 'full', reason: 'novel spark (rare sample)' };
   }
 
@@ -123,7 +124,10 @@ export function decideSynthesisDepth({
     }
   }
 
-  // ─── QUANTUM: vsa preostala resonanca → single-pass odmev (1 LLM klic) ───
+  // ─── QUANTUM: resonanca ali znan sogovornik → single-pass odmev (1 LLM klic) ───
+  if (hasFreshKnownFeed && energy > 0.4) {
+    return { depth: 'quantum', reason: 'known feed echo', resonance: resonance.heatLevel };
+  }
   if (
     resonance.heatLevel !== 'cold' &&
     energy > 0.5 &&
