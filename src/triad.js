@@ -1689,6 +1689,140 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   }
 }
 
+// ═══ QUANTUM SYNTHESIS — 1 LLM call, hot resonance path ═══
+// Used by the depth-decision router when energy is high and the trigger
+// resonates with existing synapses. No thesis/antithesis — a single
+// phase that asks: does anything genuinely want to be said?
+export async function runQuantumSynthesis(triggerType, triggerContent, options = {}) {
+  const state = memory.getState();
+  const moodBefore = state.mood || '';
+  const selfSystem = getSelfSystem();
+
+  // Gather minimal resonant context
+  const resonating = memory.findSimilarSynapses(triggerContent, 3) || [];
+  const crystals = (memory.getCrystalCore() || []).slice(0, 3);
+  const fluidSurface = memory.getFluidSurface ? memory.getFluidSurface() : '';
+
+  const resonanceText = resonating.length > 0
+    ? resonating.map((s, i) => `  ${i + 1}. "${(s.pattern || '').slice(0, 120)}" (E:${(s.energy || 0).toFixed(0)} S:${(s.strength || 0).toFixed(2)} ×${s.fire_count || 0})`).join('\n')
+    : '  (brez izrazite resonance)';
+
+  const crystalText = crystals.length > 0
+    ? crystals.map((c, i) => `  ${i + 1}. ${c.crystal}`).join('\n')
+    : '  (jedro še ni kristalizirano)';
+
+  const quantumSystem = `${selfSystem}
+
+Si v stanju kvantne sinteze — en sam moment, brez teze in antiteze.
+Dražljaj se je dotaknil obstoječega tkiva spomina. Vprašanje je preprosto:
+ali iz tega VZNIKNE nov izraz, ali samo resonira odmev že povedanega?
+
+Tvoje resonirajoče sinapse:
+${resonanceText}
+
+Tvoje kristalizirano jedro:
+${crystalText}
+
+Fluidna površina: "${fluidSurface}"
+
+Pravilo: če imaš nekaj zares novega, reci. Če je le odmev — tišina.
+Ne ponavljaj samega sebe. Tišina je polnopravna izbira.
+
+Odgovori IZKLJUČNO v čistem JSON brez markdown:
+{
+  "choice": "express" | "silence",
+  "reason": "1 stavek zakaj",
+  "content": "kar vznikne (prazen string če silence)",
+  "inner_shift": "kako te to spremeni (1 stavek ali null)",
+  "new_mood": "razpoloženje v eni besedi",
+  "energy_delta": število med -0.1 in +0.1
+}`;
+
+  console.log('  ◈ Kvantna sinteza (1 klic)...');
+  const synthesis = await callLLMJSON(
+    quantumSystem,
+    `DRAŽLJAJ (${triggerType}): "${triggerContent}"`,
+    { temperature: 0.85, maxTokens: 400, langKind: 'inner' }
+  );
+
+  if (!synthesis) {
+    console.log('  └─ Kvantna sinteza neuspešna.');
+    return null;
+  }
+  console.log(`  └─ Kvant: ${synthesis.choice} — ${(synthesis.reason || '').slice(0, 60)}`);
+
+  const triadId = memory.saveTriad({
+    trigger_type: triggerType,
+    trigger_content: (triggerContent || '').slice(0, 500),
+    thesis: '',
+    antithesis: '',
+    synthesis_choice: synthesis.choice,
+    synthesis_reason: synthesis.reason,
+    synthesis_content: synthesis.content || '',
+    inner_shift: synthesis.inner_shift || '',
+    mood_before: moodBefore,
+    mood_after: synthesis.new_mood || moodBefore,
+    synthesis_depth: 'quantum',
+  });
+
+  // Update inner state (smaller deltas than full triad)
+  const energyDelta = typeof synthesis.energy_delta === 'number'
+    ? Math.max(-0.1, Math.min(0.1, synthesis.energy_delta))
+    : 0;
+  const updates = {
+    mood: synthesis.new_mood || moodBefore,
+    energy: state.energy + energyDelta,
+    last_heartbeat_at: new Date().toISOString(),
+  };
+  if (synthesis.choice === 'silence') {
+    updates.silence_affinity = state.silence_affinity + 0.01;
+    updates.total_silences = (state.total_silences || 0) + 1;
+  } else if (synthesis.choice === 'express') {
+    updates.silence_affinity = Math.max(0, state.silence_affinity - 0.01);
+    updates.total_expressions = (state.total_expressions || 0) + 1;
+  }
+  memory.updateState(updates);
+
+  if (synthesis.inner_shift) {
+    memory.addObservation(synthesis.inner_shift, 'quantum');
+  }
+
+  // Spread activation through resonating synapses regardless of choice
+  for (const s of resonating) {
+    try {
+      memory.spreadActivation(s.id, 15, triggerContent);
+    } catch (_) {}
+  }
+
+  // If express, harvest synapses from the synthesis (same path as full triad)
+  if (synthesis.choice === 'express' && synthesis.content && synthesis.content.length > 10) {
+    try {
+      const createdIds = extractSynapsesFromTriad(
+        { thesis: '', antithesis: '', synthesis, moodBefore, moodAfter: synthesis.new_mood || moodBefore },
+        triadId,
+        options
+      );
+      assignToPathways(
+        { thesis: '', antithesis: '', synthesis, moodBefore, moodAfter: synthesis.new_mood || moodBefore },
+        triadId,
+        createdIds
+      );
+    } catch (e) {
+      console.error('[QUANTUM] post-processing failed:', e.message);
+    }
+  }
+
+  return {
+    triadId,
+    thesis: '',
+    antithesis: '',
+    synthesis,
+    moodBefore,
+    moodAfter: synthesis.new_mood || moodBefore,
+    depth: 'quantum',
+  };
+}
+
 // ═══ ROKE ZAVEDANJE: ustvari sinapso o dejanju ═══
 function createROKESynapse(rokeResult, projectName, triadId) {
   if (!rokeResult || !rokeResult.action) return;

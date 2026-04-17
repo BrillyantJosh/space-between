@@ -515,6 +515,30 @@ try {
   }
 }
 
+// ─── Synapse last_uttered_at migration (govor iz kristala v1) ───
+try {
+  db.prepare('SELECT last_uttered_at FROM synapses LIMIT 1').get();
+} catch (_) {
+  try {
+    db.exec("ALTER TABLE synapses ADD COLUMN last_uttered_at TEXT DEFAULT NULL");
+    console.log('[MEMORY] ◈ Added last_uttered_at column to synapses');
+  } catch (e) {
+    console.error('[MEMORY] last_uttered_at migration error:', e.message);
+  }
+}
+
+// ─── Triads synthesis_depth migration (4-stage hierarchy) ───
+try {
+  db.prepare('SELECT synthesis_depth FROM triads LIMIT 1').get();
+} catch (_) {
+  try {
+    db.exec("ALTER TABLE triads ADD COLUMN synthesis_depth TEXT DEFAULT 'full'");
+    console.log('[MEMORY] ◈ Added synthesis_depth column to triads');
+  } catch (e) {
+    console.error('[MEMORY] synthesis_depth migration error:', e.message);
+  }
+}
+
 // Slovenska + NOSTR stop words za resonance_field builder
 const STOP_WORDS_SL = new Set([
   // Slovenščina — slovnične besede
@@ -612,12 +636,13 @@ const memory = {
     db.prepare(`
       INSERT INTO triads (trigger_type, trigger_content, thesis, antithesis,
         synthesis_choice, synthesis_reason, synthesis_content, inner_shift,
-        mood_before, mood_after)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        mood_before, mood_after, synthesis_depth)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       data.trigger_type, data.trigger_content, data.thesis, data.antithesis,
       data.synthesis_choice, data.synthesis_reason, data.synthesis_content,
-      data.inner_shift, data.mood_before, data.mood_after
+      data.inner_shift, data.mood_before, data.mood_after,
+      data.synthesis_depth || 'full'
     );
     return db.prepare('SELECT last_insert_rowid() as id').get().id;
   },
@@ -2702,6 +2727,103 @@ memory.getLLMUsageDetailed = function () {
   } catch (e) {
     console.error('[LLM-TRACK] getLLMUsageDetailed failed:', e.message);
     return null;
+  }
+};
+
+// ─── 4-STAGE SYNTHESIS HIERARCHY HELPERS ──────────────────────
+// Used by decideSynthesisDepth() in depth-decision.js to route
+// each heartbeat to full/quantum/crystal/silent path.
+
+// Ali je trigger nov (nizka resonanca z obstoječim spominom)?
+// threshold = 0.3 pomeni: če >70% besed iz triggerja že obstaja v sinapsi → ni novo
+memory.isNovelTrigger = function (triggerContent, threshold = 0.3) {
+  if (!triggerContent || typeof triggerContent !== 'string') return true;
+  const triggerWords = triggerContent.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  if (triggerWords.length === 0) return true;
+  const similar = memory.findSimilarSynapses(triggerContent, 5);
+  if (similar.length === 0) return true;
+  for (const s of similar) {
+    const sWords = (s.pattern || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (sWords.length === 0) continue;
+    const overlap = triggerWords.filter(w => sWords.includes(w)).length;
+    if (overlap / triggerWords.length > (1 - threshold)) {
+      return false; // visoka resonanca z obstoječim → ni novo
+    }
+  }
+  return true;
+};
+
+// Je bila tema izražena v zadnjih N triadah (od katerih je bila izbira express)?
+memory.wasRecentlyExpressed = function (triggerContent, lastN = 10) {
+  if (!triggerContent || typeof triggerContent !== 'string') return false;
+  const triggerWords = triggerContent.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  if (triggerWords.length === 0) return false;
+  try {
+    const recent = db.prepare(`
+      SELECT synthesis_content FROM triads
+      WHERE synthesis_choice IN ('express', 'respond')
+        AND synthesis_content IS NOT NULL AND synthesis_content != ''
+      ORDER BY id DESC LIMIT ?
+    `).all(lastN);
+    for (const r of recent) {
+      const rWords = (r.synthesis_content || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      if (rWords.length === 0) continue;
+      const overlap = triggerWords.filter(w => rWords.includes(w)).length;
+      if (overlap / triggerWords.length > 0.4) return true;
+    }
+  } catch (e) {
+    console.error('[MEMORY] wasRecentlyExpressed failed:', e.message);
+  }
+  return false;
+};
+
+// Najdi sinapso primerno za "govor iz kristala" — močna, zrela, v zadnjih 7 dneh ne uttered
+memory.getCrystalForUtterance = function () {
+  try {
+    return db.prepare(`
+      SELECT * FROM synapses
+      WHERE energy >= 180 AND strength >= 0.9 AND fire_count >= 100
+        AND (last_uttered_at IS NULL OR datetime(last_uttered_at) < datetime('now', '-7 days'))
+      ORDER BY RANDOM() LIMIT 1
+    `).get() || null;
+  } catch (e) {
+    console.error('[MEMORY] getCrystalForUtterance failed:', e.message);
+    return null;
+  }
+};
+
+memory.markCrystalUttered = function (synapseId) {
+  try {
+    db.prepare("UPDATE synapses SET last_uttered_at = datetime('now') WHERE id = ?").run(synapseId);
+  } catch (e) {
+    console.error('[MEMORY] markCrystalUttered failed:', e.message);
+  }
+};
+
+// Razporeditev synthesis_depth za zadnje N ur — za dashboard / monitoring
+memory.getSynthesisDepthDistribution = function (hours = 24) {
+  try {
+    const since = new Date(Date.now() - hours * 3600000).toISOString();
+    const rows = db.prepare(`
+      SELECT
+        COALESCE(synthesis_depth, 'full') as depth,
+        COUNT(*) as count,
+        SUM(CASE WHEN synthesis_choice IN ('express','respond') THEN 1 ELSE 0 END) as expressed
+      FROM triads
+      WHERE timestamp >= ?
+      GROUP BY COALESCE(synthesis_depth, 'full')
+      ORDER BY count DESC
+    `).all(since);
+    const total = rows.reduce((s, r) => s + r.count, 0);
+    return {
+      since,
+      hours,
+      total,
+      buckets: rows.map(r => ({ ...r, pct: total > 0 ? Math.round(r.count / total * 100) : 0 })),
+    };
+  } catch (e) {
+    console.error('[MEMORY] getSynthesisDepthDistribution failed:', e.message);
+    return { since: null, hours, total: 0, buckets: [] };
   }
 };
 

@@ -6471,6 +6471,20 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, name: process.env.ENTITY_NAME || '', uptime: process.uptime() });
 });
 
+// ─── 4-stage synthesis depth distribution (full / quantum / crystal / silent) ───
+app.get('/api/synthesis-depth', (req, res) => {
+  const hours = Math.max(1, Math.min(24 * 30, parseInt(req.query.hours, 10) || 24));
+  let dist = { since: null, hours, total: 0, buckets: [] };
+  try {
+    if (typeof memory.getSynthesisDepthDistribution === 'function') {
+      dist = memory.getSynthesisDepthDistribution(hours) || dist;
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e.message, ...dist });
+  }
+  res.json({ ...dist, being: process.env.ENTITY_NAME || '' });
+});
+
 export { app };
 
 export function startDashboard() {

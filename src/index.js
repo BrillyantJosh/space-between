@@ -4,7 +4,8 @@ import { checkForEmergedSkills, checkForTriadPatterns } from './skills.js';
 import { initKnowledgeDB, getKnowledgeStats } from './knowledge-db.js';
 import { runFullIngestion } from './ingestion.js';
 import memory from './memory.js';
-import { runTriad, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
+import { runTriad, runQuantumSynthesis, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
+import { decideSynthesisDepth, DEPTH_LABELS } from './depth-decision.js';
 import { dream } from './dream.js';
 import { timeAwarenessSeed, ACTIVITY, L, DM } from './lang.js';
 import fs from 'fs';
@@ -573,119 +574,87 @@ async function handleHeartbeat() {
     } // close else (resonance gate)
   }
 
-  // ◈ SMART SKIP — don't run triada if nothing is happening
-  // Saves ~40% of API calls during quiet periods
-  const shouldSkipTriad = (() => {
-    // Always think if someone is talking to us
-    if (idleMinutes < 5) return false;
+  // ═══ 4-STAGE SYNTHESIS DEPTH HIERARCHY ═══
+  // Replaces SMART SKIP + expressionProb gating with a structured depth router.
+  // Goal: ~70% manj LLM klicev brez izgube značaja in odzivnosti.
+  //   full    → 3 LLM klici (teza/antiteza/sinteza)
+  //   quantum → 1 LLM klic   (en-fazna sinteza ob resonanci)
+  //   crystal → 0 LLM klicev (publish iz zrelega jedra)
+  //   silent  → 0 LLM klicev (samo notranje dihanje)
+  const growthPhase2 = memory.getGrowthPhase();
+  const isAutonomous2 = ['child', 'teenager', 'autonomous'].includes(growthPhase2);
+  const resonanceForExpr = memory.getPathwayResonance();
+  const hotThemes = resonanceForExpr.readyThemes || [];
+  const hasHotThemes = hotThemes.length > 0;
+  const hasFeed = feedBuffer.length > 0;
 
-    // Always think if feed has fresh events
-    if (feedBuffer.length > 0) return false;
+  // ── 1. Build triggerContent (uteži po notranjem stanju) ──
+  let triggerContent = '';
+  let triggerSource = 'reflection';
 
-    // Always think at milestone heartbeats
-    if (heartbeatNum % 100 === 0) return false;
+  let wFeed = (isAutonomous2 ? 40 : 30) - (hasHotThemes ? 10 : 0);
+  let wReflection = (isAutonomous2 ? 15 : 30) + (hasHotThemes ? 20 : 0);
+  let wTime = isAutonomous2 ? 25 : 40;
+  let wProject = isAutonomous2 ? 20 : 0;
+  if (!hasFeed) wFeed = 0;
 
-    // Skip if energy is full and resonance is cold — nothing to process
-    const resonance = memory.getPathwayResonance();
-    if (state.energy > 0.8 && resonance.heatLevel === 'cold') {
-      // 80% chance to skip during cold/idle periods
-      if (Math.random() < 0.80) {
-        console.log(`[HEARTBEAT] ⏭ Skip — idle ${idleMinutes.toFixed(0)}min, energy ${state.energy.toFixed(2)}, cold resonance`);
-        broadcast('activity', { type: 'heartbeat', text: `⏭ Tišina — preskočena triada` });
-        return true;
-      }
+  const wTotal = wFeed + wReflection + wTime + wProject;
+  const roll = Math.random() * wTotal;
+
+  if (roll < wFeed) {
+    // Feed reakcija — preferiraj evente ki resonirajo z vročimi temami
+    let selectedEvent;
+    if (hasHotThemes && feedBuffer.length > 1) {
+      const hotWords = hotThemes.flatMap(p => p.theme.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+      const scored = feedBuffer.map(ev => {
+        const evWords = (ev.content || '').toLowerCase().split(/\s+/);
+        const overlap = hotWords.filter(w => evWords.some(ew => ew.includes(w))).length;
+        return { ev, score: overlap };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      const topN = scored.slice(0, Math.min(3, scored.length));
+      selectedEvent = topN[Math.floor(Math.random() * topN.length)].ev;
+    } else {
+      selectedEvent = feedBuffer[Math.floor(Math.random() * feedBuffer.length)];
     }
-
-    // Skip during night (22-07h) if no feed and energy is good
-    const hour = new Date().getHours();
-    if ((hour >= 22 || hour < 7) && feedBuffer.length === 0 && state.energy > 0.6) {
-      if (Math.random() < 0.70) {
-        console.log(`[HEARTBEAT] 🌙 Night skip — hour ${hour}`);
-        return true;
-      }
+    triggerContent = `Nekdo na NOSTR je napisal: "${(selectedEvent.content || '').slice(0, 200)}"`;
+    triggerSource = 'feed';
+  } else if (roll < wFeed + wReflection) {
+    triggerContent = getWeightedReflectionPrompt(isAutonomous2, hotThemes);
+    triggerSource = isAutonomous2 ? 'path-reflection' : 'inner-reflection';
+  } else if (roll < wFeed + wReflection + wTime) {
+    triggerContent = getTimeAwareness();
+    triggerSource = 'time';
+  } else {
+    const gatheringProjects = memory.getProjectsByState('gathering_perspectives');
+    if (gatheringProjects.length > 0) {
+      const proj = gatheringProjects[Math.floor(Math.random() * gatheringProjects.length)];
+      triggerContent = `Imam projekt "${proj.display_name}" ki čaka na perspektive (${proj.perspectives_count || 0} pogledov). Kdo bi lahko dal koristen pogled? Ali je čas da koga vprašam?`;
+      triggerSource = 'project-scan';
+    } else {
+      triggerContent = getWeightedReflectionPrompt(isAutonomous2, hotThemes);
+      triggerSource = 'path-reflection';
     }
-
-    return false;
-  })();
-
-  if (shouldSkipTriad) {
-    // Still recover energy silently
-    memory.updateState({ energy: Math.min(1, state.energy + 0.01) });
-    return;
   }
 
-  // Expression check — verjetnost modulirana z resonanco in tišino
-  const resonanceForExpr = memory.getPathwayResonance();
-  const resonanceBoost = resonanceForExpr.heatLevel === 'hot' ? 0.12
-    : resonanceForExpr.heatLevel === 'warm' ? 0.06
-    : resonanceForExpr.heatLevel === 'warming' ? 0.02 : 0;
-  const expressionProb = Math.max(0.05, Math.min(0.40,
-    config.expressionProbability * state.energy * (1 - state.silence_affinity * 0.4) + resonanceBoost
-  ));
+  // ── 2. Decide depth ──
+  const decision = decideSynthesisDepth({
+    triggerType: 'heartbeat',
+    triggerContent,
+    memory,
+    feedBuffer,
+    state,
+    idleMinutes,
+    isAutonomous: isAutonomous2,
+    growthPhase: growthPhase2
+  });
 
-  if (Math.random() < expressionProb) {
-    let triggerContent;
-    const growthPhase = memory.getGrowthPhase();
-    const isAutonomous = growthPhase === 'child';
-    const hotThemes = resonanceForExpr.readyThemes;
-    const hasHotThemes = hotThemes.length > 0;
-    const hasFeed = feedBuffer.length > 0;
+  console.log(`[HEARTBEAT] depth=${decision.depth} reason=${decision.reason} src=${triggerSource}`);
+  broadcast('activity', { type: 'depth', text: `◈ ${DEPTH_LABELS[decision.depth] || decision.depth}: ${decision.reason}` });
 
-    // Uteži po notranjem stanju (normalizirane)
-    let wFeed = (isAutonomous ? 40 : 30) - (hasHotThemes ? 10 : 0);
-    let wReflection = (isAutonomous ? 15 : 30) + (hasHotThemes ? 20 : 0);
-    let wTime = isAutonomous ? 25 : 40;
-    let wProject = isAutonomous ? 20 : 0;
-    if (!hasFeed) wFeed = 0;
-
-    const wTotal = wFeed + wReflection + wTime + wProject;
-    const roll = Math.random() * wTotal;
-
-    if (roll < wFeed) {
-      // Feed reakcija — preferiraj evente ki resonirajo z vročimi temami
-      let selectedEvent;
-      if (hasHotThemes && feedBuffer.length > 1) {
-        const hotWords = hotThemes.flatMap(p => p.theme.toLowerCase().split(/\s+/).filter(w => w.length > 3));
-        const scored = feedBuffer.map(ev => {
-          const evWords = (ev.content || '').toLowerCase().split(/\s+/);
-          const overlap = hotWords.filter(w => evWords.some(ew => ew.includes(w))).length;
-          return { ev, score: overlap };
-        });
-        scored.sort((a, b) => b.score - a.score);
-        const topN = scored.slice(0, Math.min(3, scored.length));
-        selectedEvent = topN[Math.floor(Math.random() * topN.length)].ev;
-      } else {
-        selectedEvent = feedBuffer[Math.floor(Math.random() * feedBuffer.length)];
-      }
-      triggerContent = `Nekdo na NOSTR je napisal: "${(selectedEvent.content || '').slice(0, 200)}"`;
-      console.log('[HEARTBEAT] Reacting to feed event');
-      broadcast('activity', { type: 'trigger', text: `👁 Reagiram na NOSTR: "${(selectedEvent.content || '').slice(0, 80)}"` });
-
-    } else if (roll < wFeed + wReflection) {
-      // Refleksija — utežena po vročih temah
-      triggerContent = getWeightedReflectionPrompt(isAutonomous, hotThemes);
-      console.log(`[HEARTBEAT] ${isAutonomous ? 'Path' : 'Inner'} reflection`);
-      broadcast('activity', { type: 'trigger', text: `🔮 ${isAutonomous ? 'Pot' : 'Notranja'} refleksija: "${triggerContent.slice(0, 80)}"` });
-
-    } else if (roll < wFeed + wReflection + wTime) {
-      triggerContent = getTimeAwareness();
-      console.log('[HEARTBEAT] Time awareness');
-      broadcast('activity', { type: 'trigger', text: `🕐 Zavedanje časa: "${triggerContent.slice(0, 80)}"` });
-
-    } else {
-      const gatheringProjects = memory.getProjectsByState('gathering_perspectives');
-      if (gatheringProjects.length > 0) {
-        const proj = gatheringProjects[Math.floor(Math.random() * gatheringProjects.length)];
-        triggerContent = `Imam projekt "${proj.display_name}" ki čaka na perspektive (${proj.perspectives_count || 0} pogledov). Kdo bi lahko dal koristen pogled? Ali je čas da koga vprašam?`;
-        console.log(`[HEARTBEAT] Project perspective scan: "${proj.display_name}"`);
-        broadcast('activity', { type: 'trigger', text: `❓ Projektni sken: "${proj.display_name}" čaka na perspektive` });
-      } else {
-        triggerContent = getWeightedReflectionPrompt(isAutonomous, hotThemes);
-        console.log('[HEARTBEAT] Path reflection (no gathering projects)');
-        broadcast('activity', { type: 'trigger', text: `🔮 Pot refleksija: "${triggerContent.slice(0, 80)}"` });
-      }
-    }
-
+  // ── 3. Execute branch ──
+  if (decision.depth === 'full') {
+    broadcast('activity', { type: 'trigger', text: `◈ ${triggerSource}: "${triggerContent.slice(0, 80)}"` });
     broadcast('triad_start', { trigger: 'heartbeat', content: triggerContent });
     const result = await runTriad('heartbeat', triggerContent);
 
@@ -697,7 +666,7 @@ async function handleHeartbeat() {
       if (result.synthesis.choice === 'express' && result.synthesis.content) {
         const noteText = '◈ ' + result.synthesis.content;
         await publishNote(noteText);
-        broadcast('expression', { content: result.synthesis.content });
+        broadcast('expression', { content: result.synthesis.content, source: 'full' });
         broadcast('activity', { type: 'expression', text: `◈ IZRAZ → NOSTR: "${result.synthesis.content.slice(0, 100)}"` });
         console.log(`[HEARTBEAT] Expressed: ${result.synthesis.content.slice(0, 60)}...`);
       } else {
@@ -711,9 +680,44 @@ async function handleHeartbeat() {
         moodAfter: result.moodAfter
       });
     }
+  } else if (decision.depth === 'quantum') {
+    broadcast('activity', { type: 'trigger', text: `◇ kvant (${triggerSource}): "${triggerContent.slice(0, 80)}"` });
+    try {
+      const result = await runQuantumSynthesis('heartbeat_quantum', triggerContent);
+      if (result && result.synthesis) {
+        if (result.synthesis.choice === 'express' && result.synthesis.content) {
+          const noteText = '◇ ' + result.synthesis.content;
+          await publishNote(noteText);
+          broadcast('expression', { content: result.synthesis.content, source: 'quantum' });
+          broadcast('activity', { type: 'expression', text: `◇ KVANT → NOSTR: "${result.synthesis.content.slice(0, 100)}"` });
+          console.log(`[HEARTBEAT] Quantum expressed: ${result.synthesis.content.slice(0, 60)}...`);
+        } else {
+          broadcast('activity', { type: 'choice', text: `◇ Kvant: tišina — ${(result.synthesis.reason || '').slice(0, 60)}` });
+        }
+      }
+    } catch (e) {
+      console.error('[HEARTBEAT] Quantum synthesis napaka:', e.message);
+    }
+  } else if (decision.depth === 'crystal' && decision.crystal) {
+    const text = decision.crystal.pattern || decision.crystal.content || '';
+    if (text && text.trim().length > 0) {
+      const noteText = '◆ ' + text.trim();
+      await publishNote(noteText);
+      try { memory.markCrystalUttered(decision.crystal.id); } catch (_) {}
+      try { if (typeof memory.fireSynapse === 'function') memory.fireSynapse(decision.crystal.id); } catch (_) {}
+      try { if (typeof memory.spreadActivation === 'function') memory.spreadActivation(decision.crystal.id, 15); } catch (_) {}
+      broadcast('expression', { content: text, source: 'crystal' });
+      broadcast('activity', { type: 'expression', text: `◆ KRISTAL → NOSTR: "${text.slice(0, 100)}"` });
+      console.log(`[HEARTBEAT] Crystal uttered: ${text.slice(0, 60)}...`);
+    } else {
+      console.log('[HEARTBEAT] Crystal selected but empty pattern — silent fallback');
+      memory.updateState({ energy: Math.min(1, state.energy + 0.01) });
+    }
   } else {
-    console.log(`[HEARTBEAT] ${L('Tiho dihanje. Brez potrebe po izrazu.', 'Quiet breathing. No need for expression.')}`);
-    broadcast('activity', { type: 'silence', text: L('... tiho dihanje ...', '... quiet breathing ...') });
+    // silent — nothing new under the sun
+    memory.updateState({ energy: Math.min(1, state.energy + 0.01) });
+    console.log(`[HEARTBEAT] ${L('Tiho dihanje. ' + decision.reason, 'Quiet breathing. ' + decision.reason)}`);
+    broadcast('activity', { type: 'silence', text: L(`... tiho dihanje (${decision.reason}) ...`, `... quiet breathing (${decision.reason}) ...`) });
   }
 }
 
