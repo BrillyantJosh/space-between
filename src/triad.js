@@ -1325,7 +1325,7 @@ Ne vsiljuj tega — samo kadar je naravno.`;
               const entry = `\n\n## Spoznanje (${timestamp})\n${roke_concept.trim()}`;
               fs.appendFileSync(knowledgeFile, entry, 'utf8');
               rokeResult.detail = `${safeTarget}: "${roke_concept.slice(0, 60)}"`;
-              console.log(`[ROKE] Sožitje zapisala v znanje: ${safeTarget}`);
+              console.log(`[ROKE] ${memory.getDisplayName()} zapisala v znanje: ${safeTarget}`);
               memory.addObservation(
                 `Zapisala sem v zunanji spomin (${safeTarget}): "${roke_concept.slice(0, 80)}"`,
                 'roke_write_knowledge'
@@ -1440,7 +1440,7 @@ Ne vsiljuj tega — samo kadar je naravno.`;
                 memory.saveMessage(recipientPubkey, 'assistant', roke_concept, 'roke_reach_out');
                 memory.saveActivity('roke_reach_out', `${recipientPubkey.slice(0, 12)}: "${roke_concept.slice(0, 80)}"`);
                 rokeResult.detail = `→ ${recipientPubkey.slice(0, 12)}: "${roke_concept.slice(0, 60)}"`;
-                console.log(`[ROKE] Sožitje se javila: ${recipientPubkey.slice(0, 12)}... — "${roke_concept.slice(0, 60)}"`);
+                console.log(`[ROKE] ${memory.getDisplayName()} se javila: ${recipientPubkey.slice(0, 12)}... — "${roke_concept.slice(0, 60)}"`);
                 memory.addObservation(
                   `Sama sem se javila ${roke_target === 'creator' ? 'očetu' : recipientPubkey.slice(0, 12)}: "${roke_concept.slice(0, 80)}"`,
                   'roke_reach_out'

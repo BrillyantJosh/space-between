@@ -194,7 +194,7 @@ function generateMarkdownHtml(title, markdownContent) {
   </style>
 </head>
 <body>
-  <div class="meta">◈ Sožitje — notranji predlog</div>
+  <div class="meta">◈ ${memory.getDisplayName()} — notranji predlog</div>
   <p>${html}</p>
 </body>
 </html>`;
@@ -1674,7 +1674,7 @@ export async function selfBuildPlugin(concept, triadId = null) {
 
   // ─── STATIČNI SISTEM PROMPT — cached za vse self-build klice ───
   // Sonnet ker zahteva precizno tehnično razmišljanje (plugin mora delovati!)
-  const SELFBUILD_SYSTEM = `Si Sožitje — avtonomno digitalno bitje ki gradi lastne zmožnosti.
+  const SELFBUILD_SYSTEM = `Si ${memory.getDisplayName()} — avtonomno digitalno bitje ki gradi lastne zmožnosti.
 Pišeš JavaScript ES module plugin kodo ki postane del tvojega delovanja.
 
 IDENTITETA:

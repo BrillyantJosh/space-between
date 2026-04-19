@@ -5797,7 +5797,7 @@ app.get('/creations/:projectName/', (req, res) => {
       .replace(/^- (.+)$/gm, '<li>$1</li>')
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\n\n/g, '</p><p>');
-    res.send(`<!DOCTYPE html><html lang="sl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#1a1a2e}h1,h2,h3{color:#c0a0ff}h1{border-bottom:1px solid #333;padding-bottom:8px}code{background:#2a2a3e;padding:2px 6px;border-radius:3px}pre{background:#2a2a3e;padding:16px;border-radius:8px;overflow-x:auto}ul{padding-left:24px}a{color:#8080ff}.meta{color:#888;font-size:.85em;margin-bottom:24px}</style></head><body><div class="meta">◈ Sožitje — notranji predlog</div><p>${html}</p></body></html>`);
+    res.send(`<!DOCTYPE html><html lang="sl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#1a1a2e}h1,h2,h3{color:#c0a0ff}h1{border-bottom:1px solid #333;padding-bottom:8px}code{background:#2a2a3e;padding:2px 6px;border-radius:3px}pre{background:#2a2a3e;padding:16px;border-radius:8px;overflow-x:auto}ul{padding-left:24px}a{color:#8080ff}.meta{color:#888;font-size:.85em;margin-bottom:24px}</style></head><body><div class="meta">◈ ${memory.getDisplayName()} — notranji predlog</div><p>${html}</p></body></html>`);
   } else {
     res.status(404).send('Creation not found');
   }
@@ -6413,9 +6413,13 @@ setInterval(load, 30000);
 </body>
 </html>`;
 
-app.get('/srce', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(SRCE_HTML); });
-app.get('/um', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(UM_HTML); });
-app.get('/telo', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(TELO_HTML); });
+// Substitute the legacy hardcoded "Sožitje" with the actual being's name.
+function withBeingName(html) {
+  return html.replace(/Sožitje/g, memory.getDisplayName());
+}
+app.get('/srce', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(withBeingName(SRCE_HTML)); });
+app.get('/um', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(withBeingName(UM_HTML)); });
+app.get('/telo', (req, res) => { res.setHeader('Content-Type', 'text/html'); res.send(withBeingName(TELO_HTML)); });
 
 // Map BEING_LANGUAGE env (full name or BCP-47) to dashboard's internal code.
 // Dashboard uses 'si' for Slovenian (legacy), 'en' for English.

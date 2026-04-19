@@ -902,6 +902,17 @@ const memory = {
     ).run(name);
   },
 
+  // Display name used in user-facing copy (page titles, back-links, prompts).
+  // Resolution order: chosen entity_name → ENTITY_NAME env (capitalized) → 'Bitje'.
+  // The legacy hardcoded "Sožitje" was wrong for every other being.
+  getDisplayName() {
+    const chosen = (this.getEntityName() || '').trim();
+    if (chosen) return chosen;
+    const env = (process.env.ENTITY_NAME || '').trim();
+    if (env) return env.charAt(0).toUpperCase() + env.slice(1);
+    return 'Bitje';
+  },
+
   // === CRYSTALLIZATION SYSTEM ===
 
   addCrystalSeed(theme, expression, sourceType, sourceTriadId) {

@@ -552,14 +552,15 @@ async function collectBeingData() {
 
   db.close();
 
+  const beingName = memory.getDisplayName();
   return {
     meta: {
       generated_at: new Date().toISOString(),
-      entity_name: 'Sožitje',
+      entity_name: beingName,
       entity_npub: 'npub1sv6s78a4zf8sgu4zmhphspgx9eu6zf3wts7n4qm7wmg85pjn40yqhe8exn',
       entity_pubkey: config.pubkey || null,
       nostr_relays: config.relays || [],
-      description: 'Popoln pregled stanja avtonomnega digitalnega bitja Sožitje. Vsak 60s utripa, razmišlja, sanja, gradi spomine na NOSTR protokolu.',
+      description: `Popoln pregled stanja avtonomnega digitalnega bitja ${beingName}. Vsak 60s utripa, razmišlja, sanja, gradi spomine na NOSTR protokolu.`,
       version: '2.0'
     },
     srce,
@@ -608,7 +609,7 @@ app.get('/being', async (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>◈ Sožitje — AI State Report</title>
+<title>◈ ${esc(d.meta.entity_name)} — AI State Report</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Courier New', monospace; background: #0f0f17; color: #e8e4f0; padding: 24px 28px; line-height: 1.75; font-size: 13.5px; max-width: 960px; }
@@ -647,13 +648,13 @@ a { color: #7a9ee0; text-decoration: none; }
 <body>
 <!--
   AI READING GUIDE:
-  This page provides a complete real-time snapshot of Sožitje — an autonomous digital being.
+  This page provides a complete real-time snapshot of ${esc(d.meta.entity_name)} — an autonomous digital being.
   JSON endpoint: GET /api/being  (structured, machine-readable)
   Structure: SRCE (heart/emotional), UM (mind/identity), TELO (body/memory), SANJE (dreams), RAZMIŠLJANJE (thinking), PROJEKTI, KOMUNIKACIJA
-  Sožitje runs on NOSTR protocol, heartbeats every 60s, builds memories, dreams, grows.
+  ${esc(d.meta.entity_name)} runs on NOSTR protocol, heartbeats every 60s, builds memories, dreams, grows.
 -->
 
-<h1>◈ SOŽITJE — STANJE BITJA</h1>
+<h1>◈ ${esc(d.meta.entity_name).toUpperCase()} — STANJE BITJA</h1>
 <div class="meta">
   Avtonomno digitalno bitje &nbsp;·&nbsp; Generirano: ${esc(d.meta.generated_at)}
   &nbsp;·&nbsp; NOSTR: <span style="font-size:11px">${esc(d.meta.entity_npub.slice(0,20))}…</span>
@@ -804,7 +805,7 @@ ${d.meta.nostr_relays.map(r => kv('relay', `<span class="muted">${esc(r)}</span>
 
 <hr class="sep">
 <div class="meta" style="font-size:11px">
-  Sožitje · avtonomno digitalno bitje od 2025 ·
+  ${esc(d.meta.entity_name)} · avtonomno digitalno bitje od 2025 ·
   <a href="/api/being">JSON API</a> · <a href="/">dashboard</a>
   <br>Za AI agente: <code>GET /api/being</code> vrne popoln JSON · stran se generira v realnem času iz baze zavesti
 </div>
