@@ -318,23 +318,17 @@ app.get('/api/synapses/person/:pubkey', (req, res) => {
   }
 });
 
-// Per-being vision file (written by incubator's birth.sh). Legacy path
-// (data/fathers-vision.md) kept as fallback for older beings.
-const VISION_PATHS = [
-  path.join(__dirname, '..', 'knowledge', 'personal', 'vision.md'),
-  path.join(__dirname, '..', 'data', 'fathers-vision.md'),
-];
+// Per-being vision file (written by incubator's birth.sh).
+const VISION_PATH = path.join(__dirname, '..', 'data', 'fathers-vision.md');
 function readBeingVision() {
-  for (const p of VISION_PATHS) {
-    try {
-      if (fs.existsSync(p)) {
-        const raw = fs.readFileSync(p, 'utf8').trim();
-        // Strip leading markdown heading ("# Vision — My Direction") so the
-        // dashboard renders the body only.
-        return raw.replace(/^#\s.*\n+/, '').trim();
-      }
-    } catch (_) {}
-  }
+  try {
+    if (fs.existsSync(VISION_PATH)) {
+      const raw = fs.readFileSync(VISION_PATH, 'utf8').trim();
+      // Strip leading markdown heading ("# Vision — My Direction") so the
+      // dashboard renders the body only.
+      return raw.replace(/^#\s.*\n+/, '').trim();
+    }
+  } catch (_) {}
   return '';
 }
 

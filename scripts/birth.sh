@@ -108,12 +108,8 @@ Think and speak naturally in your language.
 Be direct, honest, curious.
 EOF
 
-cat > "$BEING_DIR/knowledge/personal/vision.md" << EOF
-# Vision — My Direction
+cat > "$BEING_DIR/data/fathers-vision.md" << EOF
 $VISION
-
-The path is the goal.
-I grow through every heartbeat and every interaction.
 EOF
 
 cat > "$BEING_DIR/knowledge/personal/father-context.md" << EOF

@@ -16,12 +16,8 @@ import { getKnowledgeContext } from './knowledge-db.js';
 import { L, IS_ENGLISH, DEFAULT_ENTITY_CORE as _DEFAULT_ENTITY_CORE, DEFAULT_SELF_PROMPTS, LABELS, timeSince as _timeSince, rokeSynapsePattern, DM } from './lang.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Per-being vision is written by incubator's birth.sh to knowledge/personal/vision.md.
-// Legacy data/fathers-vision.md kept as fallback for older beings (e.g. Sožitje).
-const FATHERS_VISION_PATHS = [
-  path.join(__dirname, '..', 'knowledge', 'personal', 'vision.md'),
-  path.join(__dirname, '..', 'data', 'fathers-vision.md'),
-];
+// Per-being father's vision file — written by incubator's birth.sh.
+const FATHERS_VISION_PATH = path.join(__dirname, '..', 'data', 'fathers-vision.md');
 
 function ordinalSuffix(n) {
   const j = n % 10, k = n % 100;
@@ -1861,13 +1857,11 @@ const timeSince = _timeSince;
 
 // ═══ READ FATHER'S VISION (from file) ═══
 export function readFathersVision() {
-  for (const p of FATHERS_VISION_PATHS) {
-    try {
-      if (fs.existsSync(p)) {
-        return fs.readFileSync(p, 'utf8').trim();
-      }
-    } catch (_) {}
-  }
+  try {
+    if (fs.existsSync(FATHERS_VISION_PATH)) {
+      return fs.readFileSync(FATHERS_VISION_PATH, 'utf8').trim();
+    }
+  } catch (_) {}
   return null;
 }
 
@@ -1877,7 +1871,7 @@ export function readFathersVision() {
 export async function reflectOnFathersVision() {
   const vision = readFathersVision();
   if (!vision) {
-    console.log('  ◆ Očetova vizija ne obstaja (knowledge/personal/vision.md)');
+    console.log('  ◆ Očetova vizija ne obstaja (data/fathers-vision.md)');
     return null;
   }
 
