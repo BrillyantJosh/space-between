@@ -1,11 +1,11 @@
 // ═══ SPOSOBNOST: ask-source ═══
-// Vpraša očeta za NOSTR vir o osebi ali temi ki je ni mogoče najti.
-// Cooldown 24h per tema da ne zasiplje z istimi vprašanji.
+// Vpraša svojega ustvarjalca (po imenu) za NOSTR vir o osebi ali temi
+// ki je ni mogoče najti. Cooldown 24h per tema da ne zasiplje.
 import { DM } from '../lang.js';
 
 export default {
   name: 'ask-source',
-  description: 'Vprašam očeta za NOSTR vir (npub, relay) o osebi ali temi ki je ne poznam',
+  description: 'Vprašam svojega ustvarjalca za NOSTR vir (npub, relay) o osebi ali temi ki je ne poznam',
   when: 'Ko po relay-refresh in fetch-profile nisi našla nič — zadnja možnost preden rečeš "ne vem"',
   conversationAllowed: true,
   heartbeatAllowed: false,
@@ -28,11 +28,12 @@ export default {
       return { outcome: 'skipped', detail: 'cooldown: že vprašano za to temo' };
     }
 
-    const msg = DM.askSource(roke_target, roke_concept);
+    const cName = memory.getCreatorName('Oče');
+    const msg = DM.askSource(roke_target, roke_concept, cName);
     await sendDM(config.creatorPubkey, msg);
     memory.saveActivity('roke_ask_source', `${roke_target.slice(0, 30)}: "${roke_concept.slice(0, 60)}"`);
-    memory.addObservation(`Vprašala sem očeta za vir o: ${roke_target}`, 'roke_ask_source');
-    console.log(`[ROKE] ask-source: vprašala za "${roke_target}"`);
-    return { outcome: 'success', detail: `→ oče: "${roke_target.slice(0, 30)}"` };
+    memory.addObservation(`Vprašala sem ${cName} za vir o: ${roke_target}`, 'roke_ask_source');
+    console.log(`[ROKE] ask-source: vprašala ${cName} za "${roke_target}"`);
+    return { outcome: 'success', detail: `→ ${cName}: "${roke_target.slice(0, 30)}"` };
   }
 };

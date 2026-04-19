@@ -4078,7 +4078,7 @@ const UI_STRINGS = {
     statusLabel: 'Stanje:', directionLabel: 'Smer:', timeline: '📅 Časovnica', noSteps: 'Ni korakov.',
     // Growth phases
     embryo: '🥒 Embrij', newborn: '🌱 Novorojenec — iščem svojo smer',
-    crystallizing: '◆ Kristalizacija smeri — čakam na odgovor očeta...',
+    crystallizing: '◆ Kristalizacija smeri — čakam na odgovor ustvarjalca...',
     child: '◈ Otrok — poznam svojo smer', teenager: '✦ Najstnik — rastem v globino',
     // Valence labels
     veryPositive: '🟢 Zelo pozitiven vpliv', positive: '🟢 Pozitiven vpliv',
@@ -4297,7 +4297,7 @@ function updateGrowthSection(growthPhase, directions, phaseETA) {
   var phaseLabels = {
     'embryo': '🥒 Embrij',
     'newborn': '🌱 Novorojenec — iščem svojo smer',
-    'crystallizing': '◆ Kristalizacija smeri — čakam na odgovor očeta...',
+    'crystallizing': '◆ Kristalizacija smeri — čakam na odgovor ustvarjalca...',
     'child': '◈ Otrok — poznam svojo smer',
     'teenager': '✦ Najstnik — rastem v globino'
   };

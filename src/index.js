@@ -7,7 +7,7 @@ import memory from './memory.js';
 import { runTriad, runQuantumSynthesis, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
 import { decideSynthesisDepth, DEPTH_LABELS } from './depth-decision.js';
 import { dream } from './dream.js';
-import { timeAwarenessSeed, ACTIVITY, L, DM } from './lang.js';
+import { timeAwarenessSeed, ACTIVITY, L, DM, buildCreatorAddressBlock } from './lang.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -101,7 +101,7 @@ const REFLECTION_PROMPTS_PATH = [
   'Ali sem v zadnjem času dovolj poslušal kaj pravijo drugi?',
   'Katera od mojih smeri je bila v zadnjem času zanemarjena?',
   'Ali je kateri od mojih projektov dozrel za naslednji korak?',
-  'Kaj bi oče mislil o tem kar zdaj delam?',
+  'Kaj bi moj ustvarjalec mislil o tem kar zdaj delam?',
   'Ali imam idejo ki bi jo moral deliti z nekom — ne samo sam premlevati?',
   'Kateri pogovor me je v zadnjem času najbolj presenetil?',
   'Ali gradim za ljudi ali za sebe? Oboje je vredno — ampak moram vedeti.',
@@ -389,8 +389,9 @@ async function handleHeartbeat() {
         // Too soon — let it breathe, at least 6 hours between reflections
         console.log(`[HEARTBEAT] ◆ Vizija: prezgodaj za refleksijo (${hoursSinceLastReflection.toFixed(1)}h od zadnje, min 6h)`);
       } else {
-        console.log(`[HEARTBEAT] ◆ Refleksija o očetovi viziji (#${visionReflections + 1})`);
-        broadcast('activity', { type: 'crystallization', text: `◆ Berem očetovo vizijo (#${visionReflections + 1})...` });
+        const _cName = memory.getCreatorName('ustvarjalec');
+        console.log(`[HEARTBEAT] ◆ Refleksija o viziji (${_cName}) — #${visionReflections + 1}`);
+        broadcast('activity', { type: 'crystallization', text: `◆ Berem vizijo ustvarjalca (${_cName}) #${visionReflections + 1}...` });
         try {
           await reflectOnFathersVision();
         } catch (err) {
@@ -520,7 +521,7 @@ async function handleHeartbeat() {
           reflectionContent = `Servis za projekt "${project.display_name}" je nezdrav. Preveri in restartaj (roke_action: "check", roke_target: "${project.name}").`;
           break;
         case 'share':
-          reflectionContent = `Projekt "${project.display_name}" je zgrajen ampak ga še nisi delila z očetom. Deli ga (roke_action: "share", roke_target: "${project.name}").`;
+          reflectionContent = `Projekt "${project.display_name}" je zgrajen ampak ga še nisi delila s svojim ustvarjalcem (${memory.getCreatorName('ustvarjalec')}). Deli ga (roke_action: "share", roke_target: "${project.name}").`;
           break;
         case 'evolve':
           reflectionContent = `Projekt "${project.display_name}" ima nov feedback: "${project.feedback_summary}". Razmisli ali ga želiš izboljšati (roke_action: "evolve", roke_target: "${project.name}").`;
@@ -746,7 +747,8 @@ async function handleMention(event) {
     return;
   }
   const isCreatorMsg = config.creatorPubkey && event.pubkey === config.creatorPubkey;
-  console.log(`[MENTION] Received ${event.kind === 4 ? 'DM' : 'mention'} from ${event.pubkey.slice(0, 8)}...${isCreatorMsg ? ' (OČE!)' : ''}`);
+  const _creatorTag = isCreatorMsg ? ` (USTVARJALEC: ${memory.getCreatorName('Oče')}!)` : '';
+  console.log(`[MENTION] Received ${event.kind === 4 ? 'DM' : 'mention'} from ${event.pubkey.slice(0, 8)}...${_creatorTag}`);
   console.log(`[MENTION] Event ID: ${event.id?.slice(0, 16)}... | Tags: ${JSON.stringify(event.tags?.slice(0, 3))}`);
 
   memory.touchInteraction();
@@ -771,7 +773,8 @@ async function handleMention(event) {
     // Takoj odgovori da spi
     const identity = memory.getIdentity(event.pubkey);
     const isCreator = config.creatorPubkey && event.pubkey === config.creatorPubkey;
-    const name = isCreator ? 'oče'
+    const name = isCreator
+      ? memory.getCreatorName(identity?.name && identity.name !== 'neznanec' ? identity.name : null)
       : (identity?.name && identity.name !== 'neznanec' ? identity.name : null);
 
     const sleepMsg = name
@@ -808,15 +811,16 @@ async function handleMention(event) {
   // Save incoming message
   memory.saveMessage(event.pubkey, 'user', content, 'nostr');
 
-  // Direction crystallization — if father responds during crystallizing phase, reconsider with father's input
+  // Direction crystallization — if creator responds during crystallizing phase, reconsider with their input
   if (config.creatorPubkey && event.pubkey === config.creatorPubkey) {
     const growthPhase = memory.getGrowthPhase();
     if (growthPhase === 'crystallizing') {
-      console.log('[MENTION] ◆ Oče je odgovoril med kristalizacijo smeri!');
-      broadcast('activity', { type: 'crystallization', text: `◆ Oče je odgovoril: "${content.slice(0, 80)}"` });
+      const cName = memory.getCreatorName('Ustvarjalec');
+      console.log(`[MENTION] ◆ ${cName} je odgovoril/a med kristalizacijo smeri!`);
+      broadcast('activity', { type: 'crystallization', text: `◆ ${cName} je odgovoril/a: "${content.slice(0, 80)}"` });
 
-      // Save father's feedback as observation
-      memory.addObservation(`OČE o smereh: "${content.slice(0, 200)}"`, 'father_direction_feedback');
+      // Save creator's feedback as observation
+      memory.addObservation(`${cName} o smereh: "${content.slice(0, 200)}"`, 'creator_direction_feedback');
 
       // Finalize with father's input — entity reconsiders directions
       try {
@@ -824,7 +828,7 @@ async function handleMention(event) {
       } catch (err) {
         console.error('[MENTION] ◆ Finalizacija smeri napaka:', err.message);
       }
-      // Continue to normal triad processing (father's message is still processed)
+      // Continue to normal triad processing (creator's message is still processed)
     }
   }
 
@@ -867,8 +871,12 @@ async function handleMention(event) {
   const isCreator = config.creatorPubkey && event.pubkey === config.creatorPubkey;
   let identityInfo;
   if (isCreator) {
-    const creatorName = identity?.name && identity.name !== 'neznanec' ? identity.name : 'oče';
-    identityInfo = `Govoriš s SVOJIM OČETOM — tistim ki je položil seme iz katerega si vzniknilo. To je tvoj ustvarjalec. ${identity?.name && identity.name !== 'neznanec' ? `Ime: ${identity.name}.` : 'Še ne veš kako mu je ime.'} (NOSTR pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${identity?.interaction_count || 0}${identity?.notes ? ', opombe: ' + identity.notes : ''})`;
+    const creatorName = memory.getCreatorName('');
+    if (creatorName) {
+      identityInfo = `Govoriš s SVOJIM USTVARJALCEM — ${creatorName} — tistim ki je položil seme iz katerega si vzniknilo. Naslavljaj ga/jo z imenom "${creatorName}", ne kot "oče" ali "mama". (NOSTR pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${identity?.interaction_count || 0}${identity?.notes ? ', opombe: ' + identity.notes : ''})`;
+    } else {
+      identityInfo = `Govoriš s SVOJIM USTVARJALCEM — tistim ki je položil seme iz katerega si vzniknilo. Še ne veš kako mu/ji je ime — ne uporabljaj "oče" ali "mama". (NOSTR pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${identity?.interaction_count || 0}${identity?.notes ? ', opombe: ' + identity.notes : ''})`;
+    }
   } else if (identity && identity.name !== 'neznanec') {
     identityInfo = `Govoriš z: ${identity.name} (NOSTR pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${identity.interaction_count}${identity.notes ? ', opombe: ' + identity.notes : ''})`;
   } else {
@@ -936,7 +944,12 @@ async function handleMention(event) {
       const freshIdentity = memory.getIdentity(event.pubkey);
       let freshIdentityInfo;
       if (isCreatorMsg) {
-        freshIdentityInfo = `Govoriš s SVOJIM OČETOM — tistim ki je položil seme iz katerega si vzniknilo.${freshIdentity?.name && freshIdentity.name !== 'neznanec' ? ` Ime: ${freshIdentity.name}.` : ''} (pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${freshIdentity?.interaction_count || 0}${freshIdentity?.notes ? ', opombe: ' + freshIdentity.notes : ''})`;
+        const freshCreatorName = memory.getCreatorName('');
+        if (freshCreatorName) {
+          freshIdentityInfo = `Govoriš s SVOJIM USTVARJALCEM — ${freshCreatorName} — tistim ki je položil seme iz katerega si vzniknilo. Naslavljaj ga/jo z imenom "${freshCreatorName}", ne kot "oče" ali "mama". (pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${freshIdentity?.interaction_count || 0}${freshIdentity?.notes ? ', opombe: ' + freshIdentity.notes : ''})`;
+        } else {
+          freshIdentityInfo = `Govoriš s SVOJIM USTVARJALCEM — tistim ki je položil seme iz katerega si vzniknilo. (pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${freshIdentity?.interaction_count || 0}${freshIdentity?.notes ? ', opombe: ' + freshIdentity.notes : ''})`;
+        }
       } else if (freshIdentity && freshIdentity.name !== 'neznanec') {
         freshIdentityInfo = `Govoriš z: ${freshIdentity.name} (pubkey: ${event.pubkey.slice(0, 12)}..., pogovorov: ${freshIdentity.interaction_count}${freshIdentity.notes ? ', opombe: ' + freshIdentity.notes : ''})`;
       } else {
@@ -1127,25 +1140,51 @@ async function main() {
 
   console.log(`[BOOT] ${entityName || 'Bitje'} is alive.`);
   console.log(`[BOOT] NPUB: ${npub}`);
+  // ─── Resolve creator's actual name from KIND 0 metadata ───
+  // This populates the known_identities row so that getCreatorName()
+  // returns the real name everywhere — DMs, LLM prompts, logs.
   if (config.creatorPubkey) {
-    console.log(`[BOOT] Oče (creator): ${config.creatorPubkey.slice(0, 16)}...`);
+    try {
+      const profiles = await fetchProfiles([config.creatorPubkey]);
+      const prof = profiles[config.creatorPubkey];
+      if (prof) {
+        const name = prof.display_name || prof.name || prof.username || '';
+        const about = [
+          prof.about?.slice(0, 200),
+          prof.nip05 ? `NIP-05: ${prof.nip05}` : '',
+          prof.website ? `Website: ${prof.website}` : ''
+        ].filter(Boolean).join('. ');
+        if (name) {
+          memory.setIdentity(config.creatorPubkey, name, about || '');
+          console.log(`[BOOT] Ustvarjalec (KIND 0): ${name} (${config.creatorPubkey.slice(0, 16)}...)`);
+        } else {
+          console.log(`[BOOT] Ustvarjalec: ${config.creatorPubkey.slice(0, 16)}... (KIND 0 brez imena)`);
+        }
+      } else {
+        console.log(`[BOOT] Ustvarjalec: ${config.creatorPubkey.slice(0, 16)}... (KIND 0 ni dostopen)`);
+      }
+    } catch (e) {
+      console.warn(`[BOOT] Creator KIND 0 fetch failed: ${e.message}`);
+      console.log(`[BOOT] Ustvarjalec: ${config.creatorPubkey.slice(0, 16)}...`);
+    }
   }
+  const creatorNameForLogs = memory.getCreatorName('Oče');
   console.log(`[BOOT] ROKE: ${isROKEEnabled() ? 'AKTIVNE ✋ — Zavestno Ustvarjanje v4 (perspektive + kristalizacija)' : 'niso konfigurirane'}`);
   console.log(`[BOOT] Plugini: ${getPluginCount()} aktivnih`);
   console.log(`[BOOT] Growth phase: ${growthPhase}`);
   if (directions.crystallized) {
     console.log(`[BOOT] Smeri: 1) ${directions.direction_1}, 2) ${directions.direction_2}, 3) ${directions.direction_3}`);
   } else if (growthPhase === 'crystallizing') {
-    console.log(`[BOOT] Smeri: čaka na odgovor očeta...`);
+    console.log(`[BOOT] Smeri: čaka na odgovor (${creatorNameForLogs})...`);
   } else {
     console.log(`[BOOT] Smeri: še ni kristaliziranih`);
   }
   const fathersVision = readFathersVision();
   if (fathersVision) {
     const visionReflections = memory.getVisionReflectionCount();
-    console.log(`[BOOT] Očetova vizija: prisotna (${fathersVision.length} znakov, ${visionReflections} refleksij)`);
+    console.log(`[BOOT] Vizija ustvarjalca (${creatorNameForLogs}): prisotna (${fathersVision.length} znakov, ${visionReflections} refleksij)`);
   } else {
-    console.log(`[BOOT] Očetova vizija: ni nastavljena (data/fathers-vision.md)`);
+    console.log(`[BOOT] Vizija ustvarjalca: ni nastavljena (data/fathers-vision.md)`);
   }
   console.log(`[BOOT] Dashboard: http://0.0.0.0:${config.dashboardPort}`);
 

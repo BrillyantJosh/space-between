@@ -778,6 +778,25 @@ const memory = {
     return db.prepare('SELECT * FROM known_identities ORDER BY last_seen DESC').all();
   },
 
+  // Creator (father/mother/whoever planted the seed) — name lookup with fallback.
+  // Callers can use this to address the creator by their actual name from KIND 0
+  // metadata, or fall back to the generic "Oče"/"Father" label.
+  getCreatorPubkey() {
+    return (process.env.CREATOR_PUBKEY || '').trim();
+  },
+  getCreatorIdentity() {
+    const pk = this.getCreatorPubkey();
+    if (!pk) return null;
+    return this.getIdentity(pk);
+  },
+  getCreatorName(fallback = 'Oče') {
+    const id = this.getCreatorIdentity();
+    if (!id) return fallback;
+    const n = (id.name || '').trim();
+    if (!n || n === 'neznanec') return fallback;
+    return n;
+  },
+
   getIdentitiesWithChannel() {
     return db.prepare(`
       SELECT ki.*,

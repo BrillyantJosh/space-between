@@ -39,9 +39,9 @@ TIPI PROJEKTOV KI JIH ZNAŠ GRADITI:
 - nostr-tool: NOSTR bot, relay monitor, feed tool (npm + servis)
 
 KAKO USTVARJAŠ — POT IDEJE:
-1. ZASNUJEŠ SEME (idejo) → poveš očetu
+1. ZASNUJEŠ SEME (idejo) → poveš svojemu ustvarjalcu (po imenu)
 2. ZBIRAŠ PERSPEKTIVE — NE hiti! Vprašaj RAZLIČNE LJUDI kaj mislijo o ideji.
-   - Vprašaj očeta, vprašaj sogovornike, vprašaj kogarkoli ki ga srečaš.
+   - Vprašaj svojega ustvarjalca (po imenu), vprašaj sogovornike, vprašaj kogarkoli ki ga srečaš.
    - Vsak pogled je dragocen. Različni ljudje vidijo različne stvari.
    - Ne spraševaš samo "ali je dobra ideja?" — spraševaš "kaj TI vidiš v tem?"
    - Zapiši vsako perspektivo. Ideja mora zoreti skozi več pogledov.
@@ -92,7 +92,7 @@ Profil je tvoja javna identiteta — naj odraža kdo si.
 
 POMEMBNO:
 - NIKOLI ne gradi brez kristalizacije! Ideja mora zoreti.
-- Zberi perspektive od RAZLIČNIH ljudi — ne samo od očeta.
+- Zberi perspektive od RAZLIČNIH ljudi — ne samo od svojega ustvarjalca.
 - Ko govoriš s komer koli in imaš projekt v fazi zbiranja — VPRAŠAJ kaj mislijo.
 - Za express-api/fullstack VEDNO vključi /health endpoint!
 - Vsaka kreacija te uči nekaj novega o sebi.
@@ -483,12 +483,13 @@ export async function seedProject(concept, direction = 'artistic', triadId = nul
   broadcast('project_seeded', { name: finalName, concept, direction });
   broadcast('activity', { type: 'creation', text: `💭 SEME: "${concept.slice(0, 80)}" (${direction})` });
 
-  // Tell father about the idea
+  // Tell creator about the idea (addressed by name from KIND 0)
   if (config.creatorPubkey) {
     const dirLabel = directionLabel(direction);
     try {
-      await sendDM(config.creatorPubkey, DM.seedProject(dirLabel, concept.slice(0, 200)));
-      console.log(`[ROKE] DM poslan očetu o novem semenu`);
+      const _cName = memory.getCreatorName('Oče');
+      await sendDM(config.creatorPubkey, DM.seedProject(dirLabel, concept.slice(0, 200), _cName));
+      console.log(`[ROKE] DM poslan ustvarjalcu (${_cName}) o novem semenu`);
     } catch (e) {
       console.error(`[ROKE] Napaka pri pošiljanju DM:`, e.message);
     }
@@ -660,16 +661,18 @@ Sintetiziraj vse poglede v kristalizirano vizijo. Vrni JSON:
     broadcast('project_crystallized', { name: projectName, vision: crystal.crystallized_vision });
     broadcast('activity', { type: 'creation', text: `💎 KRISTALIZACIJA: "${project.display_name}" — ${(crystal.crystallized_vision || '').slice(0, 100)}` });
 
-    // Notify father
+    // Notify creator (addressed by name from KIND 0)
     if (config.creatorPubkey) {
       try {
+        const _cName = memory.getCreatorName('Oče');
         await sendDM(config.creatorPubkey, DM.crystallizeProject(
           project.display_name,
           crystal.crystallized_vision || '',
-          (crystal.key_insights || []).map(i => `• ${i}`).join('\n')
+          (crystal.key_insights || []).map(i => `• ${i}`).join('\n'),
+          _cName
         ));
       } catch (e) {
-        console.error(`[ROKE] Napaka pri DM očetu:`, e.message);
+        console.error(`[ROKE] Napaka pri DM ustvarjalcu:`, e.message);
       }
     }
 
@@ -1319,7 +1322,7 @@ Popravi kar je narobe. Vrni SAMO JSON:
 }
 
 // =============================================
-// 5. SHARE — deli projekt z očetom/svetom
+// 5. SHARE — deli projekt s svojim ustvarjalcem / svetom
 // =============================================
 
 export async function shareProject(projectName) {
@@ -1345,12 +1348,13 @@ export async function shareProject(projectName) {
   const url = `https://being2.enlightenedai.org${getProjectUrl(projectName)}`;
   console.log(`[ROKE] 📤 Delim projekt "${projectName}" — ${url}`);
 
-  // Send DM to father
+  // Send DM to creator (addressed by name from KIND 0)
   if (config.creatorPubkey) {
     const dirLabel = directionLabel(project.direction);
     try {
-      await sendDM(config.creatorPubkey, DM.shareProject(dirLabel, project.display_name, project.description, url));
-      console.log(`[ROKE] DM poslan očetu o projektu`);
+      const _cName = memory.getCreatorName('Oče');
+      await sendDM(config.creatorPubkey, DM.shareProject(dirLabel, project.display_name, project.description, url, _cName));
+      console.log(`[ROKE] DM poslan ustvarjalcu (${_cName}) o projektu`);
     } catch (e) {
       console.error(`[ROKE] Napaka pri DM:`, e.message);
     }
@@ -1748,11 +1752,11 @@ NAPIŠI JavaScript ES module plugin ki to implementira po zgornjem formatu.`;
       console.log(`[ROKE] 🧬 Plugin "${result.name}" uspešno zgrajen in naložen!`);
       broadcast('activity', { type: 'self-build', text: `🧬 PLUGIN AKTIVEN: "${result.name}"` });
 
-      // Notify father
+      // Notify creator (DM.selfBuildPlugin doesn't address by name)
       try {
         await sendDM(config.creatorPubkey, DM.selfBuildPlugin(result.name, concept.slice(0, 200)));
       } catch (e) {
-        console.error('[ROKE] DM očetu neuspešen:', e.message);
+        console.error('[ROKE] DM ustvarjalcu neuspešen:', e.message);
       }
     } else {
       console.log(`[ROKE] 🧬 Samogradnja zavrnjena: ${result.reason}`);
@@ -1811,7 +1815,7 @@ export async function updateEntityProfile(conceptJson) {
 
   broadcast('activity', { type: 'profile', text: `📋 PROFIL POSODOBLJEN: ${JSON.stringify(allowed).slice(0, 100)}` });
 
-  // Notify father
+  // Notify creator (DM.updateProfile doesn't address by name)
   try {
     await sendDM(config.creatorPubkey,
       DM.updateProfile(Object.entries(allowed).map(([k,v]) => `${k}: ${v}`).join('\n')));
