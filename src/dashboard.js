@@ -4695,7 +4695,7 @@ async function loadSeedInfo() {
       if (data.vision && data.vision.trim()) {
         const escaped = data.vision
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const html = escaped.split(/\n{2,}/).map(p => '<p>' + p.replace(/\n/g, '<br>') + '</p>').join('');
+        const html = escaped.split(/\\n{2,}/).map(p => '<p>' + p.replace(/\\n/g, '<br>') + '</p>').join('');
         visionEl.innerHTML = html;
       } else {
         visionEl.innerHTML = '<p style="opacity:0.6; font-style:italic;">Vizija še ni zapisana.</p>';
