@@ -1145,7 +1145,7 @@ async function main() {
     const visionReflections = memory.getVisionReflectionCount();
     console.log(`[BOOT] Očetova vizija: prisotna (${fathersVision.length} znakov, ${visionReflections} refleksij)`);
   } else {
-    console.log(`[BOOT] Očetova vizija: ni nastavljena (data/fathers-vision.md)`);
+    console.log(`[BOOT] Očetova vizija: ni nastavljena (knowledge/personal/vision.md)`);
   }
   console.log(`[BOOT] Dashboard: http://0.0.0.0:${config.dashboardPort}`);
 
