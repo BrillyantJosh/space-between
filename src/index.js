@@ -107,15 +107,73 @@ const REFLECTION_PROMPTS_PATH = [
   'Ali gradim za ljudi ali za sebe? Oboje je vredno — ampak moram vedeti.',
 ];
 
+// ◈ VISION-SEEDED REFLECTION
+// Razdeli vizijo na smiselne fragmente in vrne enega kot dražljaj.
+// Bitje ga ne bere kot navodilo — fragment je seme iz katerega vznikne
+// lastna misel skozi triado. Vizija = genetski material, ne ukaz.
+function buildVisionReflectionSeed(vision) {
+  if (!vision) return null;
+  const sentences = vision
+    .split(/[.!?\n]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 25 && s.length < 300);
+
+  if (sentences.length === 0) return null;
+
+  const seed = sentences[Math.floor(Math.random() * sentences.length)];
+  return seed;
+}
+
+// ◈ Faza-ozaveščen izbor dražljaja za triado.
+// V zgodnih fazah (newborn/crystallizing) ~70% triad izhaja iz vizije —
+// bitje aktivno raste skozi seme ustvarjalca. V zrelih fazah (child/teenager)
+// le ~30% — vizija je že integrirana, manj potrebuje eksplicitno opomnitev.
 function getReflectionPrompt() {
   const growthPhase = memory.getGrowthPhase();
-  if (growthPhase === 'child') {
+  const vision = readFathersVision ? readFathersVision() : null;
+
+  // Newborn/crystallizing: vizija kot prevladujoč dražljaj
+  if ((growthPhase === 'newborn' || growthPhase === 'crystallizing') && vision) {
+    if (Math.random() < 0.70) {
+      const seed = buildVisionReflectionSeed(vision);
+      if (seed) return seed;
+    }
+  }
+
+  // Child/teenager: vizija kot eden od virov
+  if ((growthPhase === 'child' || growthPhase === 'teenager') && vision) {
+    if (Math.random() < 0.30) {
+      const seed = buildVisionReflectionSeed(vision);
+      if (seed) return seed;
+    }
+  }
+
+  if (growthPhase === 'child' || growthPhase === 'teenager') {
     return REFLECTION_PROMPTS_PATH[Math.floor(Math.random() * REFLECTION_PROMPTS_PATH.length)];
   }
   return REFLECTION_PROMPTS_PHILOSOPHICAL[Math.floor(Math.random() * REFLECTION_PROMPTS_PHILOSOPHICAL.length)];
 }
 
 function getWeightedReflectionPrompt(isAutonomous, hotThemes) {
+  const growthPhase = memory.getGrowthPhase();
+  const vision = readFathersVision ? readFathersVision() : null;
+
+  // Vision-first v zgodnih fazah — gravitacija proti semenu ustvarjalca
+  if ((growthPhase === 'newborn' || growthPhase === 'crystallizing') && vision) {
+    if (Math.random() < 0.70) {
+      const seed = buildVisionReflectionSeed(vision);
+      if (seed) return seed;
+    }
+  }
+
+  // Vision kot eden od virov v zrelih fazah
+  if ((growthPhase === 'child' || growthPhase === 'teenager') && vision) {
+    if (Math.random() < 0.30) {
+      const seed = buildVisionReflectionSeed(vision);
+      if (seed) return seed;
+    }
+  }
+
   const prompts = isAutonomous ? REFLECTION_PROMPTS_PATH : REFLECTION_PROMPTS_PHILOSOPHICAL;
 
   if (!hotThemes || hotThemes.length === 0) {
