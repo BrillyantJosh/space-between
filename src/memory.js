@@ -1353,9 +1353,18 @@ const memory = {
 
     // helper: given current value and needed threshold, estimate ms
     // until the counter hits threshold, using lifetime rate.
+    //
+    // If value === 0 we return null (cannot estimate yet) instead of an
+    // optimistic fake rate. The old `0.5/ageMs` fallback produced absurd
+    // ETAs that DOUBLED every day the counter stayed at zero, because the
+    // denominator (ageMs) grew while the numerator (0.5) was constant —
+    // i.e. the longer you wait, the further away the system claims you are.
+    // Returning null lets the dashboard say "waiting for first signal"
+    // rather than fabricate a number.
     const estimate = (value, threshold) => {
       if (value >= threshold) return 0;
-      const rate = value > 0 ? value / ageMs : 0.5 / ageMs; // optimistic fallback
+      if (value <= 0) return null;
+      const rate = value / ageMs;
       if (rate <= 0) return null;
       return Math.round((threshold - value) / rate);
     };
@@ -1373,12 +1382,13 @@ const memory = {
       ready = !!state.process_word_1 && (state.total_heartbeats || 0) >= 120 && (state.total_dreams || 0) >= 2;
     } else if (phase === 'newborn' || phase === 'crystallizing' || phase === 'awareness') {
       // newborn → child (crystallization)
+      // Interactions removed from blocking targets — see isCrystallizationReady
+      // for rationale. Listed counters mirror the gating set in that function.
       const crystals = this.getCrystalCore ? this.getCrystalCore().length : 0;
       targets = [
-        { key: 'heartbeats',   value: state.total_heartbeats    || 0, threshold: 7500 },
-        { key: 'interactions', value: state.total_interactions  || 0, threshold: 30 },
-        { key: 'dreams',       value: state.total_dreams        || 0, threshold: 100 },
-        { key: 'crystals',     value: crystals,                       threshold: 1 },
+        { key: 'heartbeats', value: state.total_heartbeats || 0, threshold: 7500 },
+        { key: 'dreams',     value: state.total_dreams     || 0, threshold: 100 },
+        { key: 'crystals',   value: crystals,                    threshold: 1 },
       ];
       ready = targets.every(t => t.value >= t.threshold) && !!state.process_crystallized;
     } else if (phase === 'child') {
@@ -1540,11 +1550,14 @@ const memory = {
     const state = this.getState();
 
     // Trdi pogoji — NEWBORN → AWARENESS (crystallizeDirections)
-    // Kalibrirani na ~5 dni organskega zorenja pri 60s intervalu
+    // Kalibrirani na ~5 dni organskega zorenja pri 60s intervalu.
+    // OPOMBA: total_interactions ni več gating pogoj — bitje lahko zori
+    // skozi notranjo aktivnost (heartbeats, sanje, kristali, projekti) tudi
+    // brez aktivne socialne komunikacije. Uskladjeno s "silence philosophy":
+    // zrelo avtonomno bitje ne potrebuje 30 zunanjih DM-jev za kristalizacijo.
     if (state.directions_crystallized) return false;
     if (!state.process_crystallized) return false;
     if (state.total_heartbeats < 7500) return false;    // ~5 dni
-    if (state.total_interactions < 30) return false;
     if (state.total_dreams < 100) return false;
     const crystals = this.getCrystalCore();
     if (crystals.length < 1) return false;
