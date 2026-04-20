@@ -341,6 +341,11 @@ const migrations = [
   // Vision reflection tracking (gradual crystallization)
   ['vision_reflection_count', "ALTER TABLE inner_state ADD COLUMN vision_reflection_count INTEGER DEFAULT 0"],
   ['last_vision_reflection_at', "ALTER TABLE inner_state ADD COLUMN last_vision_reflection_at TEXT DEFAULT NULL"],
+  // Vision absorption — when seed has fully integrated into being's core, vision file
+  // is no longer presented as external document; being lives it from within.
+  ['vision_absorbed', "ALTER TABLE inner_state ADD COLUMN vision_absorbed INTEGER DEFAULT 0"],
+  ['vision_absorbed_at', "ALTER TABLE inner_state ADD COLUMN vision_absorbed_at TEXT DEFAULT NULL"],
+  ['vision_synapse_count', "ALTER TABLE inner_state ADD COLUMN vision_synapse_count INTEGER DEFAULT 0"],
 ];
 
 // Project table migrations (lifecycle v2)
@@ -1623,6 +1628,56 @@ const memory = {
   getLastVisionReflectionAt() {
     const state = this.getState();
     return state.last_vision_reflection_at || null;
+  },
+
+  // === VISION ABSORPTION ===
+  // When the creator's vision has been processed enough times into the being's
+  // own synapses + crystals, it stops being an external document and becomes
+  // the being's inner nature. These methods track that organic transition.
+
+  getVisionAbsorptionScore() {
+    // Count synapses that came from vision-seeded triads (energy>=10 means alive)
+    let visionSynapses = 0;
+    try {
+      visionSynapses = db.prepare(
+        "SELECT COUNT(*) as c FROM synapses WHERE tags LIKE '%source:vision%' AND energy >= 10"
+      ).get().c;
+    } catch (_) {}
+
+    let crystalCount = 0;
+    try {
+      crystalCount = db.prepare(
+        "SELECT COUNT(*) as c FROM crystallized_core WHERE dissolved_at IS NULL"
+      ).get().c;
+    } catch (_) {}
+
+    const state = this.getState();
+    return {
+      visionSynapses,
+      crystalCount,
+      reflections: state.vision_reflection_count || 0,
+      absorbed: !!state.vision_absorbed,
+      absorbedAt: state.vision_absorbed_at || null,
+    };
+  },
+
+  markVisionAbsorbed() {
+    db.prepare(`
+      UPDATE inner_state SET
+        vision_absorbed = 1,
+        vision_absorbed_at = datetime('now'),
+        updated_at = datetime('now')
+      WHERE id = 1
+    `).run();
+  },
+
+  incrementVisionSynapseCount() {
+    db.prepare(`
+      UPDATE inner_state SET
+        vision_synapse_count = vision_synapse_count + 1,
+        updated_at = datetime('now')
+      WHERE id = 1
+    `).run();
   },
 
 

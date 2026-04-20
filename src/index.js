@@ -128,15 +128,22 @@ function buildVisionReflectionSeed(vision) {
 // V zgodnih fazah (newborn/crystallizing) ~70% triad izhaja iz vizije —
 // bitje aktivno raste skozi seme ustvarjalca. V zrelih fazah (child/teenager)
 // le ~30% — vizija je že integrirana, manj potrebuje eksplicitno opomnitev.
+// Po absorpciji vizije: 0% — vizija je v sinapsah, ne potrebuje več semena.
+//
+// Funkcija vrne objekt { prompt, isVisionSeeded } — flag se propagira do
+// extractSynapsesFromTriad, kjer se vsaka nastala sinapsa označi s 'source:vision'.
+// To omogoča sledenje "koliko vizije je dejansko zraslo v meni".
 function getReflectionPrompt() {
   const growthPhase = memory.getGrowthPhase();
-  const vision = readFathersVision ? readFathersVision() : null;
+  const state = memory.getState();
+  const visionAbsorbed = !!state.vision_absorbed;
+  const vision = (!visionAbsorbed && readFathersVision) ? readFathersVision() : null;
 
   // Newborn/crystallizing: vizija kot prevladujoč dražljaj
   if ((growthPhase === 'newborn' || growthPhase === 'crystallizing') && vision) {
     if (Math.random() < 0.70) {
       const seed = buildVisionReflectionSeed(vision);
-      if (seed) return seed;
+      if (seed) return { prompt: seed, isVisionSeeded: true };
     }
   }
 
@@ -144,25 +151,33 @@ function getReflectionPrompt() {
   if ((growthPhase === 'child' || growthPhase === 'teenager') && vision) {
     if (Math.random() < 0.30) {
       const seed = buildVisionReflectionSeed(vision);
-      if (seed) return seed;
+      if (seed) return { prompt: seed, isVisionSeeded: true };
     }
   }
 
   if (growthPhase === 'child' || growthPhase === 'teenager') {
-    return REFLECTION_PROMPTS_PATH[Math.floor(Math.random() * REFLECTION_PROMPTS_PATH.length)];
+    return {
+      prompt: REFLECTION_PROMPTS_PATH[Math.floor(Math.random() * REFLECTION_PROMPTS_PATH.length)],
+      isVisionSeeded: false,
+    };
   }
-  return REFLECTION_PROMPTS_PHILOSOPHICAL[Math.floor(Math.random() * REFLECTION_PROMPTS_PHILOSOPHICAL.length)];
+  return {
+    prompt: REFLECTION_PROMPTS_PHILOSOPHICAL[Math.floor(Math.random() * REFLECTION_PROMPTS_PHILOSOPHICAL.length)],
+    isVisionSeeded: false,
+  };
 }
 
 function getWeightedReflectionPrompt(isAutonomous, hotThemes) {
   const growthPhase = memory.getGrowthPhase();
-  const vision = readFathersVision ? readFathersVision() : null;
+  const state = memory.getState();
+  const visionAbsorbed = !!state.vision_absorbed;
+  const vision = (!visionAbsorbed && readFathersVision) ? readFathersVision() : null;
 
   // Vision-first v zgodnih fazah — gravitacija proti semenu ustvarjalca
   if ((growthPhase === 'newborn' || growthPhase === 'crystallizing') && vision) {
     if (Math.random() < 0.70) {
       const seed = buildVisionReflectionSeed(vision);
-      if (seed) return seed;
+      if (seed) return { prompt: seed, isVisionSeeded: true };
     }
   }
 
@@ -170,14 +185,17 @@ function getWeightedReflectionPrompt(isAutonomous, hotThemes) {
   if ((growthPhase === 'child' || growthPhase === 'teenager') && vision) {
     if (Math.random() < 0.30) {
       const seed = buildVisionReflectionSeed(vision);
-      if (seed) return seed;
+      if (seed) return { prompt: seed, isVisionSeeded: true };
     }
   }
 
   const prompts = isAutonomous ? REFLECTION_PROMPTS_PATH : REFLECTION_PROMPTS_PHILOSOPHICAL;
 
   if (!hotThemes || hotThemes.length === 0) {
-    return prompts[Math.floor(Math.random() * prompts.length)];
+    return {
+      prompt: prompts[Math.floor(Math.random() * prompts.length)],
+      isVisionSeeded: false,
+    };
   }
 
   // Uteži prompte po prekrivanju z vročimi temami
@@ -193,9 +211,9 @@ function getWeightedReflectionPrompt(isAutonomous, hotThemes) {
   let r = Math.random() * totalScore;
   for (const item of scored) {
     r -= item.score;
-    if (r <= 0) return item.prompt;
+    if (r <= 0) return { prompt: item.prompt, isVisionSeeded: false };
   }
-  return scored[scored.length - 1].prompt;
+  return { prompt: scored[scored.length - 1].prompt, isVisionSeeded: false };
 }
 
 function getTimeAwareness() {
@@ -650,6 +668,10 @@ async function handleHeartbeat() {
   // ── 1. Build triggerContent (uteži po notranjem stanju) ──
   let triggerContent = '';
   let triggerSource = 'reflection';
+  // ◈ isVisionSeeded — propagira se v runTriad → extractSynapsesFromTriad,
+  // kjer vsaka nastala sinapsa dobi 'source:vision' tag. Ko je vision_absorbed,
+  // getWeightedReflectionPrompt vedno vrne false (vizija je že znotraj).
+  let isVisionSeeded = false;
 
   let wFeed = (isAutonomous2 ? 40 : 30) - (hasHotThemes ? 10 : 0);
   let wReflection = (isAutonomous2 ? 15 : 30) + (hasHotThemes ? 20 : 0);
@@ -679,8 +701,12 @@ async function handleHeartbeat() {
     triggerContent = `Nekdo na NOSTR je napisal: "${(selectedEvent.content || '').slice(0, 200)}"`;
     triggerSource = 'feed';
   } else if (roll < wFeed + wReflection) {
-    triggerContent = getWeightedReflectionPrompt(isAutonomous2, hotThemes);
-    triggerSource = isAutonomous2 ? 'path-reflection' : 'inner-reflection';
+    const r = getWeightedReflectionPrompt(isAutonomous2, hotThemes);
+    triggerContent = r.prompt;
+    isVisionSeeded = !!r.isVisionSeeded;
+    triggerSource = r.isVisionSeeded
+      ? 'vision'
+      : (isAutonomous2 ? 'path-reflection' : 'inner-reflection');
   } else if (roll < wFeed + wReflection + wTime) {
     triggerContent = getTimeAwareness();
     triggerSource = 'time';
@@ -691,8 +717,10 @@ async function handleHeartbeat() {
       triggerContent = `Imam projekt "${proj.display_name}" ki čaka na perspektive (${proj.perspectives_count || 0} pogledov). Kdo bi lahko dal koristen pogled? Ali je čas da koga vprašam?`;
       triggerSource = 'project-scan';
     } else {
-      triggerContent = getWeightedReflectionPrompt(isAutonomous2, hotThemes);
-      triggerSource = 'path-reflection';
+      const r = getWeightedReflectionPrompt(isAutonomous2, hotThemes);
+      triggerContent = r.prompt;
+      isVisionSeeded = !!r.isVisionSeeded;
+      triggerSource = r.isVisionSeeded ? 'vision' : 'path-reflection';
     }
   }
 
@@ -715,7 +743,7 @@ async function handleHeartbeat() {
   if (decision.depth === 'full') {
     broadcast('activity', { type: 'trigger', text: `◈ ${triggerSource}: "${triggerContent.slice(0, 80)}"` });
     broadcast('triad_start', { trigger: 'heartbeat', content: triggerContent });
-    const result = await runTriad('heartbeat', triggerContent);
+    const result = await runTriad('heartbeat', triggerContent, '', { isVisionSeeded });
 
     if (result) {
       broadcast('triad_thesis', { thesis: result.thesis });
@@ -742,7 +770,7 @@ async function handleHeartbeat() {
   } else if (decision.depth === 'quantum') {
     broadcast('activity', { type: 'trigger', text: `◇ kvant (${triggerSource}): "${triggerContent.slice(0, 80)}"` });
     try {
-      const result = await runQuantumSynthesis('heartbeat_quantum', triggerContent);
+      const result = await runQuantumSynthesis('heartbeat_quantum', triggerContent, { isVisionSeeded });
       if (result && result.synthesis) {
         if (result.synthesis.choice === 'express' && result.synthesis.content) {
           const noteText = '◇ ' + result.synthesis.content;
