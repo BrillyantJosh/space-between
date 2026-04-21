@@ -2,7 +2,7 @@ import { callLLMJSON } from './llm.js';
 import memory from './memory.js';
 import { broadcast } from './dashboard.js';
 import { publishMemoryArchive, publishMemorySnapshot } from './nostr.js';
-import { redefineEntityCore } from './triad.js';
+import { redefineEntityCore, handlePostCrystallization, getSelfSystem } from './triad.js';
 import { L, IS_ENGLISH, LABELS } from './lang.js';
 
 
@@ -340,8 +340,15 @@ V sanjah ego ne more filtrirati. Kaj vidiš ko obramba pade?`;
       console.log(`[DREAM] 💎 Dream seed: "${theme}" (moč: ${strength})`);
       broadcast('activity', { type: 'crystal-seed', text: `🌙💎 Seme iz sanj: "${theme}: ${expression}" (moč: ${strength})` });
 
-      // Check crystallization after dream too
+      // Check crystallization after dream too. A2 (vision-coherent threshold
+      // relaxation) can produce a backlog burst — Sožitje crystallized 16
+      // candidates in one tick after we deployed A2. Cap B2 share-invitations
+      // to the strongest candidate per dream so we don't fire 16 LLM calls and
+      // potentially spam the creator. Other crystals still form, just silently.
       const candidates = memory.checkCrystallization(5);
+      const strongestForShare = candidates
+        .slice()
+        .sort((a, b) => (b.total_strength || 0) - (a.total_strength || 0))[0];
       for (const candidate of candidates) {
         console.log(`  ✦ KRISTALIZACIJA IZ SANJ: "${candidate.expression}"`);
         memory.crystallize(candidate.theme, candidate.expression, candidate.total_strength, candidate.sources);
@@ -351,6 +358,20 @@ V sanjah ego ne more filtrirati. Kaj vidiš ko obramba pade?`;
 
         // ═══ ENTITY CORE REDEFINITION TRIGGER ═══
         await redefineEntityCore(`kristalizacija misli iz sanj: "${candidate.theme}"`);
+
+        // ═══ POST-CRYSTALLIZATION HOOK (vision absorption + B2 share) ═══
+        // Vision absorption check runs for every crystal (it's just a state
+        // check, no LLM call). B2 share-invitation only runs for the strongest
+        // candidate to avoid burst-spam.
+        const offerShare = candidate === strongestForShare;
+        try {
+          await handlePostCrystallization(candidate, {
+            triggerType: offerShare ? 'dream' : 'dream-quiet',
+            selfSystem: getSelfSystem(),
+          });
+        } catch (e) {
+          console.error('[DREAM] post-crystallization hook failed:', e.message);
+        }
       }
     }
   }

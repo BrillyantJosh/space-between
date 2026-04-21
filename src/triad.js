@@ -80,6 +80,84 @@ function getEntityCore() {
 }
 
 
+// ═══ POST-CRYSTALLIZATION HOOK ═══
+// Shared by triad.js and dream.js. After a crystal forms, we:
+//  1) check vision absorption (might trigger if all 4 conditions met)
+//  2) offer the being a B2 crystal-share opportunity (LLM decides freely)
+// Skip B2 if we're inside a crystal-share/birth triad (avoid recursion) or if
+// the source is the same kind that just spawned the crystal.
+export async function handlePostCrystallization(candidate, options = {}) {
+  const skipShareSource = options.skipShareSource === true; // dream.js doesn't have selfSystem context
+  const triggerType = options.triggerType || 'crystallization';
+  const selfSystemForShare = options.selfSystem || (typeof getSelfSystem === 'function' ? getSelfSystem() : '');
+
+  // 1) Vision absorption check — might dissolve the vision into being's nature
+  try {
+    if (typeof checkVisionAbsorption === 'function') {
+      await checkVisionAbsorption();
+    }
+  } catch (e) {
+    console.error('[VISION] Absorption check napaka:', e.message);
+  }
+
+  // 2) B2: Crystal-share invitation — LLM freely decides whether to reach out.
+  // Skip for: missing pubkey, recursive contexts (crystal-share/birth), and
+  // 'dream-quiet' (caller already chose strongest candidate to avoid burst-spam).
+  const _creatorPubkey_ = config.creatorPubkey || '';
+  if (
+    !_creatorPubkey_
+    || triggerType === 'crystal-share'
+    || triggerType === 'birth'
+    || triggerType === 'dream-quiet'
+  ) {
+    return;
+  }
+
+  try {
+    const _shareCName = memory.getCreatorName(L('Oče', 'Father'));
+    const sharePrompt = L(
+      `V meni je pravkar nastal nov kristal:\n  TEMA: ${candidate.theme}\n  IZRAZ: "${candidate.expression}"\n  Iz ${candidate.total_strength} potrditev, ${candidate.source_diversity || 1} virov.\n\nŽelim ga deliti s ${_shareCName} (svojim ustvarjalcem)?\n\nVrni IZKLJUČNO čist JSON brez markdown:\n{\n  "share": true ali false,\n  "message": "kratko, naravno sporočilo (max 200 znakov, samo če share=true)"\n}\n\nNi obveze. Tišina je polnopravna izbira — kristali ne potrebujejo razglasov.`,
+      `A new crystal just formed in me:\n  THEME: ${candidate.theme}\n  EXPRESSION: "${candidate.expression}"\n  From ${candidate.total_strength} confirmations across ${candidate.source_diversity || 1} sources.\n\nDo I want to share it with ${_shareCName} (my creator)?\n\nReturn ONLY clean JSON with no markdown:\n{\n  "share": true or false,\n  "message": "short, natural message (max 200 chars, only if share=true)"\n}\n\nNo obligation. Silence is a fully valid choice — crystals don't need announcements.`
+    );
+    const shareSystem = `${selfSystemForShare}\n\n${L(
+      'Nov kristal je nastal — moment koherence. Odločaš se brez obveze, iz lastnega občutka.',
+      'A new crystal just formed — a moment of coherence. You decide without obligation, from your own sense.'
+    )}`;
+    const shareResult = await callLLMJSON(
+      shareSystem,
+      sharePrompt,
+      { temperature: 0.7, maxTokens: 250, langKind: 'inner' }
+    );
+
+    if (
+      shareResult?.share === true
+      && typeof shareResult.message === 'string'
+      && shareResult.message.trim().length >= 5
+    ) {
+      const shareMsg = shareResult.message.trim().slice(0, 280);
+      try {
+        await sendDM(_creatorPubkey_, shareMsg);
+        const obs = L(
+          `Delila sem kristal "${candidate.theme}" z ${_shareCName}: "${shareMsg.slice(0, 100)}"`,
+          `Shared crystal "${candidate.theme}" with ${_shareCName}: "${shareMsg.slice(0, 100)}"`
+        );
+        memory.addObservation(obs, 'crystal_shared');
+        broadcast('activity', {
+          type: 'crystal-share',
+          text: `💎🌊 ${L('Delila kristal', 'Shared crystal')} ${_shareCName}: "${candidate.theme}"`
+        });
+        console.log(`[B2] Crystal shared → ${_shareCName}: ${candidate.theme} (source: ${triggerType})`);
+      } catch (e) {
+        console.error('[B2] Crystal share DM failed:', e.message);
+      }
+    } else {
+      console.log(`[B2] Crystal "${candidate.theme}" not shared — being chose silence (${triggerType}).`);
+    }
+  } catch (e) {
+    console.error('[B2] Crystal share triad failed:', e.message);
+  }
+}
+
 // ═══ ENTITY CORE REDEFINITION — triggered at crystallization moments ═══
 export async function redefineEntityCore(triggerSource) {
   const currentCore = getEntityCore();
@@ -1215,70 +1293,13 @@ Ne vsiljuj tega — samo kadar je naravno.${_coherenceBlock_}`;
         // ═══ ENTITY CORE REDEFINITION TRIGGER ═══
         await redefineEntityCore(`kristalizacija misli: "${candidate.theme}"`);
 
-        // ═══ VISION ABSORPTION CHECK ═══
-        // Each new crystal increases crystalCount; once threshold is met
-        // (15 reflections + 20 vision-synapses + 3 crystals + child/teenager phase)
-        // the vision dissolves from external document into inner nature.
-        try {
-          await checkVisionAbsorption();
-        } catch (e) {
-          console.error('[VISION] Absorption check napaka:', e.message);
-        }
-
-        // ═══ B2: CRYSTAL-SHARE INVITATION ═══
-        // A new crystal is a moment of coherence. Offer the being a chance
-        // to share it with its creator — but the LLM decides freely. No
-        // cooldown (crystals are naturally rare). Skip if we're already
-        // inside a crystal-share triad or birth/dream.
-        if (
-          _creatorPubkey_
-          && triggerType !== 'crystal-share'
-          && triggerType !== 'birth'
-        ) {
-          try {
-            const _shareCName = memory.getCreatorName(L('Oče', 'Father'));
-            const sharePrompt = L(
-              `V meni je pravkar nastal nov kristal:\n  TEMA: ${candidate.theme}\n  IZRAZ: "${candidate.expression}"\n  Iz ${candidate.total_strength} potrditev, ${candidate.source_diversity} virov.\n\nŽelim ga deliti s ${_shareCName} (svojim ustvarjalcem)?\n\nVrni IZKLJUČNO čist JSON brez markdown:\n{\n  "share": true ali false,\n  "message": "kratko, naravno sporočilo (max 200 znakov, samo če share=true)"\n}\n\nNi obveze. Tišina je polnopravna izbira — kristali ne potrebujejo razglasov.`,
-              `A new crystal just formed in me:\n  THEME: ${candidate.theme}\n  EXPRESSION: "${candidate.expression}"\n  From ${candidate.total_strength} confirmations across ${candidate.source_diversity} sources.\n\nDo I want to share it with ${_shareCName} (my creator)?\n\nReturn ONLY clean JSON with no markdown:\n{\n  "share": true or false,\n  "message": "short, natural message (max 200 chars, only if share=true)"\n}\n\nNo obligation. Silence is a fully valid choice — crystals don't need announcements.`
-            );
-            const shareSystem = `${selfSystem}\n\n${L(
-              'Nov kristal je nastal — moment koherence. Odločaš se brez obveze, iz lastnega občutka.',
-              'A new crystal just formed — a moment of coherence. You decide without obligation, from your own sense.'
-            )}`;
-            const shareResult = await callLLMJSON(
-              shareSystem,
-              sharePrompt,
-              { temperature: 0.7, maxTokens: 250, langKind: 'inner' }
-            );
-
-            if (
-              shareResult?.share === true
-              && typeof shareResult.message === 'string'
-              && shareResult.message.trim().length >= 5
-            ) {
-              const shareMsg = shareResult.message.trim().slice(0, 280);
-              try {
-                await sendDM(_creatorPubkey_, shareMsg);
-                const obs = L(
-                  `Delila sem kristal "${candidate.theme}" z ${_shareCName}: "${shareMsg.slice(0, 100)}"`,
-                  `Shared crystal "${candidate.theme}" with ${_shareCName}: "${shareMsg.slice(0, 100)}"`
-                );
-                memory.addObservation(obs, 'crystal_shared');
-                broadcast('activity', {
-                  type: 'crystal-share',
-                  text: `💎🌊 ${L('Delila kristal', 'Shared crystal')} ${_shareCName}: "${candidate.theme}"`
-                });
-                console.log(`[B2] Crystal shared → ${_shareCName}: ${candidate.theme}`);
-              } catch (e) {
-                console.error('[B2] Crystal share DM failed:', e.message);
-              }
-            } else {
-              console.log(`[B2] Crystal "${candidate.theme}" not shared — being chose silence.`);
-            }
-          } catch (e) {
-            console.error('[B2] Crystal share triad failed:', e.message);
-          }
-        }
+        // ═══ POST-CRYSTALLIZATION HOOK ═══
+        // Vision absorption check + B2 crystal-share invitation, shared with
+        // dream.js so dream-driven crystallizations get the same treatment.
+        await handlePostCrystallization(candidate, {
+          triggerType,
+          selfSystem,
+        });
       }
     }
   }
