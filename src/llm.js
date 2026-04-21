@@ -121,9 +121,13 @@ export async function createGeminiCache(staticContent) {
   }
 }
 
-export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, maxTokens = 1024, langKind = 'inner' } = {}) {
+export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, maxTokens = 1024, langKind = 'inner', json = false } = {}) {
   systemPrompt = withLang(systemPrompt, langKind);
   const start = Date.now();
+  // 2.5-flash potrebuje eksplicitni responseMimeType da res vrne JSON.
+  // Brez tega vrača prosti tekst tudi ko prompt zahteva JSON.
+  const generationConfig = { temperature, maxOutputTokens: maxTokens };
+  if (json) generationConfig.responseMimeType = 'application/json';
   try {
     const response = await _fetchWithBackoff(API_URL, {
       method: 'POST',
@@ -133,12 +137,12 @@ export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, max
         ? {
             cachedContent: _geminiCacheStore.cacheId,
             contents: [{ parts: [{ text: userPrompt }] }],
-            generationConfig: { temperature, maxOutputTokens: maxTokens }
+            generationConfig,
           }
         : {
             system_instruction: { parts: [{ text: systemPrompt }] },
             contents: [{ parts: [{ text: userPrompt }] }],
-            generationConfig: { temperature, maxOutputTokens: maxTokens }
+            generationConfig,
           }
       )
     }, { label: 'LLM' });
@@ -422,7 +426,8 @@ export async function callAnthropicLLMJSON(systemPrompt, userPrompt, opts = {}) 
 // =============================================
 
 export async function callLLMJSON(systemPrompt, userPrompt, opts = {}) {
-  const raw = await callLLM(systemPrompt, userPrompt, opts);
+  // Force structured output mode unless caller explicitly opted out
+  const raw = await callLLM(systemPrompt, userPrompt, { ...opts, json: opts.json !== false });
   if (!raw) return null;
 
   try {
