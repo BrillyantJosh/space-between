@@ -4,6 +4,37 @@ import memory from './memory.js';
 
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`;
 
+// ─── Rate-limit retry helper ───
+// Pri 429 (RESOURCE_EXHAUSTED) ponovi z exponential backoff.
+// Default: 3 retryja, čakanje 30s → 60s → 120s.
+// Vrne fetch Response (ne text) — caller ga razpakira sam.
+async function _fetchWithBackoff(url, init, { maxRetries = 3, baseDelayMs = 30000, label = 'LLM' } = {}) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let response;
+    try {
+      response = await fetch(url, init);
+    } catch (e) {
+      // Network error — retry samo prvi krog (lahko je flaky relay)
+      if (attempt === 0) {
+        console.warn(`[${label}] Network error, ena ponovitev: ${e.message}`);
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+      throw e;
+    }
+    // 429 = rate limit, 503 = service unavailable → retry
+    if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+      const wait = baseDelayMs * Math.pow(2, attempt); // 30s, 60s, 120s
+      console.warn(`[${label}] ${response.status} rate-limited, čakam ${wait / 1000}s (poskus ${attempt + 1}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, wait));
+      continue;
+    }
+    return response;
+  }
+  // unreachable but TS-friendly
+  throw new Error('exhausted retries without response');
+}
+
 // Append language directive to every system prompt. Safety net: even if a
 // prompt body is written in one language, the model is explicitly told to
 // respond in BEING_LANGUAGE. Cheap, effective, universal.
@@ -92,7 +123,7 @@ export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, max
   systemPrompt = withLang(systemPrompt, langKind);
   const start = Date.now();
   try {
-    const response = await fetch(API_URL, {
+    const response = await _fetchWithBackoff(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // Build request — use cache if available
@@ -108,7 +139,7 @@ export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, max
             generationConfig: { temperature, maxOutputTokens: maxTokens }
           }
       )
-    });
+    }, { label: 'LLM' });
 
     if (!response.ok) {
       const err = await response.text();
@@ -229,7 +260,7 @@ export async function callAnthropicLLMCached(cachedSystem, dynamicPrompt, {
   const start = Date.now();
 
   try {
-    const response = await fetch(ANTHROPIC_URL, {
+    const response = await _fetchWithBackoff(ANTHROPIC_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -250,7 +281,7 @@ export async function callAnthropicLLMCached(cachedSystem, dynamicPrompt, {
         ],
         messages: [{ role: 'user', content: dynamicPrompt }]
       })
-    });
+    }, { label: `LLM:ANTHROPIC:${label}` });
 
     if (!response.ok) {
       const err = await response.text();
@@ -319,7 +350,7 @@ export async function callAnthropicLLM(systemPrompt, userPrompt, { temperature =
   const usedModel = config.anthropicModel || 'claude-sonnet-4-20250514';
   const start = Date.now();
   try {
-    const response = await fetch(ANTHROPIC_URL, {
+    const response = await _fetchWithBackoff(ANTHROPIC_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -333,7 +364,7 @@ export async function callAnthropicLLM(systemPrompt, userPrompt, { temperature =
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }]
       })
-    });
+    }, { label: 'LLM:ANTHROPIC' });
 
     if (!response.ok) {
       const err = await response.text();
