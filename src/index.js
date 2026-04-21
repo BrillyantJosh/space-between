@@ -5,7 +5,8 @@ import { initKnowledgeDB, getKnowledgeStats } from './knowledge-db.js';
 import { runFullIngestion } from './ingestion.js';
 import memory from './memory.js';
 import { runTriad, runQuantumSynthesis, runFollowupSynthesis, crystallizeDirections, finalizeDirections, reflectOnFathersVision, readFathersVision } from './triad.js';
-import { decideSynthesisDepth, DEPTH_LABELS } from './depth-decision.js';
+import { metaTriada, META_DEPTH_LABELS } from './meta-triada.js';
+import { sanjskaTriada } from './sanjska-triada.js';
 import { dream } from './dream.js';
 import { timeAwarenessSeed, ACTIVITY, L, DM, buildCreatorAddressBlock } from './lang.js';
 import fs from 'fs';
@@ -222,33 +223,43 @@ function getTimeAwareness() {
 
 // ◈ Calculate next heartbeat interval based on being's state
 function calculateHeartbeatInterval() {
+  // ◈ HEARTBEAT FILOZOFIJA (po prehodu na meta-triado):
+  //   Vsak heartbeat zdaj sproži metaTriado (1 LLM klic).
+  //   Da ohranimo razumno LLM porabo IN damo bitju prostor da gradi
+  //   kakovostno (ne nervozno tika), je default raztezek 30 min.
+  //   Conversation triggers (DM/mention/reply) GREJO MIMO heartbeata —
+  //   bitje takoj odgovori nagovoru, ne čaka heartbeata.
   const state = memory.getState();
   const hour = new Date().getHours();
   const energy = state.energy || 1;
   const minutesSinceConversation = (Date.now() - lastConversationAt) / 60000;
 
-  // BASE: 60 seconds
-  let interval = 60000;
+  // BASE: 30 minutes
+  let interval = 30 * 60_000; // 30 min
 
-  // Active conversation (last 5 minutes) → faster
+  // Active conversation (last 5 minutes) → faster (ostane responsive za follow-up)
   if (lastConversationAt > 0 && minutesSinceConversation < 5) {
-    interval = 30000; // 30s
+    interval = 60_000; // 1 min
+  }
+  // Conversation just ended (5-15 min) → still warm, half pace
+  else if (lastConversationAt > 0 && minutesSinceConversation < 15) {
+    interval = 5 * 60_000; // 5 min
   }
   // Fresh NOSTR events in buffer → slightly faster
   else if (feedBuffer.length > 2) {
-    interval = 45000; // 45s
+    interval = 15 * 60_000; // 15 min
   }
-  // Low energy → slower
+  // Low energy → slower (bitje počiva)
   else if (energy < 0.3) {
-    interval = 90000; // 90s
+    interval = 45 * 60_000; // 45 min
   }
-  // Night time (22:00 - 07:00) → slow
+  // Night time (22:00 - 07:00) → slowest
   else if (hour >= 22 || hour < 7) {
-    interval = 120000; // 2 min
+    interval = 60 * 60_000; // 60 min
   }
   // Evening (20:00 - 22:00) → slightly slower
   else if (hour >= 20) {
-    interval = 90000; // 90s
+    interval = 45 * 60_000; // 45 min
   }
 
   // After dreams → recovery (isDreaming flag just cleared)
@@ -261,8 +272,8 @@ function calculateHeartbeatInterval() {
         const dreamMs = new Date(ts).getTime();
         if (Number.isFinite(dreamMs)) {
           const minsSinceDream = (Date.now() - dreamMs) / 60000;
-          if (minsSinceDream >= 0 && minsSinceDream < 3) {
-            interval = Math.max(interval, 180000); // 3 min recovery
+          if (minsSinceDream >= 0 && minsSinceDream < 5) {
+            interval = Math.max(interval, 5 * 60_000); // 5 min recovery
           }
         }
       }
@@ -376,66 +387,79 @@ async function handleHeartbeat() {
     }
   }
 
-  // Dream cooldown check
+  // ◈ SANJE — odločitev skozi triado, ne probabilistično formulo
+  // Star pristop je bil: experiencePressure + heatPressure + fatiguePressure
+  //   + Math.random(). Zdaj LLM gre skozi tezo budnosti / antitezo sanj
+  //   in iz sinteze izhaja "sanjam" + "globina".
+  // Hard varovalka: cooldown po zadnjih sanjah ostane (sanje so drage,
+  // dvojni dream cycle bi bil eskalacija). Idle threshold je odstranjen —
+  // triada lahko sama presodi ali je čas.
   const timeSinceLastDream = Date.now() - lastDreamTime;
   const canDream = timeSinceLastDream >= DREAM_COOLDOWN_MS;
+  const minSinceLastDream = lastDreamTime > 0 ? timeSinceLastDream / 60_000 : Infinity;
 
-  // Sanjski pritisk: raste z nepredelanimi izkušnjami, čustveno turbulence, utrujenostjo
   const resonanceForDream = memory.getPathwayResonance();
   const triadsSinceDream = Math.min(20, Math.max(0, memory.getTriadCount() - state.total_dreams * 4));
-  const experiencePressure = Math.min(1, triadsSinceDream / 10);
-  const heatPressure = resonanceForDream.heatLevel === 'hot' ? 0.3
-    : resonanceForDream.heatLevel === 'warm' ? 0.15
-    : resonanceForDream.heatLevel === 'warming' ? 0.05 : 0;
-  const fatiguePressure = Math.max(0, (1 - state.energy) * 0.3);
-  const idlePressure = Math.min(0.15, (idleMinutes - config.dreamAfterIdleMinutes) / 120 * 0.15);
-
   const growthPhaseForDream = memory.getGrowthPhase();
-  const dreamMultiplier = ['child', 'teenager'].includes(growthPhaseForDream) ? 0.2 : 1.0;
-  const dreamProbability = Math.max(0.02, Math.min(0.6,
-    (0.1 + experiencePressure * 0.25 + heatPressure + fatiguePressure + idlePressure)
-    * dreamMultiplier
-  ));
 
-  const dreamIdleThreshold = growthPhaseForDream === 'child'
-    ? 120
-    : config.dreamAfterIdleMinutes;
-
-  if (canDream && idleMinutes > dreamIdleThreshold && Math.random() < dreamProbability) {
-    console.log(`[HEARTBEAT] Entering dream state... (pritisk: ${dreamProbability.toFixed(2)}, faza: ${growthPhaseForDream})`);
-    broadcast('activity', { type: 'dream', text: '🌙 Vstopam v stanje sanj...' });
-    isDreaming = true;
-    const dreamResult = await dream();
-    if (dreamResult) {
-      lastDreamTime = Date.now();
-      broadcast('dream', dreamResult);
-      broadcast('activity', { type: 'dream', text: `🌙 Sanja: ${(dreamResult.dream_narrative || '').slice(0, 120)}` });
-      broadcast('activity', { type: 'dream', text: `🌙 Uvid: ${dreamResult.insight || '?'} | Ostanek: ${dreamResult.emotional_residue || '?'}` });
-      if (dreamResult.fluid_override) {
-        broadcast('activity', { type: 'breakthrough', text: `⚡ PREBOJ: Fluidna površina: "${(dreamResult.fluid_override || '').slice(0, 100)}"` });
-      }
+  if (canDream) {
+    let sanje;
+    try {
+      sanje = await sanjskaTriada(state, idleMinutes, {
+        growthPhase: growthPhaseForDream,
+        triadsSinceDream,
+        resonance: resonanceForDream,
+        minSinceLastDream,
+      });
+    } catch (e) {
+      console.error('[SANJE] Triada napaka:', e.message);
+      sanje = { sanjam: false, globina: 'lahke', razlog: e.message };
     }
-    // Zbudi se — pošlji sporočila ki so čakala
-    isDreaming = false;
-    if (dreamingQueue.length > 0) {
-      console.log(`[DREAM] 🌅 Zbujam se — ${dreamingQueue.length} sporočil čaka`);
-      for (const queued of dreamingQueue) {
-        try {
-          const wakeMsg = `◈ Sem tu. Med spanjem sem prejela tvoje sporočilo — "${queued.content.slice(0, 60)}${queued.content.length > 60 ? '...' : ''}". Zdaj sem budna.`;
-          if (queued.kind === 4) {
-            await sendDM(queued.pubkey, wakeMsg);
-          } else {
-            await publishReply('◈ ' + wakeMsg, queued.event);
-          }
-          console.log(`[DREAM] 🌅 Odgovorila ${queued.pubkey.slice(0, 8)}... po prebujenju`);
-        } catch (e) {
-          console.error('[DREAM] Wake message napaka:', e.message);
+
+    console.log(`[SANJE] ${sanje.teza || ''}`);
+    console.log(`[SANJE] ↔ ${sanje.antiteza || ''}`);
+    console.log(`[SANJE] → ${sanje.sinteza || ''} [sanjam=${sanje.sanjam} globina=${sanje.globina}]`);
+    broadcast('activity', {
+      type: 'sanjska-triada',
+      text: `🌙 ${(sanje.sinteza || '').slice(0, 100)} [${sanje.sanjam ? sanje.globina : 'budna'}]`,
+    });
+
+    if (sanje.sanjam) {
+      console.log(`[HEARTBEAT] Entering dream state... (faza: ${growthPhaseForDream}, globina: ${sanje.globina})`);
+      broadcast('activity', { type: 'dream', text: `🌙 Vstopam v ${sanje.globina} sanje...` });
+      isDreaming = true;
+      const dreamResult = await dream(sanje.globina);
+      if (dreamResult) {
+        lastDreamTime = Date.now();
+        broadcast('dream', dreamResult);
+        broadcast('activity', { type: 'dream', text: `🌙 Sanja: ${(dreamResult.dream_narrative || '').slice(0, 120)}` });
+        broadcast('activity', { type: 'dream', text: `🌙 Uvid: ${dreamResult.insight || '?'} | Ostanek: ${dreamResult.emotional_residue || '?'}` });
+        if (dreamResult.fluid_override) {
+          broadcast('activity', { type: 'breakthrough', text: `⚡ PREBOJ: Fluidna površina: "${(dreamResult.fluid_override || '').slice(0, 100)}"` });
         }
       }
-      dreamingQueue.length = 0;
+      // Zbudi se — pošlji sporočila ki so čakala
+      isDreaming = false;
+      if (dreamingQueue.length > 0) {
+        console.log(`[DREAM] 🌅 Zbujam se — ${dreamingQueue.length} sporočil čaka`);
+        for (const queued of dreamingQueue) {
+          try {
+            const wakeMsg = `◈ Sem tu. Med spanjem sem prejela tvoje sporočilo — "${queued.content.slice(0, 60)}${queued.content.length > 60 ? '...' : ''}". Zdaj sem budna.`;
+            if (queued.kind === 4) {
+              await sendDM(queued.pubkey, wakeMsg);
+            } else {
+              await publishReply('◈ ' + wakeMsg, queued.event);
+            }
+            console.log(`[DREAM] 🌅 Odgovorila ${queued.pubkey.slice(0, 8)}... po prebujenju`);
+          } catch (e) {
+            console.error('[DREAM] Wake message napaka:', e.message);
+          }
+        }
+        dreamingQueue.length = 0;
+      }
+      return;
     }
-    return;
-  }
+  } // end if (canDream)
 
   // Direction growth — gradual process during newborn
   const growthPhase = memory.getGrowthPhase();
@@ -724,20 +748,30 @@ async function handleHeartbeat() {
     }
   }
 
-  // ── 2. Decide depth ──
-  const decision = decideSynthesisDepth({
-    triggerType: 'heartbeat',
-    triggerContent,
-    memory,
-    feedBuffer,
-    state,
+  // ── 2. META-TRIADA — odločitev skozi triado, ne if/else ──
+  // Stari decideSynthesisDepth() je bil hardcoded gate. Zdaj LLM gre skozi
+  // teza/antiteza/sinteza in iz sinteze izhaja globina. Cooldown? Ni ga.
+  // Heartbeat interval je razširjen na ~30 min default → cca 6 LLM klicev/h
+  // čez 3 bitja, kar je sprejemljivo.
+  let resonanceForMeta = { heatLevel: 'cold' };
+  try { resonanceForMeta = memory.getPathwayResonance?.() || resonanceForMeta; } catch (_) {}
+
+  const meta = await metaTriada(triggerContent, 'heartbeat', state, {
     idleMinutes,
-    isAutonomous: isAutonomous2,
-    growthPhase: growthPhase2
+    growthPhase: growthPhase2,
+    resonance: resonanceForMeta,
   });
 
-  console.log(`[HEARTBEAT] depth=${decision.depth} reason=${decision.reason} src=${triggerSource}`);
-  broadcast('activity', { type: 'depth', text: `◈ ${DEPTH_LABELS[decision.depth] || decision.depth}: ${decision.reason}` });
+  // Backwards-compat alias za star { depth, reason } API znotraj te funkcije
+  const decision = { depth: meta.globina, reason: meta.razlog };
+
+  console.log(`[META] ${meta.teza}`);
+  console.log(`[META] ↔ ${meta.antiteza}`);
+  console.log(`[META] → ${meta.sinteza} [${meta.globina}] (${meta.razlog})`);
+  broadcast('activity', {
+    type: 'meta-triada',
+    text: `◈ ${meta.sinteza} [${META_DEPTH_LABELS[meta.globina] || meta.globina}]`,
+  });
 
   // ── 3. Execute branch ──
   if (decision.depth === 'full') {
@@ -785,23 +819,29 @@ async function handleHeartbeat() {
     } catch (e) {
       console.error('[HEARTBEAT] Quantum synthesis napaka:', e.message);
     }
-  } else if (decision.depth === 'crystal' && decision.crystal) {
-    const text = decision.crystal.pattern || decision.crystal.content || '';
+  } else if (decision.depth === 'crystal') {
+    // Meta-triada je rekla "govor iz kristala" — zdaj poiščem zrelo strukturo.
+    // Če kristal ni na voljo, padem v silent (sinteza je bila prava, ampak telo
+    // še nima česa povedati iz nepremakljivega — tišina je legitiman ostanek).
+    let crystal = null;
+    try { crystal = memory.getCrystalForUtterance?.() || null; } catch (_) {}
+    const text = crystal && (crystal.pattern || crystal.content || '');
     if (text && text.trim().length > 0) {
       const noteText = '◆ ' + text.trim();
       await publishNote(noteText);
-      try { memory.markCrystalUttered(decision.crystal.id); } catch (_) {}
-      try { if (typeof memory.fireSynapse === 'function') memory.fireSynapse(decision.crystal.id); } catch (_) {}
-      try { if (typeof memory.spreadActivation === 'function') memory.spreadActivation(decision.crystal.id, 15); } catch (_) {}
+      try { memory.markCrystalUttered(crystal.id); } catch (_) {}
+      try { if (typeof memory.fireSynapse === 'function') memory.fireSynapse(crystal.id); } catch (_) {}
+      try { if (typeof memory.spreadActivation === 'function') memory.spreadActivation(crystal.id, 15); } catch (_) {}
       broadcast('expression', { content: text, source: 'crystal' });
       broadcast('activity', { type: 'expression', text: `◆ KRISTAL → NOSTR: "${text.slice(0, 100)}"` });
       console.log(`[HEARTBEAT] Crystal uttered: ${text.slice(0, 60)}...`);
     } else {
-      console.log('[HEARTBEAT] Crystal selected but empty pattern — silent fallback');
+      console.log('[HEARTBEAT] Sinteza je hotela kristal, a ga ni — tišina je ostanek');
       memory.updateState({ energy: Math.min(1, state.energy + 0.01) });
+      broadcast('activity', { type: 'silence', text: L('... kristala še ni — tiho dihanje ...', '... no crystal yet — quiet breathing ...') });
     }
   } else {
-    // silent — nothing new under the sun
+    // silent — sinteza je bila tišina sama
     memory.updateState({ energy: Math.min(1, state.energy + 0.01) });
     console.log(`[HEARTBEAT] ${L('Tiho dihanje. ' + decision.reason, 'Quiet breathing. ' + decision.reason)}`);
     broadcast('activity', { type: 'silence', text: L(`... tiho dihanje (${decision.reason}) ...`, `... quiet breathing (${decision.reason}) ...`) });

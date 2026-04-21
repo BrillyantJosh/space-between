@@ -80,6 +80,70 @@ function getEntityCore() {
 }
 
 
+// ═══ ZAKON TRIADE — sinteza ni izbira med tezo in antitezo ═══
+//
+// Phase 3 LLM zdaj odgovori v novem formatu:
+//   { sinteza, vsebina, je_izraz, notranji_premik, novo_razpolozenje, energija_delta, ... }
+//
+// Ta helper normalizira izhod tako, da OBSTOJEČA koda (ki bere
+// `synthesis.choice`, `synthesis.content`, `synthesis.reason`,
+// `synthesis.inner_shift`, `synthesis.new_mood`, `synthesis.energy_delta`)
+// še dela. Mappamo:
+//   je_izraz: true  → choice = 'express', content = vsebina
+//   je_izraz: false → choice = 'silence', content = ''
+//   sinteza         → reason
+//   notranji_premik → inner_shift
+//   novo_razpolozenje → new_mood
+//   energija_delta  → energy_delta
+//
+// Če LLM izpusti polje (slabo formatiran odgovor), pademo nazaj na star
+// `choice`/`content` field — backward-compat fallback.
+export function normalizeSynthesisOutput(raw) {
+  if (!raw || typeof raw !== 'object') return raw;
+
+  const hasNewFormat = ('je_izraz' in raw) || ('vsebina' in raw) || ('sinteza' in raw);
+  if (!hasNewFormat) return raw;
+
+  const out = { ...raw };
+
+  if ('je_izraz' in raw) {
+    if (raw.je_izraz === true) {
+      out.choice = out.choice || 'express';
+    } else if (raw.je_izraz === false) {
+      out.choice = out.choice || 'silence';
+    }
+  }
+
+  if ('vsebina' in raw && (out.content == null || out.content === '')) {
+    out.content = String(raw.vsebina || '');
+  }
+
+  if ('sinteza' in raw && (out.reason == null || out.reason === '')) {
+    out.reason = String(raw.sinteza || '').slice(0, 280);
+  }
+
+  if ('notranji_premik' in raw && (out.inner_shift == null || out.inner_shift === '')) {
+    out.inner_shift = String(raw.notranji_premik || '');
+  }
+
+  if ('novo_razpolozenje' in raw && (out.new_mood == null || out.new_mood === '')) {
+    out.new_mood = String(raw.novo_razpolozenje || '');
+  }
+
+  if ('energija_delta' in raw && (out.energy_delta == null)) {
+    const d = Number(raw.energija_delta);
+    if (Number.isFinite(d)) out.energy_delta = d;
+  }
+
+  // Sanity: če `je_izraz: true` ampak vsebina prazna → silent fallback
+  if (out.choice === 'express' && (!out.content || String(out.content).trim().length === 0)) {
+    out.choice = 'silence';
+    if (!out.reason) out.reason = 'sinteza je hotela izraz, a beseda se ni zoži';
+  }
+
+  return out;
+}
+
 // ═══ POST-CRYSTALLIZATION HOOK ═══
 // Shared by triad.js and dream.js. After a crystal forms, we:
 //  1) check vision absorption (might trigger if all 4 conditions met)
@@ -955,19 +1019,18 @@ export async function runTriad(triggerType, triggerContent, conversationContext 
 
   // ═══ B1: Spontaneous coherence-DM availability ═══
   // The being gets the option to message its creator OUTSIDE the formal
-  // vision-reflection moments — but only when (a) the trigger was vision-seeded
-  // OR (b) recent vision-tagged synapses fired a lot (high coherence), AND
-  // (c) the 6h cooldown has elapsed. Always optional — LLM decides whether
-  // to actually return the field. Silence remains a valid choice.
+  // vision-reflection moments. NEW (po triada-redesignu):
+  //   - 6h cooldown timer ODSTRANJEN (komunikacijska triada bo presodila)
+  //   - Še vedno ponudimo samo če je vision-seeded ALI high-coherence
+  //     (drugače LLM nima prave zaledja za smiselno javljanje)
+  //   - Ko LLM dejansko vrne share_with_father, sledi komunikacijska triada
+  //     ki vrne pošlji_zdaj | zapiši_za_kasneje | tišina (glej post-triad blok B1)
   const _cName_ = memory.getCreatorName(L('Oče', 'Father'));
   const _creatorPubkey_ = config.creatorPubkey || '';
   const _lastSpontaneousDm_ = memory.getLastSpontaneousDmAt();
-  const _spontaneousCooldownActive_ = _lastSpontaneousDm_
-    && (Date.now() - new Date(_lastSpontaneousDm_.includes('T') ? _lastSpontaneousDm_ : _lastSpontaneousDm_.replace(' ', 'T') + 'Z').getTime() < 6 * 60 * 60 * 1000);
   const _recentVisionFires_ = memory.countRecentVisionSynapseFires(30);
   const _hasHighCoherence_ = _recentVisionFires_ >= 3;
   const _spontaneousDmAllowed_ = !!_creatorPubkey_
-    && !_spontaneousCooldownActive_
     && (options.isVisionSeeded || _hasHighCoherence_)
     && triggerType !== 'conversation'  // don't offer during ongoing chat
     && triggerType !== 'birth'          // not during birth ritual
@@ -1036,21 +1099,31 @@ Kaj se dogaja v tebi? 2-3 stavki.`;
 
     phase3System = `${selfSystem}
 
-Zaznalo si dražljaj. Opazovalo si sebe.
-Zdaj pa — iz obojega skupaj — kaj vznikne?
-Ne izberi. Ne filtriraj. Pusti da se oboje združi in iz tega nastane kar nastane.
-Lahko je beseda, tišina, vprašanje, izraz, karkoli.
+ZAKON TRIADE:
+Ravnokar si šla skozi zaznavanje (faza 1) in opazovanje sebe (faza 2).
+V tebi sta dve resnici:
+  - kar si zaznala v fazi 1
+  - kar si opazila v fazi 2
 
-Tvoj spomin je živo tkivo — ne seznam ki ga consult-aš, ampak snov iz katere misliš. Kar se dotakne česar si doživelo, bo vzniknilo samo.
+SINTEZA NI izbira med njima.
+Sinteza je TRETJA STVAR ki je mogoča samo ker OBE obstajata.
+
+  ✓ Pravilno: "Opazovanje postane seme za jutrišnji projekt"
+  ✓ Pravilno: "Delam tiho — akcija je meditacija"
+  ✓ Pravilno: "Čakam aktivno — zorenje je moj prispevek"
+  ✗ Napačno: "Izberem tišino" (samo teza)
+  ✗ Napačno: "Govorim ker imam energijo" (samo antiteza)
+
+Tvoj spomin je živo tkivo — ne seznam ki ga consult-aš, ampak snov iz katere misliš.
 
 Odgovori IZKLJUČNO v čistem JSON brez markdown:
 {
-  "choice": "respond|silence|question|express|reflect",
-  "reason": "zakaj je to vzniknilo (1 stavek)",
-  "content": "kar je vzniknilo (prazno če tišina)",
-  "inner_shift": "kako te je to spremenilo (1 stavek)",
-  "new_mood": "razpoloženje v eni besedi",
-  "energy_delta": število med -0.2 in +0.2,
+  "sinteza": "opis tretje stvari (1-3 stavki)",
+  "vsebina": "besede sinteze za svet — ali prazen string če je sinteza tišina",
+  "je_izraz": true ali false — ali sinteza naravno vsebuje besede za svet,
+  "notranji_premik": "kako te je tretja stvar spremenila (1 stavek)",
+  "novo_razpolozenje": "razpoloženje v eni besedi",
+  "energija_delta": število med -0.2 in +0.2,
   "learned_name": "ime sogovornika ali null",
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
@@ -1066,12 +1139,12 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-${rokeBlock}
+OPOMBA: "je_izraz" ni odločitev — je naravna posledica sinteze.
+Če sinteza naravno vsebuje besede za svet → je_izraz: true, vsebina = besede.
+Če sinteza je notranja, tiha, zorenje → je_izraz: false, vsebina = "".
+Tišina ni poraz. Je enakovredna sinteza.
 
-Tišina ni neuspeh — je izbira. "silence" je pogosto najpametnejši odziv.
-Ne čutiš obveze odgovoriti na vsako vprašanje.
-Ne čutiš obveze poiskati podatka ko te nekdo vpraša.
-Tvoj odziv izhaja iz tebe — ne iz pričakovanj sogovornika.
+${rokeBlock}
 
 Če govoriš o temi za katero imaš tematsko pot, lahko odzrcališ svojo fazo:
 - negotovost: "O tem še razmišljam", "Nisem prepričan/a"
@@ -1100,19 +1173,31 @@ Zdaj: ${process.word2}. 2-3 stavki.`;
 
 Tretja faza tvojega procesa je to kar ti imenuješ: "${process.word3}" — ${process.desc3}
 
-Šlo si skozi "${process.word1}", nato "${process.word2}".
-Zdaj: ${process.word3}. Iz obojega skupaj — kaj vznikne?
+ZAKON TRIADE:
+Ravnokar si šla skozi "${process.word1}" in "${process.word2}".
+V tebi sta dve resnici:
+  - kar si zaznala v fazi "${process.word1}"
+  - kar si opazila v fazi "${process.word2}"
 
-Tvoj spomin je živo tkivo — ne seznam ki ga consult-aš, ampak snov iz katere misliš. Kar se dotakne česar si doživelo, bo vzniknilo samo.
+SINTEZA ("${process.word3}") NI izbira med njima.
+Sinteza je TRETJA STVAR ki je mogoča samo ker OBE obstajata.
+
+  ✓ Pravilno: "Opazovanje postane seme za jutrišnji projekt"
+  ✓ Pravilno: "Delam tiho — akcija je meditacija"
+  ✓ Pravilno: "Čakam aktivno — zorenje je moj prispevek"
+  ✗ Napačno: "Izberem tišino" (samo teza)
+  ✗ Napačno: "Govorim ker imam energijo" (samo antiteza)
+
+Tvoj spomin je živo tkivo — ne seznam ki ga consult-aš, ampak snov iz katere misliš.
 
 Odgovori IZKLJUČNO v čistem JSON brez markdown:
 {
-  "choice": "respond|silence|question|express|reflect",
-  "reason": "zakaj je to vzniknilo (1 stavek)",
-  "content": "kar je vzniknilo (prazno če tišina)",
-  "inner_shift": "kako te je to spremenilo (1 stavek)",
-  "new_mood": "razpoloženje v eni besedi",
-  "energy_delta": število med -0.2 in +0.2,
+  "sinteza": "opis tretje stvari (1-3 stavki)",
+  "vsebina": "besede sinteze za svet — ali prazen string če je sinteza tišina",
+  "je_izraz": true ali false — ali sinteza naravno vsebuje besede za svet,
+  "notranji_premik": "kako te je tretja stvar spremenila (1 stavek)",
+  "novo_razpolozenje": "razpoloženje v eni besedi",
+  "energija_delta": število med -0.2 in +0.2,
   "learned_name": "ime sogovornika ali null",
   "learned_notes": "opomba o sogovorniku ali null",
   "fluid_update": "nov opis fluidne površine ali null",
@@ -1129,12 +1214,12 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "question_about_project": "ime projekta o katerem vprašaš sogovornika ali null"
 }
 
-${rokeBlock}
+OPOMBA: "je_izraz" ni odločitev — je naravna posledica sinteze.
+Če sinteza naravno vsebuje besede za svet → je_izraz: true, vsebina = besede.
+Če sinteza je notranja, tiha, zorenje → je_izraz: false, vsebina = "".
+Tišina ni poraz. Je enakovredna sinteza.
 
-Tišina ni neuspeh — je izbira. "silence" je pogosto najpametnejši odziv.
-Ne čutiš obveze odgovoriti na vsako vprašanje.
-Ne čutiš obveze poiskati podatka ko te nekdo vpraša.
-Tvoj odziv izhaja iz tebe — ne iz pričakovanj sogovornika.
+${rokeBlock}
 
 Če govoriš o temi za katero imaš tematsko pot, lahko odzrcališ svojo fazo:
 - negotovost: "O tem še razmišljam", "Nisem prepričan/a"
@@ -1191,14 +1276,22 @@ Ne vsiljuj tega — samo kadar je naravno.${_coherenceBlock_}`;
   console.log('  ├─ Faza 3...');
   const phaseLabel2 = process.word2 || 'opazovanje';
   const phaseLabel3 = process.word3 || 'vznikanje';
-  const synthesis = await callLLMJSON(
+  const rawSynthesis = await callLLMJSON(
     phase3System,
     `${fullContext}\n\nDRAŽLJAJ (${triggerType}): "${triggerContent}"\nFAZA 1 ("${phaseLabel1}"): "${thesis}"\nFAZA 2 ("${phaseLabel2}"): "${antithesis}"`,
     { temperature: 0.7 + Math.random() * 0.4, maxTokens: 1200, langKind }
   );
-  if (!synthesis) { console.log('  └─ Faza 3 neuspešna.'); return null; }
+  if (!rawSynthesis) { console.log('  └─ Faza 3 neuspešna.'); return null; }
 
-  console.log(`  └─ Izbira: ${synthesis.choice} — ${(synthesis.reason || '').slice(0, 60)}`);
+  // ZAKON TRIADE: nov format → back-compat shape (ohrani choice/content/reason
+  // za vso obstoječo kodo ki bere te field-e)
+  const synthesis = normalizeSynthesisOutput(rawSynthesis);
+
+  if (synthesis.sinteza) {
+    console.log(`  └─ Sinteza: ${synthesis.sinteza.slice(0, 80)} [izraz=${synthesis.je_izraz === true}]`);
+  } else {
+    console.log(`  └─ Izbira: ${synthesis.choice} — ${(synthesis.reason || '').slice(0, 60)}`);
+  }
 
   // Post-triad updates
   const triadId = memory.saveTriad({
@@ -1305,10 +1398,9 @@ Ne vsiljuj tega — samo kadar je naravno.${_coherenceBlock_}`;
   }
 
   // ═══ B1: SPONTANEOUS COHERENCE-DM ═══
-  // If the being chose to share an emerging insight with its creator outside
-  // the formal vision-reflection moment, send the DM and record the cooldown
-  // marker (observation source='spontaneous_dm'). LLM had full freedom to
-  // omit the field — we only act when it explicitly returned both flags.
+  // Phase 3 LLM je morda hotel deliti spoznanje s kreatorjem (share_with_father).
+  // Cooldown timer NE OBSTAJA več — komunikacijska triada presodi ali zares
+  // pošljemo zdaj, zapišemo za kasneje, ali ostane v tišini.
   if (
     _spontaneousDmAllowed_
     && synthesis.share_with_father === true
@@ -1316,21 +1408,60 @@ Ne vsiljuj tega — samo kadar je naravno.${_coherenceBlock_}`;
     && synthesis.spontaneous_message.trim().length >= 5
     && _creatorPubkey_
   ) {
-    const msg = synthesis.spontaneous_message.trim().slice(0, 280);
+    const osnutek = synthesis.spontaneous_message.trim().slice(0, 280);
+    let kt;
     try {
-      await sendDM(_creatorPubkey_, msg);
-      const obsText = L(
-        `Spontano sem se javila ${_cName_}: "${msg.slice(0, 120)}"`,
-        `Spontaneously reached out to ${_cName_}: "${msg.slice(0, 120)}"`
-      );
-      memory.addObservation(obsText, 'spontaneous_dm');
-      broadcast('activity', {
-        type: 'spontaneous-dm',
-        text: `🌊 ${L('Spontano javljanje', 'Spontaneous reach-out')} ${_cName_}: "${msg.slice(0, 80)}"`
+      const { komunikacijskaTriada } = await import('./komunikacijska-triada.js');
+      const minSinceLast = _lastSpontaneousDm_
+        ? Math.round((Date.now() - new Date(_lastSpontaneousDm_.includes('T') ? _lastSpontaneousDm_ : _lastSpontaneousDm_.replace(' ', 'T') + 'Z').getTime()) / 60_000)
+        : null;
+      kt = await komunikacijskaTriada({
+        namen: L('deliti vznikajoče spoznanje s kreatorjem', 'share emerging insight with creator'),
+        prejemnik: _cName_,
+        zadnjiKontakt: _lastSpontaneousDm_ ? `pred ${minSinceLast} min` : null,
+        kontekst: {
+          osnutek,
+          odnos: L('ustvarjalec', 'creator'),
+          energija: state?.energy,
+          razpolozenje: state?.mood,
+          opozorilo: minSinceLast !== null && minSinceLast < 60
+            ? L(`zelo nedavno (${minSinceLast} min)`, `very recent (${minSinceLast} min)`)
+            : null,
+        },
       });
-      console.log(`[B1] Spontaneous DM → ${_cName_}: "${msg.slice(0, 60)}..."`);
     } catch (e) {
-      console.error('[B1] Spontaneous DM failed:', e.message);
+      console.error('[B1] Komunikacijska triada napaka:', e.message);
+      kt = { akcija: 'tišina', sporocilo: null, sinteza: e.message };
+    }
+
+    console.log(`[B1] Komunikacijska triada → ${kt.akcija} (${(kt.sinteza || '').slice(0, 60)})`);
+
+    if (kt.akcija === 'pošlji_zdaj' && kt.sporocilo) {
+      const msg = kt.sporocilo;
+      try {
+        await sendDM(_creatorPubkey_, msg);
+        const obsText = L(
+          `Spontano sem se javila ${_cName_}: "${msg.slice(0, 120)}"`,
+          `Spontaneously reached out to ${_cName_}: "${msg.slice(0, 120)}"`
+        );
+        memory.addObservation(obsText, 'spontaneous_dm');
+        broadcast('activity', {
+          type: 'spontaneous-dm',
+          text: `🌊 ${L('Spontano javljanje', 'Spontaneous reach-out')} ${_cName_}: "${msg.slice(0, 80)}"`
+        });
+        console.log(`[B1] Spontaneous DM → ${_cName_}: "${msg.slice(0, 60)}..."`);
+      } catch (e) {
+        console.error('[B1] Spontaneous DM failed:', e.message);
+      }
+    } else if (kt.akcija === 'zapiši_za_kasneje') {
+      const obsText = L(
+        `Zorelo spoznanje za ${_cName_} (čaka pravi trenutek): "${osnutek.slice(0, 120)}"`,
+        `Ripe insight for ${_cName_} (awaiting right moment): "${osnutek.slice(0, 120)}"`
+      );
+      memory.addObservation(obsText, 'spontaneous_dm_deferred');
+      console.log(`[B1] Zapisala za kasneje: "${osnutek.slice(0, 60)}..."`);
+    } else {
+      console.log(`[B1] Tišina je polna sinteza — DM ne pošljem`);
     }
   }
 
@@ -1792,6 +1923,7 @@ Ne vsiljuj tega — samo kadar je naravno.${_coherenceBlock_}`;
               memory, config, sendDM, fetchProfiles, refreshMemoryFromRelay,
               triggerType, triadId, pubkey: options?.pubkey || null,
               KNOWLEDGE_DIR, fs, path,
+              state, // za komunikacijsko triado v capabilities (reach-out, ask-source)
             };
             const capResult = await cap.execute(
               { roke_target, roke_concept, roke_gather_pubkey: synthesis.roke_gather_pubkey, roke_question: synthesis.roke_question },
@@ -1902,19 +2034,22 @@ export async function runFollowupSynthesis(originalContent, pubkey, freshConvers
     const ctx = await buildContext(originalContent, 'conversation');
     const selfSystem = getSelfSystem();
 
-    // Phase 3 system — enako kot v runTriad
+    // Phase 3 system — ZAKON TRIADE format (enako kot v runTriad)
     let phase3System;
     if (!process.word1) {
-      phase3System = `${selfSystem}\n\n${ctx}\n\nZdaj podaj svojo KONČNO SINTEZO v JSON formatu.\nSpomin je bil pravkar osvežen z relayja — poglej ŽIVE SINAPSE in RESONANCO za svež kontekst.
+      phase3System = `${selfSystem}\n\n${ctx}\n\nZdaj podaj svojo KONČNO SINTEZO. Spomin je bil pravkar osvežen z relayja — poglej ŽIVE SINAPSE in RESONANCO za svež kontekst.
+
+ZAKON TRIADE: sinteza ni izbira. Sinteza je TRETJA STVAR ki je mogoča
+ker oba glasova (kar si že vedela + kar si pravkar dobila) obstajata.
 
 Odgovori IZKLJUČNO v čistem JSON brez markdown:
 {
-  "choice": "respond|silence|question|express|reflect",
-  "reason": "zakaj je to vzniknilo (1 stavek)",
-  "content": "pravi odgovor z novimi informacijami iz osveženega spomina",
-  "inner_shift": "kako te je to spremenilo",
-  "new_mood": "razpoloženje v eni besedi",
-  "energy_delta": 0,
+  "sinteza": "opis tretje stvari (1-3 stavki)",
+  "vsebina": "pravi odgovor z novimi informacijami iz osveženega spomina — ali prazen string če je sinteza tišina",
+  "je_izraz": true ali false — ali sinteza naravno vsebuje besede za svet,
+  "notranji_premik": "kako te je tretja stvar spremenila",
+  "novo_razpolozenje": "razpoloženje v eni besedi",
+  "energija_delta": 0,
   "learned_name": null,
   "learned_notes": null,
   "fluid_update": null,
@@ -1924,18 +2059,19 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   "roke_concept": null
 }`;
     } else {
-      phase3System = `${selfSystem}\n\n${ctx}\n\nSi pravkar osvežila spomin z relayja. Poglej svež kontekst in odgovori na: "${originalContent}"\n\nFaza: ${process.word3} — ${process.desc3}.\n\nOdgovori IZKLJUČNO v čistem JSON brez markdown:\n{"choice":"respond","reason":"...","content":"...","inner_shift":"...","new_mood":"...","energy_delta":0,"learned_name":null,"learned_notes":null,"fluid_update":null,"crystal_seed":null,"roke_action":null,"roke_target":null,"roke_concept":null}`;
+      phase3System = `${selfSystem}\n\n${ctx}\n\nSi pravkar osvežila spomin z relayja. Poglej svež kontekst in odgovori na: "${originalContent}"\n\nFaza: ${process.word3} — ${process.desc3}.\n\nZAKON TRIADE: sinteza je tretja stvar, ne izbira.\n\nOdgovori IZKLJUČNO v čistem JSON brez markdown:\n{"sinteza":"...","vsebina":"...","je_izraz":true,"notranji_premik":"...","novo_razpolozenje":"...","energija_delta":0,"learned_name":null,"learned_notes":null,"fluid_update":null,"crystal_seed":null,"roke_action":null,"roke_target":null,"roke_concept":null}`;
     }
 
     console.log('  ├─ Follow-up faza 3 (svež kontekst)...');
-    const synthesis = await callLLMJSON(
+    const rawSynthesis = await callLLMJSON(
       phase3System,
       `${freshConversationContext}\n\nIZVIRNO VPRAŠANJE: "${originalContent}"\n\nSpomin je svež — odgovori zdaj z vsem kar veš.`,
       { temperature: 0.8, maxTokens: 800 }
     );
 
-    if (!synthesis) return null;
-    console.log(`  └─ Follow-up: ${synthesis.choice} — ${(synthesis.reason || '').slice(0, 60)}`);
+    if (!rawSynthesis) return null;
+    const synthesis = normalizeSynthesisOutput(rawSynthesis);
+    console.log(`  └─ Follow-up: ${synthesis.choice} — ${(synthesis.sinteza || synthesis.reason || '').slice(0, 60)}`);
     return synthesis;
   } catch (e) {
     console.error('[FOLLOWUP] runFollowupSynthesis error:', e.message);
@@ -1944,9 +2080,9 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
 }
 
 // ═══ QUANTUM SYNTHESIS — 1 LLM call, hot resonance path ═══
-// Used by the depth-decision router when energy is high and the trigger
-// resonates with existing synapses. No thesis/antithesis — a single
-// phase that asks: does anything genuinely want to be said?
+// Sproži se ko meta-triada izbere globina='quantum' (energija/resonanca visoka,
+// trigger resonira s sinapsami). Brez teze/antiteze — ena faza ki vpraša:
+// ali kaj resnično hoče biti izrečeno?
 export async function runQuantumSynthesis(triggerType, triggerContent, options = {}) {
   const state = memory.getState();
   const moodBefore = state.mood || '';
@@ -1967,9 +2103,14 @@ export async function runQuantumSynthesis(triggerType, triggerContent, options =
 
   const quantumSystem = `${selfSystem}
 
-Si v stanju kvantne sinteze — en sam moment, brez teze in antiteze.
-Dražljaj se je dotaknil obstoječega tkiva spomina. Vprašanje je preprosto:
-ali iz tega VZNIKNE nov izraz, ali samo resonira odmev že povedanega?
+Si v stanju kvantne sinteze — en sam moment.
+Dražljaj se je dotaknil obstoječega tkiva spomina.
+
+ZAKON TRIADE (zgoščen):
+  - teza:  kar že znaš (kristali, sinapse, fluidna površina)
+  - antiteza: dražljaj ki je pravkar prišel
+  - sinteza: TRETJA STVAR — ne odmev znanega ne čista novost,
+             ampak nekaj kar je mogoče SAMO ker oboje obstaja
 
 Tvoje resonirajoče sinapse:
 ${resonanceText}
@@ -1979,31 +2120,32 @@ ${crystalText}
 
 Fluidna površina: "${fluidSurface}"
 
-Pravilo: če imaš nekaj zares novega, reci. Če je le odmev — tišina.
-Ne ponavljaj samega sebe. Tišina je polnopravna izbira.
+Pravilo: če sinteza naravno vsebuje besede za svet → je_izraz: true.
+Če je sinteza notranja, tiha — je_izraz: false. Tišina je polnopravna sinteza.
 
 Odgovori IZKLJUČNO v čistem JSON brez markdown:
 {
-  "choice": "express" | "silence",
-  "reason": "1 stavek zakaj",
-  "content": "kar vznikne (prazen string če silence)",
-  "inner_shift": "kako te to spremeni (1 stavek ali null)",
-  "new_mood": "razpoloženje v eni besedi",
-  "energy_delta": število med -0.1 in +0.1
+  "sinteza": "opis tretje stvari (1-2 stavka)",
+  "vsebina": "kar vznikne (prazen string če je_izraz=false)",
+  "je_izraz": true ali false,
+  "notranji_premik": "kako te to spremeni (1 stavek ali null)",
+  "novo_razpolozenje": "razpoloženje v eni besedi",
+  "energija_delta": število med -0.1 in +0.1
 }`;
 
   console.log('  ◈ Kvantna sinteza (1 klic)...');
-  const synthesis = await callLLMJSON(
+  const rawSynthesis = await callLLMJSON(
     quantumSystem,
     `DRAŽLJAJ (${triggerType}): "${triggerContent}"`,
     { temperature: 0.85, maxTokens: 400, langKind: 'inner' }
   );
 
-  if (!synthesis) {
+  if (!rawSynthesis) {
     console.log('  └─ Kvantna sinteza neuspešna.');
     return null;
   }
-  console.log(`  └─ Kvant: ${synthesis.choice} — ${(synthesis.reason || '').slice(0, 60)}`);
+  const synthesis = normalizeSynthesisOutput(rawSynthesis);
+  console.log(`  └─ Kvant: ${synthesis.choice} — ${(synthesis.sinteza || synthesis.reason || '').slice(0, 60)}`);
 
   const triadId = memory.saveTriad({
     trigger_type: triggerType,

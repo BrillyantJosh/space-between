@@ -133,12 +133,19 @@ async function consolidateMemories(dreamResult) {
   });
 }
 
-export async function dream() {
-  const triads = memory.getRecentTriads(20);
+// `globina` izhaja iz sanjske triade ('lahke' | 'srednje' | 'globoke').
+// Za zdaj vpliva samo na število zadnjih triad ki jih sanje predelajo:
+//   lahke   = 5 zadnjih (krajša integracija)
+//   srednje = 20 (status quo)
+//   globoke = 40 (širša integracija več tem)
+export async function dream(globina = 'srednje') {
+  const triadDepth = globina === 'lahke' ? 5 : globina === 'globoke' ? 40 : 20;
+  const triads = memory.getRecentTriads(triadDepth);
   if (triads.length === 0) {
     console.log('[DREAM] No triads to dream about');
     return null;
   }
+  console.log(`[DREAM] Globina: ${globina} (procesiram ${triads.length} triad)`);
 
   const crystalCore = memory.getCrystalCore();
   const fluidSurface = memory.getFluidSurface();
