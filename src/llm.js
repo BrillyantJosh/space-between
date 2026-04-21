@@ -121,13 +121,18 @@ export async function createGeminiCache(staticContent) {
   }
 }
 
-export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, maxTokens = 1024, langKind = 'inner', json = false } = {}) {
+export async function callLLM(systemPrompt, userPrompt, { temperature = 0.9, maxTokens = 1024, langKind = 'inner', json = false, thinking = false } = {}) {
   systemPrompt = withLang(systemPrompt, langKind);
   const start = Date.now();
-  // 2.5-flash potrebuje eksplicitni responseMimeType da res vrne JSON.
-  // Brez tega vrača prosti tekst tudi ko prompt zahteva JSON.
+  // 2.5-flash:
+  //  • potrebuje eksplicitni responseMimeType da res vrne JSON
+  //    (brez tega ignorira "vrni samo JSON" navodila v sistemu)
+  //  • ima thinking mode VKLJUČEN by default — porabi maxOutputTokens
+  //    za thinking, pusti 1-2 tokena za actual response → MAX_TOKENS error.
+  //    Bitja ne potrebujejo thinkinga; izklopimo z thinkingBudget=0.
   const generationConfig = { temperature, maxOutputTokens: maxTokens };
   if (json) generationConfig.responseMimeType = 'application/json';
+  if (!thinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
   try {
     const response = await _fetchWithBackoff(API_URL, {
       method: 'POST',
