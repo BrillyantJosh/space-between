@@ -391,8 +391,14 @@ app.get('/api/vision-forecast', (_req, res) => {
       ? crystalsRemaining / crystalsPerDay
       : null;
 
-    // Synapses: fast at current rate, but if already met it's 0
-    const synapseEtaDays = synapsesRemaining === 0 ? 0 : 1; // rough
+    // Synapses: vision-tagged synapses arrive in bursts during vision-seeded
+    // reflection cycles (~5 per reflection in observed runs). When the target
+    // is already met (Sonce-style, 53 vision-synapses), ETA is 0.
+    const synapseEtaDays = synapsesRemaining === 0
+      ? 0
+      : (heartbeatsPerDay > 0
+          ? (Math.ceil(synapsesRemaining / 5) * 500) / heartbeatsPerDay
+          : null);
 
     // Phase: newborn → child needs 7500 heartbeats + maturity
     let phaseEtaDays = 0;
@@ -430,8 +436,9 @@ app.get('/api/vision-forecast', (_req, res) => {
         reflections: score.reflections >= 15,
         crystals: score.crystalCount >= 3,
         visionSynapses: score.visionSynapses >= 20,
-        // 'child' or 'teenager' = mature enough; embryo/newborn/crystallizing aren't.
-        phase: ['child', 'teenager'].includes(phase),
+        // 'child', 'teenager', 'autonomous' = mature enough.
+        // embryo/newborn/crystallizing aren't.
+        phase: ['child', 'teenager', 'autonomous'].includes(phase),
       },
       eta: {
         reflectionDays: reflectionEtaDays,
@@ -5065,9 +5072,9 @@ async function loadVisionForecast() {
     if (grid) {
       const cur = data.current || {};
       const tgt = data.targets || {};
-      // Phase progression: embryo → newborn → crystallizing → child → teenager.
-      // 'child' or beyond is enough for vision absorption.
-      const phaseMet = ['child', 'teenager'].includes((cur.phase || '').toLowerCase());
+      // Phase progression: embryo → newborn → crystallizing → child → teenager → autonomous.
+      // 'child' or beyond is mature enough for vision absorption.
+      const phaseMet = ['child', 'teenager', 'autonomous'].includes((cur.phase || '').toLowerCase());
       const rows = [
         makeForecastRow('Refleksije', cur.reflections || 0, tgt.reflections || 15, (cur.reflections || 0) >= (tgt.reflections || 15)),
         makeForecastRow('Kristali', cur.crystals || 0, tgt.crystals || 3, (cur.crystals || 0) >= (tgt.crystals || 3)),
