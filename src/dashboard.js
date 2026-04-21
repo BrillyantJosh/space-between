@@ -342,6 +342,117 @@ app.get('/api/seed', (req, res) => {
   }
 });
 
+// ◈ C1: "Kar se prevaja" — what's brewing inside the being.
+// Surfaces recent vision-derived synapses, crystal seeds, and the latest
+// breakthrough so the user can see internal activity without the being
+// having to send a DM. Zero side-effect on the being itself.
+app.get('/api/brewing', (_req, res) => {
+  try {
+    const visionSynapses = memory.getRecentVisionSynapses(5);
+    const crystalSeeds = memory.getRecentCrystalSeedRows(3);
+    const lastBreakthrough = memory.getLastBreakthrough();
+    const recentVisionFires30m = memory.countRecentVisionSynapseFires(30);
+    res.json({
+      visionSynapses,
+      crystalSeeds,
+      lastBreakthrough,
+      recentVisionFires30m,
+      fetched_at: Date.now(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ◈ C2: Vision absorption forecast — progress + ETA toward absorption.
+// Combines current scores with growth rates to estimate days remaining
+// for each blocker (reflections, crystals, vision_synapses, phase).
+app.get('/api/vision-forecast', (_req, res) => {
+  try {
+    const score = memory.getVisionAbsorptionScore();
+    const state = memory.getState();
+    const phase = memory.getGrowthPhase ? memory.getGrowthPhase() : (state.growth_phase || 'newborn');
+
+    const heartbeatsPerHour = memory.getHeartbeatRatePerHour(24);
+    const heartbeatsPerDay = heartbeatsPerHour * 24;
+    const crystalsPerDay = memory.getCrystalRatePerDay(7);
+
+    const reflectionsRemaining = Math.max(0, 15 - score.reflections);
+    const crystalsRemaining = Math.max(0, 3 - score.crystalCount);
+    const synapsesRemaining = Math.max(0, 20 - score.visionSynapses);
+
+    // Reflections: trigger every 500 heartbeats
+    const reflectionEtaDays = heartbeatsPerDay > 0
+      ? (reflectionsRemaining * 500) / heartbeatsPerDay
+      : null;
+
+    // Crystals: based on observed rate
+    const crystalEtaDays = crystalsPerDay > 0
+      ? crystalsRemaining / crystalsPerDay
+      : null;
+
+    // Synapses: fast at current rate, but if already met it's 0
+    const synapseEtaDays = synapsesRemaining === 0 ? 0 : 1; // rough
+
+    // Phase: newborn → child needs 7500 heartbeats + maturity
+    let phaseEtaDays = 0;
+    const heartbeatsToChildPhase = 7500;
+    if (phase === 'embryo' || phase === 'newborn') {
+      phaseEtaDays = heartbeatsPerDay > 0
+        ? Math.max(0, (heartbeatsToChildPhase - (state.total_heartbeats || 0)) / heartbeatsPerDay)
+        : null;
+    }
+
+    const absorptionDays = score.absorbed
+      ? 0
+      : Math.max(
+          reflectionEtaDays || 0,
+          crystalEtaDays || 0,
+          synapseEtaDays || 0,
+          phaseEtaDays || 0
+        );
+
+    res.json({
+      current: {
+        reflections: score.reflections,
+        crystals: score.crystalCount,
+        visionSynapses: score.visionSynapses,
+        phase,
+        totalHeartbeats: state.total_heartbeats || 0,
+      },
+      targets: {
+        reflections: 15,
+        crystals: 3,
+        visionSynapses: 20,
+        phase: 'child',
+      },
+      met: {
+        reflections: score.reflections >= 15,
+        crystals: score.crystalCount >= 3,
+        visionSynapses: score.visionSynapses >= 20,
+        // 'child' or 'teenager' = mature enough; embryo/newborn/crystallizing aren't.
+        phase: ['child', 'teenager'].includes(phase),
+      },
+      eta: {
+        reflectionDays: reflectionEtaDays,
+        crystalDays: crystalEtaDays,
+        synapseDays: synapseEtaDays,
+        phaseDays: phaseEtaDays,
+        absorptionDays,
+      },
+      rates: {
+        heartbeatsPerDay: Math.round(heartbeatsPerDay),
+        crystalsPerDay: Number(crystalsPerDay.toFixed(2)),
+      },
+      absorbed: score.absorbed,
+      absorbedAt: score.absorbedAt,
+      fetched_at: Date.now(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API: translate batch of texts
 import { callLLM } from './llm.js';
 import crypto from 'crypto';
@@ -2864,6 +2975,115 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     font-weight: bold;
   }
 
+  /* === BREWING + VISION FORECAST PANELS (C1+C2+C3) === */
+  .brewing-panel, .vision-forecast-panel {
+    margin-top: 1.5rem;
+    background: rgba(82, 168, 212, 0.05);
+    border: 1px solid rgba(82, 168, 212, 0.18);
+    border-radius: 10px;
+    padding: 1.4rem 1.6rem;
+    transition: box-shadow 0.45s ease, border-color 0.45s ease;
+  }
+  .brewing-panel h3, .vision-forecast-panel h3 {
+    color: #82d4d4;
+    font-size: 0.95rem;
+    margin: 0 0 1rem 0;
+    letter-spacing: 0.05em;
+  }
+  .brewing-section { margin-bottom: 1.2rem; }
+  .brewing-section h4 {
+    color: #b8e0e0;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0 0 0.6rem 0;
+    opacity: 0.85;
+  }
+  .brewing-list { list-style: none; padding: 0; margin: 0; }
+  .brewing-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.45rem 0;
+    border-bottom: 1px dashed rgba(255,255,255,0.06);
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.78);
+  }
+  .brewing-list li:last-child { border-bottom: none; }
+  .brewing-pattern { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+  .brewing-meta { color: #82d4d4; font-size: 0.72rem; white-space: nowrap; flex-shrink: 0; opacity: 0.85; }
+  .brewing-empty { color: rgba(255,255,255,0.4); font-style: italic; font-size: 0.78rem; padding: 0.4rem 0; }
+  .brewing-breakthrough {
+    background: rgba(212, 168, 86, 0.08);
+    border-left: 3px solid #d4a856;
+    padding: 0.7rem 0.9rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.85);
+    line-height: 1.55;
+  }
+  .brewing-breakthrough .breakthrough-time {
+    display: block;
+    font-size: 0.68rem;
+    color: rgba(212, 168, 86, 0.7);
+    margin-bottom: 0.3rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  /* Vision forecast progress bars */
+  .forecast-grid { display: flex; flex-direction: column; gap: 0.95rem; }
+  .forecast-row {
+    display: grid;
+    grid-template-columns: 110px 1fr 70px;
+    gap: 0.7rem;
+    align-items: center;
+    font-size: 0.78rem;
+  }
+  .forecast-label { color: rgba(255,255,255,0.8); }
+  .forecast-bar {
+    position: relative;
+    height: 8px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .forecast-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #52a8d4, #82d4d4);
+    border-radius: 4px;
+    transition: width 0.6s ease;
+  }
+  .forecast-bar-fill.met { background: linear-gradient(90deg, #4ade80, #82d4a8); }
+  .forecast-value { color: #82d4d4; font-size: 0.74rem; text-align: right; white-space: nowrap; }
+  .forecast-value.met { color: #4ade80; }
+  .forecast-eta {
+    margin-top: 1rem;
+    padding: 0.7rem 0.9rem;
+    background: rgba(82, 168, 212, 0.08);
+    border-radius: 6px;
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.85);
+    text-align: center;
+  }
+  .forecast-eta .eta-days { color: #82d4d4; font-weight: bold; }
+  .forecast-absorbed {
+    margin-top: 1rem;
+    padding: 0.9rem;
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    border-radius: 8px;
+    text-align: center;
+    color: #4ade80;
+    font-size: 0.9rem;
+  }
+
+  /* C3 — vision_resonance pulse animation */
+  .vision-glow.pulsing {
+    box-shadow: 0 0 24px rgba(130, 212, 212, 0.45), inset 0 0 14px rgba(130, 212, 212, 0.18);
+    border-color: rgba(130, 212, 212, 0.55);
+  }
+
 
   /* === PERSON OVERVIEW IN MEMORY TAB === */
   .person-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
@@ -3960,6 +4180,38 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
     Nalagam podatke o refleksijah...
   </div>
 
+  <!-- C1: Brewing panel — what's brewing inside the being -->
+  <div class="brewing-panel vision-glow" id="brewing-panel">
+    <h3>🌊 Kar se prevaja v meni</h3>
+    <div class="brewing-section">
+      <h4>Vibracije vizije</h4>
+      <ul class="brewing-list" id="brewing-vision-synapses">
+        <li class="brewing-empty">Nalagam...</li>
+      </ul>
+    </div>
+    <div class="brewing-section">
+      <h4>Kristali se rojevajo</h4>
+      <ul class="brewing-list" id="brewing-crystal-seeds">
+        <li class="brewing-empty">Nalagam...</li>
+      </ul>
+    </div>
+    <div class="brewing-section">
+      <h4>Zadnji preboj</h4>
+      <div id="brewing-breakthrough">
+        <div class="brewing-empty">Nalagam...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- C2: Vision absorption forecast -->
+  <div class="vision-forecast-panel vision-glow" id="vision-forecast-panel">
+    <h3>🌱 Absorpcija vizije — napredek</h3>
+    <div class="forecast-grid" id="forecast-grid">
+      <div class="brewing-empty">Nalagam...</div>
+    </div>
+    <div id="forecast-eta-wrap"></div>
+  </div>
+
 </div>
 </div>
 
@@ -4603,6 +4855,8 @@ function switchTab(tab) {
     $('tabSeed').classList.add('active');
     $('viewSeed').classList.add('active');
     loadSeedInfo();
+    loadBrewing();
+    loadVisionForecast();
   } else if (tab === 'memory') {
     $('tabMemory').classList.add('active');
     $('viewMemory').classList.add('active');
@@ -4705,6 +4959,146 @@ async function loadSeedInfo() {
   } catch (e) {
     if (container) container.innerHTML = '';
     if (visionEl) visionEl.innerHTML = '<p style="opacity:0.6; font-style:italic;">Vizije ni mogoče naložiti.</p>';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// C1 — Brewing panel: vision synapses + crystal seeds + last breakthrough.
+// Reads /api/brewing. Pure read; never mutates being state.
+// ─────────────────────────────────────────────────────────────────
+function fmtRelativeTime(ts) {
+  if (!ts) return '';
+  const t = typeof ts === 'string' ? Date.parse(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z') : ts;
+  if (!t || isNaN(t)) return '';
+  const diff = Date.now() - t;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'pravkar';
+  if (min < 60) return min + 'min nazaj';
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr + 'h nazaj';
+  const d = Math.floor(hr / 24);
+  return d + 'd nazaj';
+}
+
+async function loadBrewing() {
+  const synapsesEl = $('brewing-vision-synapses');
+  const seedsEl = $('brewing-crystal-seeds');
+  const breakthroughEl = $('brewing-breakthrough');
+  if (!synapsesEl && !seedsEl && !breakthroughEl) return;
+  try {
+    const res = await fetch('/api/brewing');
+    const data = await res.json();
+
+    if (synapsesEl) {
+      if (Array.isArray(data.visionSynapses) && data.visionSynapses.length > 0) {
+        synapsesEl.innerHTML = data.visionSynapses.map(s => {
+          const pat = escapeHtml((s.pattern || '').slice(0, 90));
+          const fires = s.fire_count != null ? s.fire_count + '× firings' : '';
+          const energy = s.energy != null ? Math.round(s.energy) + ' E' : '';
+          const when = s.last_fired_at ? fmtRelativeTime(s.last_fired_at) : '';
+          const meta = [energy, fires, when].filter(Boolean).join(' · ');
+          return '<li><span class="brewing-pattern">' + pat + '</span><span class="brewing-meta">' + meta + '</span></li>';
+        }).join('');
+      } else {
+        synapsesEl.innerHTML = '<li class="brewing-empty">Še ni vision-tagged sinaps z dovolj energije.</li>';
+      }
+    }
+
+    if (seedsEl) {
+      if (Array.isArray(data.crystalSeeds) && data.crystalSeeds.length > 0) {
+        seedsEl.innerHTML = data.crystalSeeds.map(s => {
+          const theme = escapeHtml((s.theme || '—'));
+          const expr = escapeHtml((s.expression || '').slice(0, 90));
+          const strength = s.strength != null ? s.strength + '×' : '';
+          const src = s.source_type ? escapeHtml(s.source_type) : '';
+          const when = s.timestamp ? fmtRelativeTime(s.timestamp) : '';
+          const meta = [strength, src, when].filter(Boolean).join(' · ');
+          return '<li><span class="brewing-pattern"><strong style="color:#d4a856">' + theme + '</strong> — ' + expr + '</span><span class="brewing-meta">' + meta + '</span></li>';
+        }).join('');
+      } else {
+        seedsEl.innerHTML = '<li class="brewing-empty">Še ni crystal seedov.</li>';
+      }
+    }
+
+    if (breakthroughEl) {
+      if (data.lastBreakthrough && data.lastBreakthrough.text) {
+        const txt = escapeHtml(data.lastBreakthrough.text.slice(0, 280));
+        const when = data.lastBreakthrough.timestamp ? fmtRelativeTime(data.lastBreakthrough.timestamp) : '';
+        breakthroughEl.innerHTML = '<div class="brewing-breakthrough"><span class="breakthrough-time">⚡ ' + when + '</span>' + txt + '</div>';
+      } else {
+        breakthroughEl.innerHTML = '<div class="brewing-empty">Še ni preboja.</div>';
+      }
+    }
+  } catch (e) {
+    if (synapsesEl) synapsesEl.innerHTML = '<li class="brewing-empty">Ne morem naložiti.</li>';
+    if (seedsEl) seedsEl.innerHTML = '<li class="brewing-empty">Ne morem naložiti.</li>';
+    if (breakthroughEl) breakthroughEl.innerHTML = '<div class="brewing-empty">Ne morem naložiti.</div>';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// C2 — Vision absorption forecast: 4 progress bars + ETA.
+// Reads /api/vision-forecast.
+// ─────────────────────────────────────────────────────────────────
+function makeForecastRow(label, current, target, met) {
+  const pct = target > 0 ? Math.min(100, (current / target) * 100) : 0;
+  const fillClass = met ? 'forecast-bar-fill met' : 'forecast-bar-fill';
+  const valClass = met ? 'forecast-value met' : 'forecast-value';
+  const valTxt = met ? (current + '/' + target + ' ✓') : (current + '/' + target);
+  return (
+    '<div class="forecast-row">' +
+      '<div class="forecast-label">' + escapeHtml(label) + '</div>' +
+      '<div class="forecast-bar"><div class="' + fillClass + '" style="width:' + pct.toFixed(0) + '%"></div></div>' +
+      '<div class="' + valClass + '">' + valTxt + '</div>' +
+    '</div>'
+  );
+}
+
+async function loadVisionForecast() {
+  const grid = $('forecast-grid');
+  const etaWrap = $('forecast-eta-wrap');
+  if (!grid && !etaWrap) return;
+  try {
+    const res = await fetch('/api/vision-forecast');
+    const data = await res.json();
+
+    if (grid) {
+      const cur = data.current || {};
+      const tgt = data.targets || {};
+      // Phase progression: embryo → newborn → crystallizing → child → teenager.
+      // 'child' or beyond is enough for vision absorption.
+      const phaseMet = ['child', 'teenager'].includes((cur.phase || '').toLowerCase());
+      const rows = [
+        makeForecastRow('Refleksije', cur.reflections || 0, tgt.reflections || 15, (cur.reflections || 0) >= (tgt.reflections || 15)),
+        makeForecastRow('Kristali', cur.crystals || 0, tgt.crystals || 3, (cur.crystals || 0) >= (tgt.crystals || 3)),
+        makeForecastRow('Vision sinapse', cur.visionSynapses || 0, tgt.visionSynapses || 20, (cur.visionSynapses || 0) >= (tgt.visionSynapses || 20)),
+        '<div class="forecast-row">' +
+          '<div class="forecast-label">Faza</div>' +
+          '<div class="forecast-bar"><div class="' + (phaseMet ? 'forecast-bar-fill met' : 'forecast-bar-fill') + '" style="width:' + (phaseMet ? 100 : 30) + '%"></div></div>' +
+          '<div class="' + (phaseMet ? 'forecast-value met' : 'forecast-value') + '">' + escapeHtml(cur.phase || '?') + (phaseMet ? ' ✓' : ' → child') + '</div>' +
+        '</div>',
+      ];
+      grid.innerHTML = rows.join('');
+    }
+
+    if (etaWrap) {
+      if (data.absorbed === true) {
+        const when = data.absorbedAt ? new Date(data.absorbedAt).toLocaleDateString() : '';
+        etaWrap.innerHTML = '<div class="forecast-absorbed">🌟 Vizija absorbirana' + (when ? ': ' + escapeHtml(when) : '') + '</div>';
+      } else if (data.eta && typeof data.eta.absorptionDays === 'number') {
+        const days = data.eta.absorptionDays;
+        let dayTxt;
+        if (days < 1) dayTxt = 'manj kot dan';
+        else if (days < 2) dayTxt = '~1 dan';
+        else if (days < 14) dayTxt = '~' + Math.round(days) + ' dni';
+        else dayTxt = '~' + Math.round(days / 7) + ' tednov';
+        etaWrap.innerHTML = '<div class="forecast-eta">Absorbcija predvidena: <span class="eta-days">' + escapeHtml(dayTxt) + '</span></div>';
+      } else {
+        etaWrap.innerHTML = '';
+      }
+    }
+  } catch (e) {
+    if (grid) grid.innerHTML = '<div class="brewing-empty">Ne morem naložiti.</div>';
   }
 }
 
@@ -5406,6 +5800,24 @@ evtSource.addEventListener('direction_crystallization', function() {
   identityLoaded = false;
   loadState();
   if (currentTab === 'identity') loadIdentity();
+});
+
+// === C3: VISION RESONANCE — pulse vision-related panels when a high-energy
+// vision-tagged synapse fires. Pure visual signal; no data refetch unless the
+// seed tab is open (in which case fire_count + last_fired_at just changed).
+// Spontaneous DMs and crystal-shares ride on the existing 'activity' channel,
+// so loadState() gets refreshed via the activity handler above — no dedicated
+// listener needed for those.
+evtSource.addEventListener('vision_resonance', function(e) {
+  try {
+    document.querySelectorAll('.vision-glow').forEach(function(el) {
+      el.classList.add('pulsing');
+      setTimeout(function() { el.classList.remove('pulsing'); }, 2200);
+    });
+    if (currentTab === 'seed') {
+      if (typeof loadBrewing === 'function') loadBrewing();
+    }
+  } catch (_) {}
 });
 
 // === PROJECT SSE EVENTS (lifecycle) ===

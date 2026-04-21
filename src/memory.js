@@ -964,7 +964,8 @@ const memory = {
   },
 
   checkCrystallization(threshold = 5) {
-    return db.prepare(`
+    // Standard threshold: strength≥5 + diversity≥2
+    const standard = db.prepare(`
       SELECT cs.theme,
              (SELECT expression FROM crystal_seeds WHERE theme = cs.theme ORDER BY timestamp DESC LIMIT 1) as expression,
              SUM(cs.strength) as total_strength,
@@ -975,6 +976,37 @@ const memory = {
       GROUP BY cs.theme
       HAVING total_strength >= ? AND source_diversity >= 2
     `).all(threshold);
+
+    // ◈ A2 — Vision-coherent themes crystallize at a lower bar.
+    // Themes that are inherently coherent (manifestations of the creator's
+    // vision, integration moments, the being's name) don't need diverse
+    // sources to be valid — the coherence is in the theme itself. Strength≥4,
+    // diversity≥1 is enough. Returns merged list, deduplicated by theme,
+    // with standard threshold winning if both match.
+    const visionCoherent = db.prepare(`
+      SELECT cs.theme,
+             (SELECT expression FROM crystal_seeds WHERE theme = cs.theme ORDER BY timestamp DESC LIMIT 1) as expression,
+             SUM(cs.strength) as total_strength,
+             COUNT(DISTINCT cs.source_type) as source_diversity,
+             GROUP_CONCAT(DISTINCT cs.source_type) as sources,
+             1 as vision_coherent
+      FROM crystal_seeds cs
+      WHERE cs.theme IS NOT NULL
+        AND LOWER(cs.theme) IN (
+          'tema','manifestacija','povezanost','ustvarjalnost','integracija',
+          'vizija','sožitje','sonce','ranljivost','tišina','samota',
+          'transformacija','identiteta'
+        )
+      GROUP BY cs.theme
+      HAVING total_strength >= 4 AND source_diversity >= 1
+    `).all();
+
+    const seen = new Set(standard.map(s => s.theme));
+    const merged = [...standard];
+    for (const v of visionCoherent) {
+      if (!seen.has(v.theme)) merged.push(v);
+    }
+    return merged;
   },
 
   crystallize(theme, expression, seedCount, sources) {
@@ -1678,6 +1710,102 @@ const memory = {
         updated_at = datetime('now')
       WHERE id = 1
     `).run();
+  },
+
+  // ◈ B1 — Spontaneous coherence-DM cooldown lookup.
+  // Returns ISO timestamp of the last spontaneous DM the being sent to its
+  // creator (recorded as observation source='spontaneous_dm'), or null if
+  // none. Used by runTriad() post-processing to enforce 6h cooldown so the
+  // being doesn't message the creator more than ~4×/day.
+  getLastSpontaneousDmAt() {
+    try {
+      const row = db.prepare(
+        "SELECT timestamp FROM observations WHERE source = 'spontaneous_dm' ORDER BY id DESC LIMIT 1"
+      ).get();
+      return row ? row.timestamp : null;
+    } catch (_) { return null; }
+  },
+
+  // Count vision-tagged synapses fired in the last N minutes (for coherence
+  // detection — when many vision-derived patterns activate together, the being
+  // is in a "moment of gathering" and the spontaneous DM offer becomes available).
+  countRecentVisionSynapseFires(minutes = 30) {
+    try {
+      const cutoff = `datetime('now', '-${parseInt(minutes, 10) || 30} minutes')`;
+      const row = db.prepare(
+        `SELECT COUNT(*) as c FROM synapses
+         WHERE tags LIKE '%source:vision%'
+           AND last_fired_at >= ${cutoff}`
+      ).get();
+      return row?.c || 0;
+    } catch (_) { return 0; }
+  },
+
+  // ◈ C1 — "Kar se prevaja" dashboard data:
+  // Recent vision-derived synapses, sorted by last_fired_at desc.
+  getRecentVisionSynapses(n = 5) {
+    try {
+      return db.prepare(
+        `SELECT pattern, energy, fire_count, last_fired_at, created_at
+         FROM synapses
+         WHERE tags LIKE '%source:vision%' AND energy >= 10
+         ORDER BY last_fired_at DESC LIMIT ?`
+      ).all(parseInt(n, 10) || 5);
+    } catch (_) { return []; }
+  },
+
+  // Returns individual crystal-seed rows (not theme-aggregated) for the
+  // brewing panel — most recent N seeds with strength snapshot.
+  getRecentCrystalSeedRows(n = 3) {
+    try {
+      return db.prepare(
+        `SELECT id, theme, expression, source_type, strength, timestamp
+         FROM crystal_seeds
+         ORDER BY id DESC LIMIT ?`
+      ).all(parseInt(n, 10) || 3);
+    } catch (_) { return []; }
+  },
+
+  // Most recent breakthrough activity (or null). Used in the brewing panel
+  // to show the latest "moment" the being broke into a new understanding.
+  getLastBreakthrough() {
+    try {
+      return db.prepare(
+        `SELECT timestamp, text FROM activity_log
+         WHERE type = 'breakthrough'
+         ORDER BY id DESC LIMIT 1`
+      ).get() || null;
+    } catch (_) { return null; }
+  },
+
+  // Heartbeat rate over the last N hours (for vision-forecast ETA).
+  // Fallback to 60/h if no activity_log heartbeats found.
+  getHeartbeatRatePerHour(hours = 24) {
+    try {
+      const cutoff = `datetime('now', '-${parseInt(hours, 10) || 24} hours')`;
+      const row = db.prepare(
+        `SELECT COUNT(*) as c FROM activity_log
+         WHERE type = 'heartbeat' AND timestamp >= ${cutoff}`
+      ).get();
+      const count = row?.c || 0;
+      if (count === 0) return 60; // fallback
+      return count / (parseInt(hours, 10) || 24);
+    } catch (_) { return 60; }
+  },
+
+  // Crystal formation rate (per day) over last N days.
+  // Fallback to 0.5/day if none found.
+  getCrystalRatePerDay(days = 7) {
+    try {
+      const cutoff = `datetime('now', '-${parseInt(days, 10) || 7} days')`;
+      const row = db.prepare(
+        `SELECT COUNT(*) as c FROM crystallized_core
+         WHERE timestamp >= ${cutoff} AND dissolved_at IS NULL`
+      ).get();
+      const count = row?.c || 0;
+      if (count === 0) return 0.5;
+      return count / (parseInt(days, 10) || 7);
+    } catch (_) { return 0.5; }
   },
 
 
