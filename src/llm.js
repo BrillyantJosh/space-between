@@ -51,9 +51,11 @@ function withLang(systemPrompt, kind = 'inner') {
 
 // Gemini cene ($/1M tokenov) — Flash modeli
 const _GEMINI_PRICE = {
+  'gemini-2.5-flash':  { in: 0.30, out: 2.50 },  // novi default (2.0-flash imel quota exhausted)
+  'gemini-2.5-pro':    { in: 1.25, out: 10.00 },
   'gemini-2.0-flash':  { in: 0.10, out: 0.40 },
   'gemini-1.5-flash':  { in: 0.075, out: 0.30 },
-  default:             { in: 0.10, out: 0.40 },
+  default:             { in: 0.30, out: 2.50 },
 };
 
 function _estimateGeminiCost(model, inputTokens, outputTokens) {
