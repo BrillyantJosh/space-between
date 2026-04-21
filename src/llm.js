@@ -5,10 +5,13 @@ import memory from './memory.js';
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`;
 
 // ─── Rate-limit retry helper ───
-// Pri 429 (RESOURCE_EXHAUSTED) ponovi z exponential backoff.
-// Default: 3 retryja, čakanje 30s → 60s → 120s.
-// Vrne fetch Response (ne text) — caller ga razpakira sam.
-async function _fetchWithBackoff(url, init, { maxRetries = 3, baseDelayMs = 30000, label = 'LLM' } = {}) {
+// Pri 429 (RESOURCE_EXHAUSTED) ponovi z exponential backoff + jitter.
+// Default: 1 retry, čakanje ~5s. Stari 30s/60s/120s je povzročil cascade
+// lock — če 18 klicev udari 429 hkrati, vsi 18 čakajo 30s, ponovno udarijo
+// še zmeraj rate-limited, čakajo 60s, itd. Total ~5 min mrtvilo.
+// Hitro fail = caller (translate, triad, itd.) lahko sam odloči naslednji
+// korak namesto da blokira event loop.
+async function _fetchWithBackoff(url, init, { maxRetries = 1, baseDelayMs = 5000, label = 'LLM' } = {}) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let response;
     try {
@@ -22,9 +25,10 @@ async function _fetchWithBackoff(url, init, { maxRetries = 3, baseDelayMs = 3000
       }
       throw e;
     }
-    // 429 = rate limit, 503 = service unavailable → retry
+    // 429 = rate limit, 503 = service unavailable → retry (z jitterjem)
     if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
-      const wait = baseDelayMs * Math.pow(2, attempt); // 30s, 60s, 120s
+      const jitter = Math.random() * 0.5 + 0.75; // 0.75x – 1.25x
+      const wait = Math.round(baseDelayMs * Math.pow(2, attempt) * jitter);
       console.warn(`[${label}] ${response.status} rate-limited, čakam ${wait / 1000}s (poskus ${attempt + 1}/${maxRetries})`);
       await new Promise(r => setTimeout(r, wait));
       continue;

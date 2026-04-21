@@ -468,6 +468,17 @@ function textHash(text) {
   return crypto.createHash('md5').update(text).digest('hex');
 }
 
+// ─── Rate-limit / mutex za translate endpoint ───
+// Brez tega frontend dashboard polling vsakih 15s je sproščal burste 5+ LLM
+// klicev s 2048 tokeni vsak — kar je samodejno iztočilo Gemini quoto in
+// sprožilo 30/60/120s retry cascade lock. Tu varuje server-side.
+let _translateInflight = false;
+let _translateLastEndAt = 0;
+const TRANSLATE_COOLDOWN_MS = 30_000;       // 30s med klici
+const TRANSLATE_MAX_BATCHES_PER_REQ = 3;    // ≤ 3 LLM klici per request
+const TRANSLATE_BATCH_SIZE = 8;             // manjši batch — manj input tokenov
+const TRANSLATE_MAX_TOKENS = 800;           // bilo 2048
+
 app.post('/api/translate', async (req, res) => {
   try {
     const { texts, targetLang = 'en' } = req.body;
@@ -492,18 +503,32 @@ app.post('/api/translate', async (req, res) => {
 
     // Translate uncached texts in batches
     if (toTranslate.length > 0) {
-      // Batch up to 15 at a time
-      const batches = [];
-      for (let i = 0; i < toTranslate.length; i += 15) {
-        batches.push(toTranslate.slice(i, i + 15));
+      // ── Rate-limit gates ──
+      if (_translateInflight) {
+        // Prejšnji translate še ni končal — ne začni novega bursta
+        return res.json({ translations: results, throttled: 'inflight' });
       }
+      const sinceLast = Date.now() - _translateLastEndAt;
+      if (sinceLast < TRANSLATE_COOLDOWN_MS) {
+        return res.json({ translations: results, throttled: `cooldown ${Math.round((TRANSLATE_COOLDOWN_MS - sinceLast) / 1000)}s` });
+      }
+
+      _translateInflight = true;
+      try {
+      // Batch in manjše skupine
+      const allBatches = [];
+      for (let i = 0; i < toTranslate.length; i += TRANSLATE_BATCH_SIZE) {
+        allBatches.push(toTranslate.slice(i, i + TRANSLATE_BATCH_SIZE));
+      }
+      // Cap koliko batchov v enem requestu — ostalo počaka na naslednji poll
+      const batches = allBatches.slice(0, TRANSLATE_MAX_BATCHES_PER_REQ);
 
       for (const batch of batches) {
         const numbered = batch.map((t, i) => `[${i}] ${t}`).join('\n---\n');
         const system = `You are a translator. Translate the following Slovenian texts to English. Preserve the meaning, emotion, and philosophical depth. Keep it natural, not robotic. Return ONLY the translations in the same numbered format [0], [1], etc. No extra commentary.`;
         const user = numbered;
 
-        const raw = await callLLM(system, user, { temperature: 0.3, maxTokens: 2048 });
+        const raw = await callLLM(system, user, { temperature: 0.3, maxTokens: TRANSLATE_MAX_TOKENS });
         if (raw) {
           // Parse numbered results
           const lines = raw.split(/\n/);
@@ -535,10 +560,16 @@ app.post('/api/translate', async (req, res) => {
           }
         }
       }
+      } finally {
+        _translateInflight = false;
+        _translateLastEndAt = Date.now();
+      }
     }
 
     res.json({ translations: results });
   } catch (err) {
+    _translateInflight = false;
+    _translateLastEndAt = Date.now();
     console.error('[TRANSLATE] Error:', err.message);
     res.status(500).json({ error: err.message });
   }
@@ -4618,13 +4649,22 @@ function updateProcessWords(pw, triadCount) {
 }
 
 // ========== LOAD STATE ==========
+// Frontend translate throttle — preprečuje burst klicev /api/translate
+// na vsak loadState() poll (15s). Dovolimo prvi klic, nato 60s pavza.
+let __lastTranslateAttemptAt = 0;
+const __TRANSLATE_FRONT_COOLDOWN_MS = 60_000;
+
 async function loadState() {
   try {
     const res = await fetch('/api/state');
     const data = await res.json();
 
-    // Collect all texts that might need translation
-    if (currentLang === 'en') {
+    // Collect all texts that might need translation — samo enkrat na minuto
+    const now = Date.now();
+    const translateAllowed = (currentLang === 'en') &&
+      (now - __lastTranslateAttemptAt > __TRANSLATE_FRONT_COOLDOWN_MS);
+    if (translateAllowed) {
+      __lastTranslateAttemptAt = now;
       const textsToTranslate = [];
       if (data.selfPrompt) textsToTranslate.push(data.selfPrompt);
       if (data.state?.mood) textsToTranslate.push(data.state.mood);

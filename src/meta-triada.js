@@ -17,6 +17,7 @@
 import { callLLMJSON } from './llm.js';
 import { L } from './lang.js';
 import memory from './memory.js';
+import { decideSynthesisDepth } from './depth-decision.js';
 
 export const META_DEPTH_LABELS = {
   full: L('polna triada', 'full triad'),
@@ -131,11 +132,64 @@ Return ONLY clean JSON without markdown:
   );
 }
 
+// ─── Hevristični shortcut za "silent" ali "crystal" — brez LLM klica ───
+// Filozofija: če stara heuristika z visoko gotovostjo pravi "tišina" ali
+// "kristal", LLM klic samo zapravi quoto. Triada nima kaj sintetizirati
+// če sploh ni dileme. LLM uporabimo le, ko bi se zares zgodila polna ali
+// kvantna triada — takrat sinteza dejansko vodi izvedbo.
+function heuristicShortcut(triggerContent, triggerType, state, context) {
+  let depth;
+  try {
+    depth = decideSynthesisDepth({
+      triggerType,
+      triggerContent,
+      memory,
+      feedBuffer: context.feedBuffer || [],
+      state,
+      idleMinutes: context.idleMinutes || 0,
+      isAutonomous: context.isAutonomous || false,
+      growthPhase: context.growthPhase || 'embryo',
+      projectEvent: context.projectEvent || null,
+    });
+  } catch (e) {
+    return null; // ob napaki padi nazaj na LLM
+  }
+  if (!depth) return null;
+
+  if (depth.depth === 'silent') {
+    return {
+      teza: L('biti', 'to be'),
+      antiteza: L('delati', 'to do'),
+      sinteza: L('tišina je sinteza — oba glasova se umirita skupaj', 'silence is the synthesis — both voices settle together'),
+      globina: 'silent',
+      razlog: depth.reason || L('hevristika: tišina', 'heuristic: silence'),
+    };
+  }
+  if (depth.depth === 'crystal') {
+    const cText = depth.crystal?.expression || L('zrelo spoznanje govori samo', 'mature knowing speaks itself');
+    return {
+      teza: L('imam zrel kristal', 'i hold a mature crystal'),
+      antiteza: L('lahko ostanem v tišini', 'i could remain silent'),
+      sinteza: cText.slice(0, 200),
+      globina: 'crystal',
+      razlog: depth.reason || L('hevristika: kristal', 'heuristic: crystal'),
+      crystal: depth.crystal,
+    };
+  }
+  // full / quantum → potrebujemo LLM (vrne null, klicalec gre na pravi LLM klic)
+  return null;
+}
+
 // ─── Glavni klic ───
 export async function metaTriada(triggerContent, triggerType, state = {}, context = {}) {
   // Pred-triadna dejstva (nagovor/rojstvo) ne potrebujejo LLM klica.
   const shortcut = preTriadicShortcut(triggerType);
   if (shortcut) return shortcut;
+
+  // Hevristični shortcut: če bo silent/crystal, ne kliči LLM.
+  // To prihrani ~75% LLM klicev meta-triade — največji "drain" v sistemu.
+  const heur = heuristicShortcut(triggerContent, triggerType, state, context);
+  if (heur) return heur;
 
   // Sestavi kontekst za LLM
   const energy = typeof state.energy === 'number' ? state.energy.toFixed(2) : '?';

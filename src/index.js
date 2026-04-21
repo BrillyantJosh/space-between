@@ -402,7 +402,19 @@ async function handleHeartbeat() {
   const triadsSinceDream = Math.min(20, Math.max(0, memory.getTriadCount() - state.total_dreams * 4));
   const growthPhaseForDream = memory.getGrowthPhase();
 
-  if (canDream) {
+  // Hevristični gate pred LLM klicem v sanjska-triada:
+  // brez tega gateja se LLM kliče VSAKI heartbeat (~60/h × 3 bitja = 4320/dan
+  // samo za "ne sanjam"). Sanjska triada ima smisel le ko je sanjanje plausible.
+  const sleepLikelyHour = (() => {
+    const h = new Date().getHours();
+    return (h >= 22 || h < 7); // noč
+  })();
+  const idleEnough = idleMinutes >= (config.dreamAfterIdleMinutes || 30);
+  const lowEnergy = (state.energy || 0.5) < 0.45;
+  const longSinceDream = minSinceLastDream === Infinity || minSinceLastDream > 180;
+  const dreamPlausible = canDream && (idleEnough || lowEnergy || sleepLikelyHour) && longSinceDream;
+
+  if (dreamPlausible) {
     let sanje;
     try {
       sanje = await sanjskaTriada(state, idleMinutes, {
@@ -459,7 +471,7 @@ async function handleHeartbeat() {
       }
       return;
     }
-  } // end if (canDream)
+  } // end if (dreamPlausible)
 
   // Direction growth — gradual process during newborn
   const growthPhase = memory.getGrowthPhase();
