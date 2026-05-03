@@ -5524,7 +5524,7 @@ function buildTriadFullText(triad) {
   if (triad.mood_before || triad.mood_after) {
     lines.push('Razpoloženje: ' + (triad.mood_before || '?') + ' → ' + (triad.mood_after || '?'));
   }
-  return lines.join('\n');
+  return lines.join(String.fromCharCode(10));
 }
 
 function renderTriadCard(triad) {
