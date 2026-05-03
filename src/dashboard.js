@@ -342,6 +342,21 @@ app.get('/api/seed', (req, res) => {
   }
 });
 
+// ◈ Triade — full paginated listing for the dedicated "Triade" tab.
+// Returns 100 per page by default, supports ?page=N&limit=N&filter=text.
+// Read-only; never mutates being state.
+app.get('/api/triads', (req, res) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 100;
+    const filter = (req.query.filter || '').toString();
+    const data = memory.getTriadsPaginated(page, limit, filter);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ◈ C1: "Kar se prevaja" — what's brewing inside the being.
 // Surfaces recent vision-derived synapses, crystal seeds, and the latest
 // breakthrough so the user can see internal activity without the being
@@ -2137,6 +2152,214 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .decision-dot.reflect { background: var(--antithesis); }
   .decision-text { color: var(--text-secondary); }
 
+  /* === TRIADE TAB (full pagination view) === */
+  .triads-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1rem 1.5rem 3rem;
+  }
+  .triads-header {
+    margin-bottom: 1rem;
+    padding-bottom: 0.8rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .triads-controls {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .triads-filter {
+    flex: 1;
+    min-width: 240px;
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+  }
+  .triads-filter:focus {
+    outline: none;
+    border-color: var(--synthesis);
+  }
+  .triads-btn {
+    background: var(--surface2);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  .triads-btn:hover { background: var(--synthesis); color: #000; }
+  .triads-btn-ghost { opacity: 0.7; }
+  .triads-meta {
+    margin-top: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+  }
+  .triads-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .triad-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    position: relative;
+  }
+  .triad-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 0.7rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px dashed var(--border);
+    flex-wrap: wrap;
+  }
+  .triad-card-meta {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    line-height: 1.5;
+  }
+  .triad-card-meta .tc-id {
+    color: var(--synthesis);
+    font-weight: 600;
+    margin-right: 0.5rem;
+  }
+  .triad-card-meta .tc-trigger {
+    display: inline-block;
+    padding: 1px 6px;
+    background: var(--surface2);
+    border-radius: 4px;
+    margin-left: 0.4rem;
+  }
+  .triad-card-actions {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .triad-copy-btn {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  .triad-copy-btn:hover {
+    background: var(--synthesis);
+    color: #000;
+    border-color: var(--synthesis);
+  }
+  .triad-copy-btn.copied {
+    background: var(--synthesis);
+    color: #000;
+    border-color: var(--synthesis);
+  }
+  .triad-card .triad-stage {
+    margin-bottom: 0.5rem;
+  }
+  .triad-card .triad-stage:last-child { margin-bottom: 0; }
+  .triad-card .triad-stage .label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .triad-card .triad-stage .label .copy-mini {
+    font-size: 0.65rem;
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: inherit;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .triad-card .triad-stage .label .copy-mini:hover {
+    color: var(--synthesis);
+    border-color: var(--synthesis);
+  }
+  .triad-card .triad-stage .label .copy-mini.copied {
+    color: #000;
+    background: var(--synthesis);
+    border-color: var(--synthesis);
+  }
+  .triad-card .triad-stage .content {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .triad-card .triad-stage.empty-stage .content {
+    color: var(--text-secondary);
+    font-style: italic;
+    opacity: 0.5;
+  }
+  .triad-card-footer {
+    margin-top: 0.7rem;
+    padding-top: 0.5rem;
+    border-top: 1px dashed var(--border);
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+  }
+  .triad-card-footer span strong {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .triads-pagination {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    justify-content: center;
+    align-items: center;
+  }
+  .triads-pagination .page-btn {
+    background: var(--surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    font-family: inherit;
+    min-width: 32px;
+  }
+  .triads-pagination .page-btn:hover:not(:disabled) {
+    background: var(--surface2);
+    color: var(--text-primary);
+  }
+  .triads-pagination .page-btn.active {
+    background: var(--synthesis);
+    color: #000;
+    border-color: var(--synthesis);
+    font-weight: 600;
+  }
+  .triads-pagination .page-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .triads-pagination .page-ellipsis {
+    color: var(--text-secondary);
+    padding: 0 4px;
+  }
+
   /* === TRIAD HISTORY === */
   .triad-history {
     margin-top: 0.8rem;
@@ -3390,6 +3613,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <button class="tab-btn" onclick="switchTab('dna')" id="tabDna" data-i18n="tabDna">🧬 DNA</button>
   <button class="tab-btn" onclick="switchTab('seed')" id="tabSeed" data-i18n="tabSeed">🌱 Seme</button>
   <button class="tab-btn" onclick="switchTab('memory')" id="tabMemory" data-i18n="tabMemory">🧠 Spomin</button>
+  <button class="tab-btn" onclick="switchTab('triads')" id="tabTriads" data-i18n="tabTriads">🔄 Triade</button>
 </div>
 
 <div class="tab-content active" id="viewObserve">
@@ -4296,6 +4520,30 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
 </div>
 </div>
 
+<!-- ═══ TRIADE TAB — full paginated history with copy ═══ -->
+<div class="tab-content" id="viewTriads">
+  <div class="triads-container">
+    <div class="triads-header">
+      <h2 style="margin:0;font-size:1.1rem;color:var(--text-primary);">🔄 <span data-i18n="triadsAllTitle">Vse Triade</span></h2>
+      <div class="triads-controls">
+        <input type="text" id="triadsFilterInput" class="triads-filter"
+               data-i18n-placeholder="triadsFilterPlaceholder"
+               placeholder="Iskanje (teza / antiteza / sinteza / dražljaj)..." />
+        <button class="triads-btn" onclick="onTriadsFilter()" data-i18n="triadsSearchBtn">Iskanje</button>
+        <button class="triads-btn triads-btn-ghost" onclick="onTriadsClearFilter()" data-i18n="triadsClearBtn">Počisti</button>
+      </div>
+      <div class="triads-meta" id="triadsMeta"></div>
+    </div>
+
+    <div id="triadsList" class="triads-list">
+      <div style="padding:2rem;text-align:center;color:var(--text-secondary);">Nalagam...</div>
+    </div>
+
+    <div id="triadsPagination" class="triads-pagination"></div>
+  </div>
+</div>
+
+
 
 <script>
 let currentProcessWords = null;
@@ -4320,7 +4568,14 @@ const UI_STRINGS = {
     // Tabs
     tabObserve: '◈ Opazovanje', tabIdentity: '🪞 Kdo sem', tabConversations: '💬 Pogovori',
     tabProjects: '🤲 Projekti', tabDna: '🧬 DNA', tabSeed: '🌱 Seme', tabMemory: '🧠 Spomin',
+    tabTriads: '🔄 Triade',
     howIWork: '📖 Kako delujem',
+    // Triads tab
+    triadsAllTitle: 'Vse Triade', triadsFilterPlaceholder: 'Iskanje (teza / antiteza / sinteza / dražljaj)...',
+    triadsSearchBtn: 'Iskanje', triadsClearBtn: 'Počisti',
+    triadsShowing: 'Prikazujem', triadsOf: 'od', triadsPage: 'stran',
+    triadsFilterActive: 'Filter', noTriads: 'Ni triad.', noTriadsFound: 'Ni zadetkov za ta filter.',
+    copy: 'kopiraj', copyAll: 'kopiraj vse', copied: 'kopirano',
     // Observe tab
     innerWorld: 'Notranji Svet', fluidSurface: '🌊 Fluidna površina',
     thesisLabel: 'Faza 1', antithesisLabel: 'Faza 2', synthesisLabel: 'Faza 3',
@@ -4397,7 +4652,14 @@ const UI_STRINGS = {
     // Tabs
     tabObserve: '◈ Observe', tabIdentity: '🪞 Who am I', tabConversations: '💬 Conversations',
     tabProjects: '🤲 Projects', tabDna: '🧬 DNA', tabSeed: '🌱 Seed', tabMemory: '🧠 Memory',
+    tabTriads: '🔄 Triads',
     howIWork: '📖 How I work',
+    // Triads tab
+    triadsAllTitle: 'All Triads', triadsFilterPlaceholder: 'Search (thesis / antithesis / synthesis / stimulus)...',
+    triadsSearchBtn: 'Search', triadsClearBtn: 'Clear',
+    triadsShowing: 'Showing', triadsOf: 'of', triadsPage: 'page',
+    triadsFilterActive: 'Filter', noTriads: 'No triads.', noTriadsFound: 'No matches for this filter.',
+    copy: 'copy', copyAll: 'copy all', copied: 'copied',
     // Observe tab
     innerWorld: 'Inner World', fluidSurface: '🌊 Fluid surface',
     thesisLabel: 'Phase 1', antithesisLabel: 'Phase 2', synthesisLabel: 'Phase 3',
@@ -4908,6 +5170,10 @@ function switchTab(tab) {
     $('tabMemory').classList.add('active');
     $('viewMemory').classList.add('active');
     loadLivingMemory();
+  } else if (tab === 'triads') {
+    $('tabTriads').classList.add('active');
+    $('viewTriads').classList.add('active');
+    loadTriads(triadsCurrentPage || 1);
   }
   // Translate content if in EN mode
   if (currentLang === 'en') {
@@ -5177,6 +5443,223 @@ async function loadActiveCore() {
   }
 }
 
+
+// ════════════════════════════════════════════════════════════
+// TRIADE TAB — full paginated triads with copy buttons
+// ════════════════════════════════════════════════════════════
+let triadsCurrentPage = 1;
+let triadsCurrentFilter = '';
+const TRIADS_PAGE_SIZE = 100;
+
+function onTriadsFilter() {
+  const inp = $('triadsFilterInput');
+  triadsCurrentFilter = inp ? inp.value.trim() : '';
+  triadsCurrentPage = 1;
+  loadTriads(1);
+}
+
+function onTriadsClearFilter() {
+  triadsCurrentFilter = '';
+  const inp = $('triadsFilterInput');
+  if (inp) inp.value = '';
+  triadsCurrentPage = 1;
+  loadTriads(1);
+}
+
+function escapeAttr(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
+
+function copyTextToClipboard(text, btnEl) {
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (_) {}
+    document.body.removeChild(ta);
+  };
+  const finish = () => {
+    if (!btnEl) return;
+    const orig = btnEl.textContent;
+    btnEl.classList.add('copied');
+    btnEl.textContent = '✓ ' + (t('copied') || 'kopirano');
+    setTimeout(() => {
+      btnEl.classList.remove('copied');
+      btnEl.textContent = orig;
+    }, 1300);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(finish, fallback);
+  } else {
+    fallback();
+    finish();
+  }
+}
+
+function buildTriadFullText(triad) {
+  const lines = [];
+  lines.push('TRIADA #' + triad.id + '  (' + (triad.timestamp || '') + ')');
+  if (triad.trigger_type) lines.push('Dražljaj: ' + triad.trigger_type);
+  if (triad.trigger_content) lines.push('Vsebina dražljaja: ' + triad.trigger_content);
+  lines.push('');
+  lines.push('━━━ TEZA (Faza 1) ━━━');
+  lines.push(triad.thesis || '(prazno)');
+  lines.push('');
+  lines.push('━━━ ANTITEZA (Faza 2) ━━━');
+  lines.push(triad.antithesis || '(prazno)');
+  lines.push('');
+  lines.push('━━━ SINTEZA (Faza 3) ━━━');
+  lines.push(triad.synthesis_content || triad.synthesis_reason || '(prazno)');
+  if (triad.synthesis_choice) {
+    lines.push('');
+    lines.push('Izbira: ' + triad.synthesis_choice);
+  }
+  if (triad.synthesis_reason && triad.synthesis_content && triad.synthesis_content !== triad.synthesis_reason) {
+    lines.push('Razlog: ' + triad.synthesis_reason);
+  }
+  if (triad.inner_shift) lines.push('Notranji premik: ' + triad.inner_shift);
+  if (triad.mood_before || triad.mood_after) {
+    lines.push('Razpoloženje: ' + (triad.mood_before || '?') + ' → ' + (triad.mood_after || '?'));
+  }
+  return lines.join('\n');
+}
+
+function renderTriadCard(triad) {
+  const synthText = triad.synthesis_content || triad.synthesis_reason || '';
+  const fullText = buildTriadFullText(triad);
+  const ts = triad.timestamp || '';
+  const tt = triad.trigger_type || '?';
+  const triggerSnippet = (triad.trigger_content || '').slice(0, 140);
+  const depthBadge = triad.synthesis_depth && triad.synthesis_depth !== 'full'
+    ? ' · ' + triad.synthesis_depth
+    : '';
+
+  const stage = (cls, label, txt) => {
+    const isEmpty = !txt || !txt.trim();
+    const safe = escapeHtml(txt || '(prazno)');
+    return '' +
+      '<div class="triad-stage ' + cls + (isEmpty ? ' empty-stage' : '') + '">' +
+        '<div class="label">' +
+          '<span>' + label + '</span>' +
+          '<button class="copy-mini" onclick="copyTextToClipboard(' +
+            "this.parentElement.parentElement.querySelector('.content').innerText, this)" +
+            '">' + (t('copy') || 'kopiraj') + '</button>' +
+        '</div>' +
+        '<div class="content">' + safe + '</div>' +
+      '</div>';
+  };
+
+  const fullEsc = escapeAttr(fullText);
+
+  return '' +
+    '<div class="triad-card" data-triad-id="' + triad.id + '">' +
+      '<div class="triad-card-header">' +
+        '<div class="triad-card-meta">' +
+          '<span class="tc-id">#' + triad.id + '</span>' +
+          '<span>' + escapeHtml(ts) + '</span>' +
+          '<span class="tc-trigger">' + escapeHtml(tt) + depthBadge + '</span>' +
+          (triggerSnippet
+            ? '<div style="margin-top:4px;font-style:italic;opacity:0.8;">› ' + escapeHtml(triggerSnippet) + (triad.trigger_content && triad.trigger_content.length > 140 ? '...' : '') + '</div>'
+            : '') +
+        '</div>' +
+        '<div class="triad-card-actions">' +
+          '<button class="triad-copy-btn" onclick="copyTextToClipboard(this.dataset.full, this)" data-full="' + fullEsc + '">' +
+            '⎘ ' + (t('copyAll') || 'kopiraj vse') +
+          '</button>' +
+        '</div>' +
+      '</div>' +
+      stage('thesis', (t('thesisDetail') || 'TEZA') + ' — Faza 1', triad.thesis) +
+      stage('antithesis', (t('antithesisDetail') || 'ANTITEZA') + ' — Faza 2', triad.antithesis) +
+      stage('synthesis', (t('synthesisDetail') || 'SINTEZA') + ' — Faza 3', synthText) +
+      ((triad.synthesis_choice || triad.inner_shift || triad.mood_before)
+        ? '<div class="triad-card-footer">' +
+            (triad.synthesis_choice ? '<span><strong>' + (t('choicePrefix') || 'Izbira') + ':</strong> ' + escapeHtml(triad.synthesis_choice) + '</span>' : '') +
+            (triad.inner_shift ? '<span><strong>' + (t('shiftDetail') || 'Premik') + ':</strong> ' + escapeHtml(triad.inner_shift) + '</span>' : '') +
+            (triad.mood_before || triad.mood_after
+              ? '<span><strong>' + (t('moodLabel') || 'Razpoloženje') + ':</strong> ' + escapeHtml(triad.mood_before || '?') + ' → ' + escapeHtml(triad.mood_after || '?') + '</span>'
+              : '') +
+          '</div>'
+        : '') +
+    '</div>';
+}
+
+function renderPagination(page, totalPages) {
+  if (totalPages <= 1) return '';
+  const pages = [];
+  const add = (p, label, opts) => {
+    opts = opts || {};
+    if (p === '…') { pages.push('<span class="page-ellipsis">…</span>'); return; }
+    const cls = 'page-btn' + (opts.active ? ' active' : '');
+    const dis = opts.disabled ? ' disabled' : '';
+    pages.push('<button class="' + cls + '"' + dis + ' onclick="loadTriads(' + p + ')">' + (label || p) + '</button>');
+  };
+  add(Math.max(1, page - 1), '‹', { disabled: page === 1 });
+
+  // Window of pages around current
+  const windowSize = 2;
+  const showFirst = 1;
+  const showLast = totalPages;
+  const start = Math.max(1, page - windowSize);
+  const end = Math.min(totalPages, page + windowSize);
+
+  if (start > showFirst) {
+    add(showFirst, showFirst, { active: page === showFirst });
+    if (start > showFirst + 1) add('…');
+  }
+  for (let i = start; i <= end; i++) {
+    add(i, i, { active: i === page });
+  }
+  if (end < showLast) {
+    if (end < showLast - 1) add('…');
+    add(showLast, showLast, { active: page === showLast });
+  }
+
+  add(Math.min(totalPages, page + 1), '›', { disabled: page === totalPages });
+  return pages.join('');
+}
+
+async function loadTriads(page) {
+  triadsCurrentPage = page || 1;
+  const listEl = $('triadsList');
+  const metaEl = $('triadsMeta');
+  const pagEl = $('triadsPagination');
+  if (!listEl) return;
+
+  listEl.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-secondary);">' + (t('loading') || 'Nalagam...') + '</div>';
+  if (pagEl) pagEl.innerHTML = '';
+  if (metaEl) metaEl.textContent = '';
+
+  try {
+    const params = new URLSearchParams({ page: String(triadsCurrentPage), limit: String(TRIADS_PAGE_SIZE) });
+    if (triadsCurrentFilter) params.set('filter', triadsCurrentFilter);
+    const res = await fetch('/api/triads?' + params.toString());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+
+    if (!data.rows || data.rows.length === 0) {
+      listEl.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-secondary);">' +
+        (triadsCurrentFilter ? (t('noTriadsFound') || 'Ni zadetkov za ta filter.') : (t('noTriads') || 'Ni triad.')) +
+        '</div>';
+    } else {
+      listEl.innerHTML = data.rows.map(renderTriadCard).join('');
+    }
+
+    if (metaEl) {
+      const fromIdx = (data.page - 1) * data.limit + 1;
+      const toIdx = Math.min(data.total, data.page * data.limit);
+      const filterNote = triadsCurrentFilter ? '  ·  ' + (t('triadsFilterActive') || 'Filter') + ': "' + triadsCurrentFilter + '"' : '';
+      metaEl.textContent = (t('triadsShowing') || 'Prikazujem') + ' ' + fromIdx + '–' + toIdx + ' ' +
+        (t('triadsOf') || 'od') + ' ' + data.total + ' (' + (t('triadsPage') || 'stran') + ' ' + data.page + '/' + data.totalPages + ')' + filterNote;
+    }
+
+    if (pagEl) pagEl.innerHTML = renderPagination(data.page, data.totalPages);
+  } catch (e) {
+    listEl.innerHTML = '<div style="padding:2rem;text-align:center;color:#ff7777;">⚠ ' + (e.message || 'napaka') + '</div>';
+  }
+}
 
 async function loadLivingMemory() {
   try {

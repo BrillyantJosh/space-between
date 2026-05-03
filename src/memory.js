@@ -664,6 +664,47 @@ const memory = {
     return db.prepare('SELECT * FROM triads ORDER BY id DESC LIMIT 1').get() || null;
   },
 
+  // Paginated full-text triad listing for the dashboard "Triade" tab.
+  // Returns { rows, total, page, limit, totalPages }.
+  // filter (optional) does a LIKE match across thesis/antithesis/synthesis_content/synthesis_reason/trigger_content.
+  getTriadsPaginated(page = 1, limit = 100, filter = '') {
+    const safeLimit = Math.min(500, Math.max(1, parseInt(limit, 10) || 100));
+    const safePage = Math.max(1, parseInt(page, 10) || 1);
+    const offset = (safePage - 1) * safeLimit;
+    const f = (filter || '').toString().trim();
+
+    let where = '';
+    let params = [];
+    if (f) {
+      where = `WHERE thesis LIKE ? OR antithesis LIKE ? OR synthesis_content LIKE ?
+               OR synthesis_reason LIKE ? OR trigger_content LIKE ?`;
+      const q = `%${f}%`;
+      params = [q, q, q, q, q];
+    }
+
+    const totalRow = db.prepare(`SELECT COUNT(*) as c FROM triads ${where}`).get(...params);
+    const total = totalRow ? totalRow.c : 0;
+
+    const rows = db.prepare(`
+      SELECT id, timestamp, trigger_type, trigger_content,
+             thesis, antithesis,
+             synthesis_choice, synthesis_reason, synthesis_content,
+             inner_shift, mood_before, mood_after, synthesis_depth
+      FROM triads
+      ${where}
+      ORDER BY id DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, safeLimit, offset);
+
+    return {
+      rows,
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+    };
+  },
+
   saveDream(data) {
     db.prepare(`
       INSERT INTO dreams (source_triad_ids, dream_content, dream_insight, emotional_residue)
