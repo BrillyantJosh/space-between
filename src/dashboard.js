@@ -6196,6 +6196,13 @@ function updateProjectCount() {
   }).catch(function(){});
 }
 
+// ========== INITIAL BOOT ==========
+// Brez tega bi dashboard čakal na prvi SSE heartbeat (lahko 15+ min v
+// idle stanju), zato bi vsak refresh kazal nule. Naložimo state takoj.
+// loadState() interno kliče loadActivities(data.activities).
+loadState();
+updateProjectCount();
+
 // ========== SSE ==========
 const evtSource = new EventSource('/api/events');
 evtSource.addEventListener('triad_thesis', e => {
