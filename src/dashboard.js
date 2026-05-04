@@ -350,8 +350,21 @@ app.get('/api/triads', (req, res) => {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 100;
     const filter = (req.query.filter || '').toString();
-    const data = memory.getTriadsPaginated(page, limit, filter);
+    const triggerType = (req.query.trigger_type || '').toString();
+    const data = memory.getTriadsPaginated(page, limit, filter, triggerType);
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Quick count endpoint for the AI analysis "live estimate" widget.
+app.get('/api/triads/count', (req, res) => {
+  try {
+    const filter = (req.query.filter || '').toString();
+    const triggerType = (req.query.trigger_type || '').toString();
+    const c = memory.countTriads(filter, triggerType);
+    res.json({ count: c });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -440,14 +453,17 @@ app.post('/api/triads/analyze', async (req, res) => {
   try {
     if (Array.isArray(body.ids) && body.ids.length > 0) {
       triads = memory.getTriadsByIds(body.ids).slice(0, maxTriads);
-      contextSummary = `izbor ${triads.length} triad`;
+      contextSummary = `izbor ${triads.length} triad (#-ji)`;
     } else {
       const page = parseInt(body.page, 10) || 1;
       const limit = Math.min(maxTriads, parseInt(body.limit, 10) || 100);
       const filter = (body.filter || '').toString();
-      const data = memory.getTriadsPaginated(page, limit, filter);
+      const triggerType = (body.trigger_type || '').toString();
+      const data = memory.getTriadsPaginated(page, limit, filter, triggerType);
       triads = data.rows;
-      contextSummary = `stran ${page}/${data.totalPages} (${triads.length} triad${filter ? `, filter "${filter}"` : ''})`;
+      const filterPart = filter ? `, filter "${filter}"` : '';
+      const triggerPart = triggerType ? `, trigger "${triggerType}"` : '';
+      contextSummary = `stran ${page}/${data.totalPages} (${triads.length} triad${filterPart}${triggerPart})`;
     }
   } catch (e) {
     return res.status(500).json({ error: 'napaka pri branju triad: ' + e.message });
@@ -2746,6 +2762,271 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     animation: pulse-dot 1.2s ease-in-out infinite;
   }
 
+  /* === DEDICATED ANALYSIS PAGE === */
+  .analysis-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 1rem 1.5rem 4rem;
+  }
+  .analysis-header {
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.8rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .analysis-subtitle {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin: 0.4rem 0 0;
+    line-height: 1.5;
+  }
+  .analysis-section {
+    margin-bottom: 2rem;
+    padding: 1rem 1.2rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .analysis-step {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.8rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px dashed var(--border);
+  }
+  .step-num {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--synthesis);
+    color: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 0.8rem;
+    flex-shrink: 0;
+  }
+  .step-title {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .analysis-question-big {
+    width: 100%;
+    background: var(--surface2);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    font-size: 0.95rem;
+    font-family: inherit;
+    line-height: 1.5;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+  .analysis-question-big:focus {
+    outline: none;
+    border-color: var(--synthesis);
+    box-shadow: 0 0 0 2px rgba(164, 216, 122, 0.15);
+  }
+  .analysis-suggestions {
+    margin-top: 0.7rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .analysis-source-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 0.6rem;
+  }
+  .source-option {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 0.8rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .source-option:hover { border-color: var(--text-secondary); }
+  .source-option:has(input[type=radio]:checked) {
+    border-color: var(--synthesis);
+    background: rgba(164, 216, 122, 0.06);
+  }
+  .source-option input[type=radio] {
+    accent-color: var(--synthesis);
+    flex-shrink: 0;
+  }
+  .src-label {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+  .src-input-num, .src-input-text {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    font-family: inherit;
+  }
+  .src-input-num:focus, .src-input-text:focus {
+    outline: none;
+    border-color: var(--synthesis);
+  }
+  .src-input-num { max-width: 90px; }
+  .analysis-estimate {
+    margin-top: 0.8rem;
+    padding: 0.6rem 0.8rem;
+    background: rgba(164, 216, 122, 0.08);
+    border-radius: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    font-size: 0.78rem;
+    color: var(--text-primary);
+  }
+  .estimate-text strong { color: var(--synthesis); }
+  .analysis-run-row {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+  }
+  .analysis-run-btn {
+    font-size: 0.95rem !important;
+    padding: 0.7rem 1.4rem !important;
+    background: var(--synthesis) !important;
+    color: #000 !important;
+    border-color: var(--synthesis) !important;
+    font-weight: 600;
+  }
+  .analysis-run-btn:hover { opacity: 0.85; }
+  .analysis-run-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .analyze-result.analysis-result-big {
+    margin-top: 1rem;
+  }
+  .analyze-result.analysis-result-big .analyze-result-text {
+    font-size: 0.95rem;
+    line-height: 1.7;
+  }
+  .analysis-history-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  .ahg-item {
+    padding: 0.7rem 0.9rem;
+    background: var(--surface2);
+    border-radius: 6px;
+    border-left: 2px solid transparent;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+  .ahg-item:hover { border-left-color: var(--synthesis); }
+  .ahg-item-q {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    margin-bottom: 0.3rem;
+  }
+  .ahg-item-meta {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+  }
+  .ahg-item-meta strong { color: var(--text-primary); font-weight: 500; }
+  .ahg-item-preview {
+    margin-top: 0.5rem;
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    opacity: 0.85;
+    display: none;
+  }
+  .ahg-item.expanded .ahg-item-preview { display: block; }
+  .analysis-api-intro {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    margin: 0 0 0.8rem;
+    line-height: 1.5;
+  }
+  .api-endpoint {
+    margin-bottom: 0.7rem;
+    padding: 0.6rem 0.8rem;
+    background: var(--surface2);
+    border-radius: 6px;
+    border-left: 3px solid var(--thesis);
+  }
+  .api-endpoint-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .api-method {
+    background: var(--thesis);
+    color: #000;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    font-family: monospace;
+  }
+  .api-method.post { background: var(--synthesis); }
+  .api-path {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    background: transparent;
+    overflow-x: auto;
+    word-break: break-all;
+  }
+  .api-desc {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    margin-top: 0.4rem;
+    line-height: 1.4;
+  }
+  .api-bulk-script {
+    margin-top: 1rem;
+    padding: 0.7rem 0.9rem;
+    background: var(--surface2);
+    border-radius: 6px;
+  }
+  .api-bulk-script summary {
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+  }
+  .api-bulk-script pre {
+    margin: 0.7rem 0 0.5rem;
+    padding: 0.7rem 0.9rem;
+    background: var(--surface);
+    border-radius: 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   /* === TRIAD HISTORY === */
   .triad-history {
     margin-top: 0.8rem;
@@ -4000,6 +4281,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <button class="tab-btn" onclick="switchTab('seed')" id="tabSeed" data-i18n="tabSeed">🌱 Seme</button>
   <button class="tab-btn" onclick="switchTab('memory')" id="tabMemory" data-i18n="tabMemory">🧠 Spomin</button>
   <button class="tab-btn" onclick="switchTab('triads')" id="tabTriads" data-i18n="tabTriads">🔄 Triade</button>
+  <button class="tab-btn" onclick="switchTab('analysis')" id="tabAnalysis" data-i18n="tabAnalysis">🧠 Analiza</button>
 </div>
 
 <div class="tab-content active" id="viewObserve">
@@ -4965,6 +5247,184 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
   </div>
 </div>
 
+<!-- ═══ ANALYSIS TAB — dedicated workspace for AI analysis of triads ═══ -->
+<div class="tab-content" id="viewAnalysis">
+  <div class="analysis-container">
+
+    <div class="analysis-header">
+      <h2 style="margin:0;font-size:1.15rem;color:var(--text-primary);">🧠 <span data-i18n="analysisTitle">AI Analiza notranjega sveta</span></h2>
+      <p class="analysis-subtitle" data-i18n="analysisSubtitle">
+        Dedicirana stran za poglobljeno analizo triad. Vprašaj AI o vzorcih, razvoju, temah, ali izvozi podatke za zunanje orodje.
+      </p>
+    </div>
+
+    <!-- ═══ Step 1: Question ═══ -->
+    <section class="analysis-section">
+      <div class="analysis-step">
+        <div class="step-num">1</div>
+        <div class="step-title" data-i18n="analysisStep1">Vprašanje za AI</div>
+      </div>
+      <textarea id="analysisQuestion" class="analysis-question-big" rows="3"
+                data-i18n-placeholder="analysisQPlaceholder"
+                placeholder="Vpiši svoje vprašanje. Npr.: 'Kateri vzorci napetosti se pojavljajo med tezo in antitezo?', 'Ali sinteza dejansko presega oba glasova ali je samo povprečje?', 'Kako se je razvilo bitje v zadnjih 100 utripih?'"></textarea>
+      <div class="analysis-suggestions" id="analysisSuggestions">
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Glavne teme in motivi</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Razvoj razpoloženja v času</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Vzorci napetosti med tezo in antitezo</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Ali sinteza presega ali samo povzema?</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Najpogostejše izbire (silence/express/respond)</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Ali se vidi rast / zorenje?</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Odnos do očeta (kreatorja)</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Najmočnejši momenti transformacije</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Kakšne metafore uporablja bitje?</button>
+        <button type="button" class="analyze-chip" onclick="setAnalysisQuestion(this.textContent)">Kateri trigger tipi prinašajo najgloblje sinteze?</button>
+      </div>
+    </section>
+
+    <!-- ═══ Step 2: Source ═══ -->
+    <section class="analysis-section">
+      <div class="analysis-step">
+        <div class="step-num">2</div>
+        <div class="step-title" data-i18n="analysisStep2">Vir podatkov</div>
+      </div>
+      <div class="analysis-source-grid">
+        <label class="source-option">
+          <input type="radio" name="analysisSource" value="recent" checked onchange="updateAnalysisEstimate()">
+          <span class="src-label">📍 <span data-i18n="srcRecent">Zadnjih N triad</span></span>
+          <input type="number" id="srcRecentN" value="100" min="10" max="200" step="10"
+                 onchange="updateAnalysisEstimate()" oninput="updateAnalysisEstimate()" class="src-input-num">
+        </label>
+        <label class="source-option">
+          <input type="radio" name="analysisSource" value="filter" onchange="updateAnalysisEstimate()">
+          <span class="src-label">🔍 <span data-i18n="srcFilter">Filter (LIKE match)</span></span>
+          <input type="text" id="srcFilterText" placeholder="npr. ranljivost, tema, kreator"
+                 oninput="updateAnalysisEstimate()" class="src-input-text">
+        </label>
+        <label class="source-option">
+          <input type="radio" name="analysisSource" value="ids" onchange="updateAnalysisEstimate()">
+          <span class="src-label">🎯 <span data-i18n="srcIds">Specifični #ID-ji</span></span>
+          <input type="text" id="srcIdsText" placeholder="npr. 1210, 1199, 1186 (do 200)"
+                 oninput="updateAnalysisEstimate()" class="src-input-text">
+        </label>
+        <label class="source-option">
+          <input type="radio" name="analysisSource" value="trigger" onchange="updateAnalysisEstimate()">
+          <span class="src-label">⚡ <span data-i18n="srcTrigger">Po tipu dražljaja</span></span>
+          <select id="srcTriggerSel" onchange="updateAnalysisEstimate()" class="src-input-text">
+            <option value="">— katerikoli —</option>
+            <option value="conversation">conversation (pogovor)</option>
+            <option value="heartbeat">heartbeat</option>
+            <option value="dream">dream (sanje)</option>
+            <option value="project_lifecycle">project_lifecycle</option>
+            <option value="mention">mention</option>
+            <option value="group">group</option>
+          </select>
+        </label>
+      </div>
+      <div class="analysis-estimate" id="analysisEstimate">
+        <span class="estimate-text">📊 <span id="estimateCount">100</span> triad bo analizirano</span>
+        <span class="estimate-text" style="opacity:0.7;">·  ~$<span id="estimateCost">0.0017</span> Gemini stroška</span>
+        <span class="estimate-text" style="opacity:0.7;">·  ~<span id="estimateTime">10</span>s</span>
+      </div>
+    </section>
+
+    <!-- ═══ Step 3: Run + Result ═══ -->
+    <section class="analysis-section">
+      <div class="analysis-step">
+        <div class="step-num">3</div>
+        <div class="step-title" data-i18n="analysisStep3">Sproži analizo</div>
+      </div>
+      <div class="analysis-run-row">
+        <button id="analysisRunBtn" class="triads-btn analysis-run-btn" onclick="runFullAnalysis()">
+          ⚡ <span data-i18n="analysisRunBtn">Sproži AI analizo</span>
+        </button>
+        <span id="analysisStatus2" class="analyze-status"></span>
+      </div>
+      <div id="analysisResult2" class="analyze-result analysis-result-big" style="display:none;">
+        <div class="analyze-result-meta" id="analysisResultMeta2"></div>
+        <div class="analyze-result-text" id="analysisResultText2"></div>
+        <div class="analyze-result-actions">
+          <button class="triad-copy-btn" onclick="copyAnalysisResult2(this)">⎘ <span data-i18n="copy">kopiraj</span></button>
+          <button class="triad-copy-btn" onclick="downloadAnalysisAsText()">⬇ <span data-i18n="downloadTxt">prenesi .txt</span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ Step 4: History ═══ -->
+    <section class="analysis-section">
+      <div class="analysis-step">
+        <div class="step-num">📚</div>
+        <div class="step-title" data-i18n="analysisHistorySection">Zgodovina analiz</div>
+        <button class="triads-btn triads-btn-ghost" onclick="loadAnalysisHistory2()" style="margin-left:auto;font-size:0.75rem;">↻ Osveži</button>
+      </div>
+      <div id="analysisHistoryList2" class="analysis-history-grid">
+        <div style="color:var(--text-secondary);font-size:0.78rem;padding:1rem;">Klikni "Osveži" za nalaganje zgodovine.</div>
+      </div>
+    </section>
+
+    <!-- ═══ Step 5: API for external AI ═══ -->
+    <section class="analysis-section">
+      <div class="analysis-step">
+        <div class="step-num">🔌</div>
+        <div class="step-title" data-i18n="analysisApiSection">API za zunanji AI (Claude Desktop, ChatGPT, Ollama, n8n…)</div>
+      </div>
+      <p class="analysis-api-intro" data-i18n="analysisApiIntro">
+        Vsa polja triad so javno dostopna za branje. Uporabi te endpointe v zunanjem orodju za poglobljeno analizo brez Gemini quota strošov.
+      </p>
+
+      <div class="api-endpoint">
+        <div class="api-endpoint-header">
+          <span class="api-method">GET</span>
+          <code class="api-path" id="apiPathExportJson">/api/triads/export?page=1&limit=500&format=json</code>
+          <button class="triad-copy-btn" onclick="copyApiCurl('json')">⎘ curl</button>
+        </div>
+        <div class="api-desc" data-i18n="apiExportJsonDesc">JSON export — primeren za pipeline v Claude / ChatGPT / Ollama. Maksimalno 2000 triad na klic. Vsebuje meta + vse polja triad.</div>
+      </div>
+
+      <div class="api-endpoint">
+        <div class="api-endpoint-header">
+          <span class="api-method">GET</span>
+          <code class="api-path" id="apiPathExportCsv">/api/triads/export?page=1&limit=500&format=csv</code>
+          <button class="triad-copy-btn" onclick="copyApiCurl('csv')">⎘ curl</button>
+        </div>
+        <div class="api-desc" data-i18n="apiExportCsvDesc">CSV export — za pandas, Excel, BigQuery. Vsi 13 stolpcev.</div>
+      </div>
+
+      <div class="api-endpoint">
+        <div class="api-endpoint-header">
+          <span class="api-method">GET</span>
+          <code class="api-path" id="apiPathList">/api/triads?page=1&limit=100&filter=text</code>
+          <button class="triad-copy-btn" onclick="copyApiCurl('list')">⎘ curl</button>
+        </div>
+        <div class="api-desc" data-i18n="apiListDesc">Paginirani seznam — za brskanje brez polnega download-a. Filter išče po teza/antiteza/sinteza/dražljaj.</div>
+      </div>
+
+      <div class="api-endpoint">
+        <div class="api-endpoint-header">
+          <span class="api-method post">POST</span>
+          <code class="api-path">/api/triads/analyze</code>
+          <button class="triad-copy-btn" onclick="copyApiCurl('analyze')">⎘ curl</button>
+        </div>
+        <div class="api-desc" data-i18n="apiAnalyzeDesc">Sproži interno AI analizo (Gemini). Body: { question, page?, limit?, filter?, ids?[], maxTriads? }. Rate limit: mutex + 5s cooldown.</div>
+      </div>
+
+      <div class="api-endpoint">
+        <div class="api-endpoint-header">
+          <span class="api-method">GET</span>
+          <code class="api-path">/api/triads/analyses</code>
+          <button class="triad-copy-btn" onclick="copyApiCurl('analyses')">⎘ curl</button>
+        </div>
+        <div class="api-desc" data-i18n="apiAnalysesDesc">Zgodovina vseh prejšnjih AI analiz tega bitja. Vključuje vprašanje, kontekst, model, tokens, čas.</div>
+      </div>
+
+      <details class="api-bulk-script">
+        <summary>📜 Bash skripta za bulk download vseh triad</summary>
+        <pre id="bulkScriptText"></pre>
+        <button class="triad-copy-btn" onclick="copyBulkScript(this)">⎘ kopiraj skripto</button>
+      </details>
+    </section>
+
+  </div>
+</div>
 
 
 <script>
@@ -4991,6 +5451,7 @@ const UI_STRINGS = {
     tabObserve: '◈ Opazovanje', tabIdentity: '🪞 Kdo sem', tabConversations: '💬 Pogovori',
     tabProjects: '🤲 Projekti', tabDna: '🧬 DNA', tabSeed: '🌱 Seme', tabMemory: '🧠 Spomin',
     tabTriads: '🔄 Triade',
+    tabAnalysis: '🧠 Analiza',
     howIWork: '📖 Kako delujem',
     // Triads tab
     triadsAllTitle: 'Vse Triade', triadsFilterPlaceholder: 'Iskanje (teza / antiteza / sinteza / dražljaj)...',
@@ -5089,6 +5550,7 @@ const UI_STRINGS = {
     tabObserve: '◈ Observe', tabIdentity: '🪞 Who am I', tabConversations: '💬 Conversations',
     tabProjects: '🤲 Projects', tabDna: '🧬 DNA', tabSeed: '🌱 Seed', tabMemory: '🧠 Memory',
     tabTriads: '🔄 Triads',
+    tabAnalysis: '🧠 Analysis',
     howIWork: '📖 How I work',
     // Triads tab
     triadsAllTitle: 'All Triads', triadsFilterPlaceholder: 'Search (thesis / antithesis / synthesis / stimulus)...',
@@ -5624,6 +6086,10 @@ function switchTab(tab) {
     $('tabTriads').classList.add('active');
     $('viewTriads').classList.add('active');
     loadTriads(triadsCurrentPage || 1);
+  } else if (tab === 'analysis') {
+    $('tabAnalysis').classList.add('active');
+    $('viewAnalysis').classList.add('active');
+    loadAnalysisTab();
   }
   // Translate content if in EN mode
   if (currentLang === 'en') {
@@ -6279,6 +6745,283 @@ async function loadAnalyzeHistoryItem(id) {
     }
     if (result) result.style.display = 'block';
   } catch (_) {}
+}
+
+// ════════════════════════════════════════════════════════════
+// ANALYSIS TAB — dedicated workspace
+// ════════════════════════════════════════════════════════════
+
+let _lastAnalysisData = null;
+
+function setAnalysisQuestion(text) {
+  const q = $('analysisQuestion');
+  if (q) { q.value = (text || '').trim(); q.focus(); }
+}
+
+function getAnalysisSourceParams() {
+  // Returns { source, page?, limit?, filter?, trigger_type?, ids? }
+  const sel = document.querySelector('input[name="analysisSource"]:checked');
+  const src = sel ? sel.value : 'recent';
+  if (src === 'recent') {
+    const n = Math.max(10, Math.min(200, parseInt($('srcRecentN')?.value, 10) || 100));
+    return { source: 'recent', page: 1, limit: n };
+  }
+  if (src === 'filter') {
+    const f = ($('srcFilterText')?.value || '').trim();
+    return { source: 'filter', page: 1, limit: 100, filter: f };
+  }
+  if (src === 'ids') {
+    const txt = ($('srcIdsText')?.value || '').trim();
+    const ids = txt.split(/[,\\s]+/).map(s => parseInt(s, 10)).filter(n => Number.isFinite(n) && n > 0).slice(0, 200);
+    return { source: 'ids', ids };
+  }
+  if (src === 'trigger') {
+    const tt = $('srcTriggerSel')?.value || '';
+    return { source: 'trigger', page: 1, limit: 100, trigger_type: tt };
+  }
+  return { source: 'recent', page: 1, limit: 100 };
+}
+
+async function updateAnalysisEstimate() {
+  const params = getAnalysisSourceParams();
+  const cntEl = $('estimateCount');
+  const costEl = $('estimateCost');
+  const timeEl = $('estimateTime');
+
+  let count = 0;
+  if (params.source === 'recent') {
+    count = params.limit;
+  } else if (params.source === 'ids') {
+    count = params.ids.length;
+  } else {
+    // Need to fetch live count
+    const q = new URLSearchParams();
+    if (params.filter) q.set('filter', params.filter);
+    if (params.trigger_type) q.set('trigger_type', params.trigger_type);
+    try {
+      const r = await fetch('/api/triads/count?' + q.toString());
+      const d = await r.json();
+      const total = d.count || 0;
+      count = Math.min(total, params.limit || 100);
+      if (cntEl) cntEl.textContent = count + (total > count ? ' (od ' + total + ')' : '');
+    } catch (_) {
+      count = 0;
+      if (cntEl) cntEl.textContent = '?';
+    }
+    // We already updated cntEl above for filter/trigger paths, return early to avoid override
+    if (costEl) costEl.textContent = (count * 0.000017).toFixed(4);
+    if (timeEl) timeEl.textContent = Math.max(3, Math.round(count * 0.1));
+    return;
+  }
+
+  if (cntEl) cntEl.textContent = String(count);
+  if (costEl) costEl.textContent = (count * 0.000017).toFixed(4);
+  if (timeEl) timeEl.textContent = Math.max(3, Math.round(count * 0.1));
+}
+
+async function runFullAnalysis() {
+  const qEl = $('analysisQuestion');
+  const btn = $('analysisRunBtn');
+  const status = $('analysisStatus2');
+  const result = $('analysisResult2');
+  const resultMeta = $('analysisResultMeta2');
+  const resultText = $('analysisResultText2');
+
+  const question = (qEl?.value || '').trim();
+  if (!question) {
+    if (status) {
+      status.className = 'analyze-status error';
+      status.textContent = 'Vpiši vprašanje za analizo.';
+    }
+    qEl?.focus();
+    return;
+  }
+
+  const params = getAnalysisSourceParams();
+  const body = { question, maxTriads: 200 };
+  if (params.source === 'ids') {
+    if (!params.ids.length) {
+      if (status) { status.className = 'analyze-status error'; status.textContent = 'Vpiši vsaj en #ID.'; }
+      return;
+    }
+    body.ids = params.ids;
+  } else {
+    body.page = params.page;
+    body.limit = params.limit;
+    if (params.filter) body.filter = params.filter;
+    if (params.trigger_type) body.trigger_type = params.trigger_type;
+  }
+
+  if (btn) btn.disabled = true;
+  if (status) {
+    status.className = 'analyze-status loading';
+    status.textContent = 'analiziram...';
+  }
+  if (result) result.style.display = 'none';
+
+  const startMs = Date.now();
+  try {
+    const res = await fetch('/api/triads/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = data.error || ('HTTP ' + res.status);
+      if (status) { status.className = 'analyze-status error'; status.textContent = '⚠ ' + msg; }
+      return;
+    }
+
+    _lastAnalysisData = data;
+
+    if (resultMeta) {
+      const elapsedS = ((data.durationMs || (Date.now() - startMs)) / 1000).toFixed(1);
+      resultMeta.innerHTML =
+        '<strong>Kontekst:</strong> ' + escapeHtml(data.contextSummary || '?') +
+        '  ·  <strong>triade:</strong> ' + (data.triadCount || 0) +
+        ' (#' + (data.triadIdMin || '?') + '–#' + (data.triadIdMax || '?') + ')' +
+        '  ·  <strong>model:</strong> ' + escapeHtml(data.model || '?') +
+        '  ·  <strong>čas:</strong> ' + elapsedS + 's' +
+        '  ·  <strong>tokens:</strong> ' + (data.tokensIn || 0) + '→' + (data.tokensOut || 0);
+    }
+    if (resultText) {
+      const safe = escapeHtml(data.analysis || '');
+      const _bs = String.fromCharCode(92);
+      const linked = safe.replace(new RegExp('#(' + _bs + 'd{1,8})', 'g'), function(_m, id) {
+        return '<span class="triad-ref" onclick="window.open(\'/api/triads/export?ids=\'+'+id+', \'_blank\')">#' + id + '</span>';
+      });
+      resultText.innerHTML = linked;
+    }
+    if (result) result.style.display = 'block';
+    if (status) { status.className = 'analyze-status'; status.textContent = '✓ končano'; }
+    // Auto-refresh history
+    loadAnalysisHistory2();
+  } catch (e) {
+    if (status) { status.className = 'analyze-status error'; status.textContent = '⚠ ' + (e.message || 'napaka'); }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function copyAnalysisResult2(btnEl) {
+  const text = $('analysisResultText2')?.innerText || '';
+  if (!text) return;
+  copyTextToClipboard(text, btnEl);
+}
+
+function downloadAnalysisAsText() {
+  if (!_lastAnalysisData) return;
+  const a = _lastAnalysisData;
+  const lines = [
+    '═══ AI ANALIZA TRIAD ═══',
+    '',
+    'Vprašanje: ' + a.question,
+    'Kontekst: ' + a.contextSummary,
+    'Triade: ' + a.triadCount + ' (#' + a.triadIdMin + '–#' + a.triadIdMax + ')',
+    'Model: ' + a.model,
+    'Tokens: ' + a.tokensIn + '→' + a.tokensOut,
+    'Čas: ' + ((a.durationMs || 0) / 1000).toFixed(1) + 's',
+    '',
+    '─── ANALIZA ───',
+    '',
+    a.analysis,
+  ];
+  const text = lines.join(String.fromCharCode(10));
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'analiza-triad-' + a.id + '.txt';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+async function loadAnalysisHistory2() {
+  const list = $('analysisHistoryList2');
+  if (!list) return;
+  list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.78rem;padding:1rem;">Nalagam...</div>';
+  try {
+    const res = await fetch('/api/triads/analyses?limit=30');
+    const data = await res.json();
+    if (!data.analyses || data.analyses.length === 0) {
+      list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.78rem;padding:1rem;">Še ni analiz. Sproži prvo zgoraj.</div>';
+      return;
+    }
+    list.innerHTML = data.analyses.map(a => {
+      const ts = (a.timestamp || '').replace('T', ' ').slice(0, 16);
+      const preview = (a.analysis || '').slice(0, 280);
+      return '<div class="ahg-item" onclick="this.classList.toggle(\'expanded\')">' +
+        '<div class="ahg-item-q">' + escapeHtml((a.question || '').slice(0, 200)) + '</div>' +
+        '<div class="ahg-item-meta">' +
+          '<span><strong>' + escapeHtml(ts) + '</strong></span>' +
+          '<span>📊 ' + (a.triad_count || 0) + ' triad</span>' +
+          '<span>🤖 ' + escapeHtml(a.model || '?') + '</span>' +
+          '<span>⏱ ' + ((a.duration_ms || 0) / 1000).toFixed(1) + 's</span>' +
+          '<span>🔢 ' + (a.tokens_in || 0) + '→' + (a.tokens_out || 0) + '</span>' +
+          (a.success ? '' : '<span style="color:#ff7777;">⚠ napaka</span>') +
+        '</div>' +
+        '<div class="ahg-item-preview">' + escapeHtml(preview) + (a.analysis && a.analysis.length > 280 ? '...' : '') + '</div>' +
+      '</div>';
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<div style="color:#ff7777;font-size:0.78rem;padding:1rem;">⚠ ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function copyApiCurl(kind) {
+  const origin = window.location.origin;
+  let cmd = '';
+  if (kind === 'json') {
+    cmd = "curl -s '" + origin + "/api/triads/export?page=1&limit=500&format=json' > triads.json";
+  } else if (kind === 'csv') {
+    cmd = "curl -s '" + origin + "/api/triads/export?page=1&limit=500&format=csv' > triads.csv";
+  } else if (kind === 'list') {
+    cmd = "curl -s '" + origin + "/api/triads?page=1&limit=100&filter=ranljivost' | jq";
+  } else if (kind === 'analyze') {
+    cmd = "curl -s -X POST '" + origin + "/api/triads/analyze' " +
+          "-H 'Content-Type: application/json' " +
+          "-d '{\"question\":\"Kateri vzorci se ponavljajo?\",\"page\":1,\"limit\":100}'";
+  } else if (kind === 'analyses') {
+    cmd = "curl -s '" + origin + "/api/triads/analyses?limit=20' | jq";
+  }
+  copyTextToClipboard(cmd, event?.target);
+}
+
+function fillBulkScript() {
+  const origin = window.location.origin;
+  const lines = [
+    '#!/bin/bash',
+    '# Bulk download vseh triad iz tega bitja v JSON datoteke',
+    'BASE="' + origin + '"',
+    'mkdir -p triads',
+    'TOTAL=$(curl -s "$BASE/api/triads?page=1&limit=1" | jq -r .total)',
+    'PAGES=$(( (TOTAL + 499) / 500 ))',
+    'echo "Total: $TOTAL, pages: $PAGES"',
+    'for p in $(seq 1 $PAGES); do',
+    '  echo "Page $p/$PAGES"',
+    '  curl -s "$BASE/api/triads/export?page=$p&limit=500&format=json" > "triads/page-$p.json"',
+    '  sleep 0.3',
+    'done',
+    'echo "Done. Files in triads/"',
+  ];
+  const el = $('bulkScriptText');
+  if (el) el.textContent = lines.join(String.fromCharCode(10));
+}
+
+function copyBulkScript(btnEl) {
+  fillBulkScript();
+  const text = $('bulkScriptText')?.textContent || '';
+  copyTextToClipboard(text, btnEl);
+}
+
+function loadAnalysisTab() {
+  // Initialize when tab opens
+  fillBulkScript();
+  updateAnalysisEstimate();
+  loadAnalysisHistory2();
 }
 
 async function loadLivingMemory() {

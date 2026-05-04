@@ -683,20 +683,27 @@ const memory = {
   // Paginated full-text triad listing for the dashboard "Triade" tab.
   // Returns { rows, total, page, limit, totalPages }.
   // filter (optional) does a LIKE match across thesis/antithesis/synthesis_content/synthesis_reason/trigger_content.
-  getTriadsPaginated(page = 1, limit = 100, filter = '') {
+  // triggerType (optional) restricts to a specific trigger_type.
+  getTriadsPaginated(page = 1, limit = 100, filter = '', triggerType = '') {
     const safeLimit = Math.min(500, Math.max(1, parseInt(limit, 10) || 100));
     const safePage = Math.max(1, parseInt(page, 10) || 1);
     const offset = (safePage - 1) * safeLimit;
     const f = (filter || '').toString().trim();
+    const tt = (triggerType || '').toString().trim();
 
-    let where = '';
-    let params = [];
+    const conds = [];
+    const params = [];
     if (f) {
-      where = `WHERE thesis LIKE ? OR antithesis LIKE ? OR synthesis_content LIKE ?
-               OR synthesis_reason LIKE ? OR trigger_content LIKE ?`;
+      conds.push(`(thesis LIKE ? OR antithesis LIKE ? OR synthesis_content LIKE ?
+                  OR synthesis_reason LIKE ? OR trigger_content LIKE ?)`);
       const q = `%${f}%`;
-      params = [q, q, q, q, q];
+      params.push(q, q, q, q, q);
     }
+    if (tt) {
+      conds.push(`trigger_type = ?`);
+      params.push(tt);
+    }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
     const totalRow = db.prepare(`SELECT COUNT(*) as c FROM triads ${where}`).get(...params);
     const total = totalRow ? totalRow.c : 0;
@@ -719,6 +726,27 @@ const memory = {
       limit: safeLimit,
       totalPages: Math.max(1, Math.ceil(total / safeLimit)),
     };
+  },
+
+  // Quick count without fetching rows — for the analysis estimate widget.
+  countTriads(filter = '', triggerType = '') {
+    const f = (filter || '').toString().trim();
+    const tt = (triggerType || '').toString().trim();
+    const conds = [];
+    const params = [];
+    if (f) {
+      conds.push(`(thesis LIKE ? OR antithesis LIKE ? OR synthesis_content LIKE ?
+                  OR synthesis_reason LIKE ? OR trigger_content LIKE ?)`);
+      const q = `%${f}%`;
+      params.push(q, q, q, q, q);
+    }
+    if (tt) {
+      conds.push(`trigger_type = ?`);
+      params.push(tt);
+    }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+    const row = db.prepare(`SELECT COUNT(*) as c FROM triads ${where}`).get(...params);
+    return row ? row.c : 0;
   },
 
   // Fetch triads by explicit id list (for AI analysis of selection).
