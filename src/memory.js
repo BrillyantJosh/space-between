@@ -705,11 +705,15 @@ const memory = {
     const rangeFrom = from || (minRow && minRow.t) || new Date().toISOString();
     const rangeTo = to || (maxRow && maxRow.t) || new Date().toISOString();
 
-    // Bucket using strftime — group by floor(unixepoch/bucketSec)
+    // Bucket using strftime — group by floor(unixepoch/bucketSec).
+    // bucketSec is interpolated as a SQL literal (it's a small integer derived from
+    // bucketHours, fully validated above) — using ? binding caused SQLite to treat
+    // the integer division as real division (no flooring) on better-sqlite3.
+    const bs = bucketSec; // explicit integer
     const rows = db.prepare(`
       SELECT
-        CAST(strftime('%s', timestamp) AS INTEGER) / ? * ? as bucket_epoch,
-        datetime(CAST(strftime('%s', timestamp) AS INTEGER) / ? * ?, 'unixepoch') as bucket_start,
+        (CAST(strftime('%s', timestamp) AS INTEGER) / ${bs}) * ${bs} as bucket_epoch,
+        datetime((CAST(strftime('%s', timestamp) AS INTEGER) / ${bs}) * ${bs}, 'unixepoch') as bucket_start,
         COUNT(*) as count,
         SUM(CASE WHEN synthesis_choice='silence' THEN 1 ELSE 0 END) as choice_silence,
         SUM(CASE WHEN synthesis_choice='express' THEN 1 ELSE 0 END) as choice_express,
@@ -728,7 +732,7 @@ const memory = {
       WHERE timestamp >= ? AND timestamp <= ?
       GROUP BY bucket_epoch
       ORDER BY bucket_epoch ASC
-    `).all(bucketSec, bucketSec, bucketSec, bucketSec, rangeFrom, rangeTo);
+    `).all(rangeFrom, rangeTo);
 
     // For each bucket, find top mood (most common mood_after)
     for (const r of rows) {
