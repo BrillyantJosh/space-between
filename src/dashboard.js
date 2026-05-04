@@ -6966,7 +6966,7 @@ async function loadAnalysisHistory2() {
     list.innerHTML = data.analyses.map(a => {
       const ts = (a.timestamp || '').replace('T', ' ').slice(0, 16);
       const preview = (a.analysis || '').slice(0, 280);
-      return '<div class="ahg-item" onclick="this.classList.toggle(\'expanded\')">' +
+      return '<div class="ahg-item" onclick="toggleExpanded(this)">' +
         '<div class="ahg-item-q">' + escapeHtml((a.question || '').slice(0, 200)) + '</div>' +
         '<div class="ahg-item-meta">' +
           '<span><strong>' + escapeHtml(ts) + '</strong></span>' +
@@ -7042,6 +7042,11 @@ function openTriadById(id) {
   const cleanId = parseInt(id, 10);
   if (!Number.isFinite(cleanId)) return;
   window.open('/api/triads/export?ids=' + cleanId, '_blank');
+}
+
+// Toggle expanded state on an element (used in history items).
+function toggleExpanded(el) {
+  if (el && el.classList) el.classList.toggle('expanded');
 }
 
 async function loadLivingMemory() {
