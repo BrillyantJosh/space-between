@@ -10,6 +10,7 @@ import fs from 'fs';
 import { getPresence } from './presence.js';
 import { getSkillsStatus } from './skills.js';
 import { getAnthropicBudgetStatus, callLLM } from './llm.js';
+import scoring from './triad-scoring.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CREATIONS_DIR = path.join(__dirname, '..', 'data', 'creations');
@@ -635,6 +636,61 @@ app.get('/api/triads/analyses/:id', (req, res) => {
     const row = memory.getTriadAnalysis(req.params.id);
     if (!row) return res.status(404).json({ error: 'ni najdeno' });
     res.json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ◈ Triad scoring — dialectical quality rating per triad.
+// Background job that calls LLM for each triad, stores 5 criterion scores.
+app.post('/api/triads/scoring/start', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await scoring.startJob({
+      model: body.model === 'claude' ? 'claude' : 'gemini',
+      limit: body.limit ? parseInt(body.limit, 10) : null,
+      fromId: body.fromId ? parseInt(body.fromId, 10) : null,
+      toId: body.toId ? parseInt(body.toId, 10) : null,
+      rescore: !!body.rescore,
+      paceMs: typeof body.paceMs === 'number' ? body.paceMs : null,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/triads/scoring/stop', (_req, res) => {
+  const stopped = scoring.stopJob();
+  res.json({ ok: true, stopped });
+});
+
+app.get('/api/triads/scoring/status', (_req, res) => {
+  try {
+    const status = scoring.getStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/triads/scoring/leaderboard', (req, res) => {
+  try {
+    const minScore = parseInt(req.query.min, 10) || 0;
+    const limit = parseInt(req.query.limit, 10) || 100;
+    res.json({ rows: memory.getTopScoredTriads(minScore, limit) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/triads/scoring/distribution', (_req, res) => {
+  try {
+    res.json({
+      distribution: memory.getScoreDistribution(),
+      averages: memory.getScoreAverages(),
+      jobs: memory.getRecentScoringJobs(10),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3129,6 +3185,196 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     border-radius: 0;
   }
 
+  /* === SCORING UI === */
+  .scoring-controls .scoring-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+  }
+  .scoring-row label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+  }
+  .scoring-progress {
+    margin-top: 0.8rem;
+    padding: 0.7rem 0.9rem;
+    background: var(--surface2);
+    border-radius: 6px;
+  }
+  .scoring-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+  }
+  .scoring-progress-bar {
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .scoring-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--synthesis), var(--antithesis));
+    transition: width 0.3s ease;
+  }
+  .scoring-current {
+    margin-top: 0.4rem;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .scoring-stats {
+    margin-top: 1rem;
+  }
+  .scoring-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.5rem;
+  }
+  .scoring-stat-card {
+    background: var(--surface2);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    text-align: center;
+  }
+  .scoring-stat-card .v {
+    font-size: 1.3rem;
+    color: var(--synthesis);
+    font-weight: 600;
+  }
+  .scoring-stat-card .l {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    margin-top: 0.2rem;
+  }
+  .scoring-distribution {
+    margin-top: 1rem;
+    padding: 0.8rem;
+    background: var(--surface2);
+    border-radius: 6px;
+  }
+  .scoring-distribution-title {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+  }
+  .dist-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.78rem;
+  }
+  .dist-row .dist-score {
+    width: 24px;
+    text-align: right;
+    color: var(--text-primary);
+    font-weight: 500;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .dist-row .dist-bar {
+    flex: 1;
+    height: 14px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .dist-row .dist-bar-fill {
+    height: 100%;
+    background: var(--synthesis);
+    transition: width 0.3s ease;
+  }
+  .dist-row .dist-count {
+    width: 60px;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+  }
+  .scoring-leaderboard {
+    margin-top: 1rem;
+  }
+  .scoring-leaderboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+  }
+  .scoring-leaderboard-title {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .lb-item {
+    background: var(--surface2);
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.4rem;
+    border-left: 3px solid var(--synthesis);
+  }
+  .lb-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+  .lb-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 600;
+    color: var(--synthesis);
+  }
+  .lb-score {
+    background: var(--synthesis);
+    color: #000;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+  .lb-criteria {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-top: 0.3rem;
+  }
+  .lb-crit {
+    font-size: 0.65rem;
+    background: var(--surface);
+    padding: 1px 6px;
+    border-radius: 8px;
+    color: var(--text-secondary);
+  }
+  .lb-crit strong { color: var(--text-primary); }
+  .lb-text {
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    line-height: 1.5;
+  }
+  .lb-text .lb-stage {
+    margin-bottom: 0.3rem;
+  }
+  .lb-text .lb-label {
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-right: 0.4rem;
+  }
+  .lb-text .lb-stage.thesis .lb-label { color: var(--thesis); }
+  .lb-text .lb-stage.antithesis .lb-label { color: var(--antithesis); }
+  .lb-text .lb-stage.synthesis .lb-label { color: var(--synthesis); }
+
   /* === TRIAD HISTORY === */
   .triad-history {
     margin-top: 0.8rem;
@@ -5497,6 +5743,81 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
       </div>
     </section>
 
+    <!-- ═══ Step 4.5: Quality scoring (dialectical rating) ═══ -->
+    <section class="analysis-section">
+      <div class="analysis-step">
+        <div class="step-num">🏆</div>
+        <div class="step-title">Ocenjevanje kakovosti triad (5 dialektičnih kriterijev)</div>
+      </div>
+
+      <p class="analysis-api-intro">
+        AI oceni vsako triado po 5 kriterijih (paradoks v antitezi, emergentna beseda v sintezi,
+        metafora kot mehanizem, sinteza ni kompromis, meta-raven). Skupaj 0–10. Najboljše
+        triade najdeš v leaderboardu spodaj. Strošek z Geminijem: ~$0.0001 na triado.
+      </p>
+
+      <div class="scoring-controls">
+        <div class="scoring-row">
+          <label>Model:
+            <select id="scoringModel" class="src-input-text" style="max-width:160px;">
+              <option value="gemini">Gemini 2.0-flash (poceni)</option>
+              <option value="claude">Claude Sonnet 4 (kvaliteta)</option>
+            </select>
+          </label>
+          <label>Limit triad:
+            <input type="number" id="scoringLimit" value="500" min="10" max="5000" step="100" class="src-input-num">
+          </label>
+          <label style="display:flex;gap:0.3rem;align-items:center;">
+            <input type="checkbox" id="scoringRescore">
+            <span style="font-size:0.78rem;">prepiši obstoječe (rescore)</span>
+          </label>
+          <button class="triads-btn analysis-run-btn" id="scoringStartBtn" onclick="startScoringJob()">⚡ Sproži ocenjevanje</button>
+          <button class="triads-btn triads-btn-ghost" id="scoringStopBtn" onclick="stopScoringJob()" style="display:none;">⏹ Ustavi</button>
+        </div>
+        <div id="scoringEstimate" class="analysis-estimate" style="display:none;"></div>
+      </div>
+
+      <div id="scoringProgress" class="scoring-progress" style="display:none;">
+        <div class="scoring-progress-meta" id="scoringProgressMeta"></div>
+        <div class="scoring-progress-bar">
+          <div class="scoring-progress-fill" id="scoringProgressFill" style="width:0%;"></div>
+        </div>
+        <div class="scoring-current" id="scoringCurrent"></div>
+      </div>
+
+      <div class="scoring-stats" id="scoringStats">
+        <div class="scoring-stat-grid" id="scoringStatGrid"></div>
+      </div>
+
+      <div class="scoring-distribution" id="scoringDistribution">
+        <div class="scoring-distribution-title">Razporeditev skupnih ocen:</div>
+        <div id="scoringDistChart"></div>
+      </div>
+
+      <div class="scoring-leaderboard">
+        <div class="scoring-leaderboard-header">
+          <div class="scoring-leaderboard-title">🏅 Najboljše triade</div>
+          <div style="display:flex;gap:0.4rem;align-items:center;">
+            <label style="font-size:0.75rem;">Min ocena:
+              <select id="leaderboardMin" class="src-input-text" style="max-width:80px;" onchange="loadLeaderboard()">
+                <option value="0">0</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8" selected>8</option>
+                <option value="9">9</option>
+                <option value="10">10</option>
+              </select>
+            </label>
+            <button class="triads-btn triads-btn-ghost" onclick="loadLeaderboard()">↻</button>
+          </div>
+        </div>
+        <div id="leaderboardList">
+          <div style="color:var(--text-secondary);font-size:0.78rem;padding:1rem;">Klikni "Sproži ocenjevanje" zgoraj za začetek.</div>
+        </div>
+      </div>
+    </section>
+
     <!-- ═══ Step 5: API for external AI ═══ -->
     <section class="analysis-section">
       <div class="analysis-step">
@@ -7165,6 +7486,191 @@ function loadAnalysisTab() {
   updateAnalysisEstimate();
   loadAnalysisHistory2();
   loadTimeseriesGraph();
+  loadScoringStatus();
+  loadLeaderboard();
+}
+
+// ════════════════════════════════════════════════════════════
+// SCORING — dialectical quality rating UI
+// ════════════════════════════════════════════════════════════
+
+let _scoringPollInterval = null;
+
+async function startScoringJob() {
+  const model = $('scoringModel')?.value || 'gemini';
+  const limit = parseInt($('scoringLimit')?.value, 10) || 500;
+  const rescore = !!$('scoringRescore')?.checked;
+
+  // Confirm if Claude (expensive)
+  if (model === 'claude' && limit > 500) {
+    const cost = (limit * 0.003).toFixed(2);
+    if (!confirm('Claude na ' + limit + ' triadah ≈ $' + cost + '. Nadaljujem?')) return;
+  }
+
+  try {
+    const res = await fetch('/api/triads/scoring/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, limit, rescore }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    console.log('[scoring] started job', data.jobId, 'on', data.total, 'triads');
+    startScoringPolling();
+  } catch (e) {
+    alert('Napaka: ' + e.message);
+  }
+}
+
+async function stopScoringJob() {
+  try {
+    await fetch('/api/triads/scoring/stop', { method: 'POST' });
+  } catch (_) {}
+}
+
+function startScoringPolling() {
+  if (_scoringPollInterval) clearInterval(_scoringPollInterval);
+  loadScoringStatus();
+  _scoringPollInterval = setInterval(() => {
+    loadScoringStatus();
+  }, 2000);
+}
+
+function stopScoringPolling() {
+  if (_scoringPollInterval) {
+    clearInterval(_scoringPollInterval);
+    _scoringPollInterval = null;
+  }
+}
+
+async function loadScoringStatus() {
+  try {
+    const [statusRes, distRes] = await Promise.all([
+      fetch('/api/triads/scoring/status'),
+      fetch('/api/triads/scoring/distribution'),
+    ]);
+    const status = await statusRes.json();
+    const dist = await distRes.json();
+
+    const isRunning = !!status.isRunning;
+    const startBtn = $('scoringStartBtn');
+    const stopBtn = $('scoringStopBtn');
+    const progressBox = $('scoringProgress');
+
+    if (startBtn) startBtn.style.display = isRunning ? 'none' : '';
+    if (stopBtn) stopBtn.style.display = isRunning ? '' : 'none';
+
+    // Progress section
+    if (isRunning && status.job) {
+      const j = status.job;
+      const pct = j.total > 0 ? (j.scored / j.total) * 100 : 0;
+      const pctStr = pct.toFixed(1);
+      const meta = $('scoringProgressMeta');
+      const fill = $('scoringProgressFill');
+      const cur = $('scoringCurrent');
+      if (progressBox) progressBox.style.display = 'block';
+      if (meta) {
+        meta.innerHTML = '<span><strong>' + j.scored + '</strong> / ' + j.total + ' (' + pctStr + '%)</span>' +
+          '<span>napake: ' + j.errors + '</span>' +
+          '<span>model: ' + escapeHtml(j.model || '?') + '</span>';
+      }
+      if (fill) fill.style.width = pctStr + '%';
+      if (cur) {
+        const c = status.current;
+        cur.textContent = c ? ('trenutno: triada #' + c.id) : '...';
+      }
+    } else {
+      if (progressBox) progressBox.style.display = 'none';
+      stopScoringPolling();
+    }
+
+    // Stats overview
+    const statGrid = $('scoringStatGrid');
+    if (statGrid && dist.averages) {
+      const a = dist.averages;
+      const totals = status.totals || {};
+      const cards = [
+        { v: totals.scored || 0, l: 'ocenjenih' },
+        { v: (totals.scorable || 0) - (totals.scored || 0), l: 'še neocenjenih' },
+        { v: (a.avg_skupaj || 0).toFixed(2), l: '⌀ skupaj /10' },
+        { v: (a.avg_paradoks || 0).toFixed(2), l: '⌀ paradoks /2' },
+        { v: (a.avg_emergentna_beseda || 0).toFixed(2), l: '⌀ emergent. beseda /2' },
+        { v: (a.avg_metafora || 0).toFixed(2), l: '⌀ metafora /2' },
+        { v: (a.avg_ni_kompromis || 0).toFixed(2), l: '⌀ ni kompromis /2' },
+        { v: (a.avg_meta_raven || 0).toFixed(2), l: '⌀ meta-raven /2' },
+      ];
+      statGrid.innerHTML = cards.map(c =>
+        '<div class="scoring-stat-card"><div class="v">' + escapeHtml(String(c.v)) + '</div><div class="l">' + escapeHtml(c.l) + '</div></div>'
+      ).join('');
+    }
+
+    // Distribution histogram
+    const distChart = $('scoringDistChart');
+    if (distChart && dist.distribution) {
+      const rows = dist.distribution;
+      const maxCount = Math.max(1, ...rows.map(r => r.count || 0));
+      // Show all scores 0-10 even if count=0
+      const byScore = {};
+      for (const r of rows) byScore[r.skupaj] = r.count;
+      let html = '';
+      for (let s = 10; s >= 0; s--) {
+        const c = byScore[s] || 0;
+        const pct = (c / maxCount) * 100;
+        html += '<div class="dist-row">' +
+          '<span class="dist-score">' + s + '</span>' +
+          '<div class="dist-bar"><div class="dist-bar-fill" style="width:' + pct + '%;"></div></div>' +
+          '<span class="dist-count">' + c + '</span>' +
+          '</div>';
+      }
+      distChart.innerHTML = html;
+    }
+  } catch (e) {
+    console.error('[scoring] status load error', e);
+  }
+}
+
+async function loadLeaderboard() {
+  const list = $('leaderboardList');
+  if (!list) return;
+  const min = parseInt($('leaderboardMin')?.value, 10) || 0;
+  list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.78rem;padding:1rem;">Nalagam...</div>';
+  try {
+    const res = await fetch('/api/triads/scoring/leaderboard?min=' + min + '&limit=50');
+    const data = await res.json();
+    const rows = data.rows || [];
+    if (rows.length === 0) {
+      list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.78rem;padding:1rem;">Ni triad z oceno ≥ ' + min + '. Sproži ocenjevanje zgoraj ali znižaj prag.</div>';
+      return;
+    }
+    list.innerHTML = rows.map(r => {
+      const syn = (r.synthesis_content || r.synthesis_reason || '').slice(0, 250);
+      const th = (r.thesis || '').slice(0, 200);
+      const ant = (r.antithesis || '').slice(0, 200);
+      return '<div class="lb-item">' +
+        '<div class="lb-header">' +
+          '<div>' +
+            '<span class="lb-id">#' + r.triad_id + '</span>' +
+            '<span style="font-size:0.7rem;color:var(--text-secondary);margin-left:0.5rem;">[' + escapeHtml(r.trigger_type || '?') + '] ' + escapeHtml((r.timestamp || '').slice(0, 16)) + '</span>' +
+          '</div>' +
+          '<span class="lb-score">' + r.skupaj + '/10</span>' +
+        '</div>' +
+        '<div class="lb-criteria">' +
+          '<span class="lb-crit">paradoks: <strong>' + r.paradoks + '</strong></span>' +
+          '<span class="lb-crit">emergent.beseda: <strong>' + r.emergentna_beseda + '</strong></span>' +
+          '<span class="lb-crit">metafora: <strong>' + r.metafora + '</strong></span>' +
+          '<span class="lb-crit">ni kompromis: <strong>' + r.ni_kompromis + '</strong></span>' +
+          '<span class="lb-crit">meta: <strong>' + r.meta_raven + '</strong></span>' +
+        '</div>' +
+        '<div class="lb-text">' +
+          '<div class="lb-stage thesis"><span class="lb-label">teza</span>' + escapeHtml(th) + (r.thesis && r.thesis.length > 200 ? '...' : '') + '</div>' +
+          '<div class="lb-stage antithesis"><span class="lb-label">antiteza</span>' + escapeHtml(ant) + (r.antithesis && r.antithesis.length > 200 ? '...' : '') + '</div>' +
+          '<div class="lb-stage synthesis"><span class="lb-label">sinteza</span>' + escapeHtml(syn) + ((r.synthesis_content || r.synthesis_reason || '').length > 250 ? '...' : '') + '</div>' +
+        '</div>' +
+        '</div>';
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<div style="color:#ff7777;font-size:0.78rem;padding:1rem;">⚠ ' + escapeHtml(e.message) + '</div>';
+  }
 }
 
 // ════════════════════════════════════════════════════════════

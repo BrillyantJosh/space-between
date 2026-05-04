@@ -141,6 +141,35 @@ db.exec(`
     success INTEGER DEFAULT 1
   );
 
+  CREATE TABLE IF NOT EXISTS triad_scores (
+    triad_id INTEGER PRIMARY KEY,
+    paradoks INTEGER,
+    emergentna_beseda INTEGER,
+    metafora INTEGER,
+    ni_kompromis INTEGER,
+    meta_raven INTEGER,
+    skupaj INTEGER,
+    model TEXT,
+    scored_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_triad_scores_skupaj ON triad_scores(skupaj DESC);
+
+  CREATE TABLE IF NOT EXISTS triad_scoring_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT DEFAULT 'idle',
+    started_at TEXT,
+    finished_at TEXT,
+    total INTEGER DEFAULT 0,
+    scored INTEGER DEFAULT 0,
+    errors INTEGER DEFAULT 0,
+    skipped INTEGER DEFAULT 0,
+    model TEXT,
+    rescore INTEGER DEFAULT 0,
+    last_triad_id INTEGER,
+    last_error TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS crystal_seeds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT DEFAULT (datetime('now')),
@@ -891,6 +920,148 @@ const memory = {
 
   getTriadAnalysis(id) {
     return db.prepare('SELECT * FROM triad_analyses WHERE id = ?').get(parseInt(id, 10)) || null;
+  },
+
+  // ─── Triad scoring (dialectical quality rating) ───
+  saveTriadScore(data) {
+    const stmt = db.prepare(`
+      INSERT OR REPLACE INTO triad_scores
+        (triad_id, paradoks, emergentna_beseda, metafora, ni_kompromis, meta_raven, skupaj, model, scored_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `);
+    stmt.run(
+      data.triad_id,
+      data.paradoks ?? 0,
+      data.emergentna_beseda ?? 0,
+      data.metafora ?? 0,
+      data.ni_kompromis ?? 0,
+      data.meta_raven ?? 0,
+      data.skupaj ?? 0,
+      data.model || ''
+    );
+  },
+
+  getTriadScore(triadId) {
+    return db.prepare('SELECT * FROM triad_scores WHERE triad_id = ?').get(parseInt(triadId, 10)) || null;
+  },
+
+  // Returns triads that don't yet have scores. Optimised for the scoring loop.
+  getUnscoredTriads(limit = 100, fromId = null, toId = null) {
+    const safeLimit = Math.min(2000, Math.max(1, parseInt(limit, 10) || 100));
+    const conds = [
+      `t.thesis IS NOT NULL AND t.thesis != ''`,
+      `t.antithesis IS NOT NULL AND t.antithesis != ''`,
+      `(t.synthesis_content IS NOT NULL AND t.synthesis_content != '') OR (t.synthesis_reason IS NOT NULL AND t.synthesis_reason != '')`,
+      `s.triad_id IS NULL`,
+    ];
+    const params = [];
+    if (fromId) { conds.push('t.id >= ?'); params.push(parseInt(fromId, 10)); }
+    if (toId) { conds.push('t.id <= ?'); params.push(parseInt(toId, 10)); }
+    const where = conds.map(c => '(' + c + ')').join(' AND ');
+    return db.prepare(`
+      SELECT t.id, t.timestamp, t.trigger_type, t.thesis, t.antithesis,
+             t.synthesis_content, t.synthesis_reason, t.synthesis_choice,
+             t.mood_before, t.mood_after
+      FROM triads t
+      LEFT JOIN triad_scores s ON s.triad_id = t.id
+      WHERE ${where}
+      ORDER BY t.id DESC
+      LIMIT ?
+    `).all(...params, safeLimit);
+  },
+
+  countScorableTriads() {
+    const row = db.prepare(`
+      SELECT COUNT(*) as c FROM triads
+      WHERE thesis IS NOT NULL AND thesis != ''
+        AND antithesis IS NOT NULL AND antithesis != ''
+        AND ((synthesis_content IS NOT NULL AND synthesis_content != '')
+             OR (synthesis_reason IS NOT NULL AND synthesis_reason != ''))
+    `).get();
+    return row ? row.c : 0;
+  },
+
+  countScoredTriads() {
+    const row = db.prepare('SELECT COUNT(*) as c FROM triad_scores').get();
+    return row ? row.c : 0;
+  },
+
+  getTopScoredTriads(minScore = 0, limit = 100) {
+    return db.prepare(`
+      SELECT s.*, t.timestamp, t.trigger_type, t.thesis, t.antithesis,
+             t.synthesis_content, t.synthesis_reason, t.synthesis_choice,
+             t.synthesis_depth, t.mood_before, t.mood_after
+      FROM triad_scores s
+      JOIN triads t ON t.id = s.triad_id
+      WHERE s.skupaj >= ?
+      ORDER BY s.skupaj DESC, s.triad_id DESC
+      LIMIT ?
+    `).all(parseInt(minScore, 10) || 0, Math.min(500, parseInt(limit, 10) || 100));
+  },
+
+  getScoreDistribution() {
+    return db.prepare(`
+      SELECT skupaj, COUNT(*) as count
+      FROM triad_scores
+      GROUP BY skupaj
+      ORDER BY skupaj DESC
+    `).all();
+  },
+
+  // Per-criterion averages — gives a sense of where the being is strong/weak.
+  getScoreAverages() {
+    const row = db.prepare(`
+      SELECT
+        AVG(paradoks) as avg_paradoks,
+        AVG(emergentna_beseda) as avg_emergentna_beseda,
+        AVG(metafora) as avg_metafora,
+        AVG(ni_kompromis) as avg_ni_kompromis,
+        AVG(meta_raven) as avg_meta_raven,
+        AVG(skupaj) as avg_skupaj,
+        COUNT(*) as n
+      FROM triad_scores
+    `).get();
+    return row || { n: 0 };
+  },
+
+  // ─── Scoring jobs (for the background worker) ───
+  createScoringJob(data) {
+    const stmt = db.prepare(`
+      INSERT INTO triad_scoring_jobs
+        (status, started_at, total, scored, errors, skipped, model, rescore)
+      VALUES (?, datetime('now'), ?, 0, 0, 0, ?, ?)
+    `);
+    const r = stmt.run(
+      data.status || 'running',
+      data.total || 0,
+      data.model || '',
+      data.rescore ? 1 : 0
+    );
+    return r.lastInsertRowid;
+  },
+
+  updateScoringJob(id, updates) {
+    const fields = [];
+    const params = [];
+    for (const [k, v] of Object.entries(updates)) {
+      fields.push(`${k} = ?`);
+      params.push(v);
+    }
+    if (fields.length === 0) return;
+    params.push(id);
+    db.prepare(`UPDATE triad_scoring_jobs SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+  },
+
+  getActiveScoringJob() {
+    return db.prepare(`SELECT * FROM triad_scoring_jobs WHERE status = 'running' ORDER BY id DESC LIMIT 1`).get() || null;
+  },
+
+  getRecentScoringJobs(n = 10) {
+    return db.prepare(`SELECT * FROM triad_scoring_jobs ORDER BY id DESC LIMIT ?`).all(parseInt(n, 10) || 10);
+  },
+
+  getScoringJob(id) {
+    return db.prepare('SELECT * FROM triad_scoring_jobs WHERE id = ?').get(parseInt(id, 10)) || null;
   },
 
   saveDream(data) {
