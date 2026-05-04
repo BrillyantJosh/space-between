@@ -1294,6 +1294,13 @@ Ne vsiljuj tega — samo kadar je naravno.${_coherenceBlock_}`;
   }
 
   // Post-triad updates
+  // Compute energy first so we can store snapshot on the triad row.
+  const energyDelta = typeof synthesis.energy_delta === 'number'
+    ? Math.max(-0.2, Math.min(0.2, synthesis.energy_delta))
+    : 0;
+  const energyBefore = typeof state.energy === 'number' ? state.energy : null;
+  const energyAfter = energyBefore != null ? Math.max(0, Math.min(1, energyBefore + energyDelta)) : null;
+
   const triadId = memory.saveTriad({
     trigger_type: triggerType,
     trigger_content: (triggerContent || '').slice(0, 500),
@@ -1304,13 +1311,13 @@ Ne vsiljuj tega — samo kadar je naravno.${_coherenceBlock_}`;
     synthesis_content: synthesis.content,
     inner_shift: synthesis.inner_shift,
     mood_before: moodBefore,
-    mood_after: synthesis.new_mood || moodBefore
+    mood_after: synthesis.new_mood || moodBefore,
+    energy_before: energyBefore,
+    energy_after: energyAfter,
+    energy_delta: energyDelta,
   });
 
-  // Update inner state
-  const energyDelta = typeof synthesis.energy_delta === 'number'
-    ? Math.max(-0.2, Math.min(0.2, synthesis.energy_delta))
-    : 0;
+  // Update inner state (energyDelta computed above)
 
   const updates = {
     mood: synthesis.new_mood || moodBefore,
@@ -2147,6 +2154,13 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
   const synthesis = normalizeSynthesisOutput(rawSynthesis);
   console.log(`  └─ Kvant: ${synthesis.choice} — ${(synthesis.sinteza || synthesis.reason || '').slice(0, 60)}`);
 
+  // Compute energy first so we can store snapshot (smaller deltas than full triad)
+  const energyDelta = typeof synthesis.energy_delta === 'number'
+    ? Math.max(-0.1, Math.min(0.1, synthesis.energy_delta))
+    : 0;
+  const energyBefore = typeof state.energy === 'number' ? state.energy : null;
+  const energyAfter = energyBefore != null ? Math.max(0, Math.min(1, energyBefore + energyDelta)) : null;
+
   const triadId = memory.saveTriad({
     trigger_type: triggerType,
     trigger_content: (triggerContent || '').slice(0, 500),
@@ -2159,12 +2173,12 @@ Odgovori IZKLJUČNO v čistem JSON brez markdown:
     mood_before: moodBefore,
     mood_after: synthesis.new_mood || moodBefore,
     synthesis_depth: 'quantum',
+    energy_before: energyBefore,
+    energy_after: energyAfter,
+    energy_delta: energyDelta,
   });
 
-  // Update inner state (smaller deltas than full triad)
-  const energyDelta = typeof synthesis.energy_delta === 'number'
-    ? Math.max(-0.1, Math.min(0.1, synthesis.energy_delta))
-    : 0;
+  // Update inner state (energyDelta computed above)
   const updates = {
     mood: synthesis.new_mood || moodBefore,
     energy: state.energy + energyDelta,

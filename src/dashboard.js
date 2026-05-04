@@ -358,6 +358,20 @@ app.get('/api/triads', (req, res) => {
   }
 });
 
+// Time-bucketed aggregation for the energy/timeline graph.
+// Query: ?from=ISO&to=ISO&bucketHours=N (default 24h, max 720h=30d).
+app.get('/api/triads/timeseries', (req, res) => {
+  try {
+    const from = req.query.from || null;
+    const to = req.query.to || null;
+    const bucketHours = parseInt(req.query.bucketHours, 10) || 24;
+    const data = memory.getTriadTimeseries({ from, to, bucketHours });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Quick count endpoint for the AI analysis "live estimate" widget.
 app.get('/api/triads/count', (req, res) => {
   try {
@@ -3039,6 +3053,82 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     word-break: break-word;
   }
 
+  /* === TIMELINE CHART === */
+  .timeline-chart-wrap {
+    position: relative;
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: 0.8rem;
+    overflow: hidden;
+  }
+  #timelineChart {
+    overflow: visible;
+  }
+  #timelineChart .grid-line {
+    stroke: var(--border);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+    opacity: 0.5;
+  }
+  #timelineChart .axis-text {
+    fill: var(--text-secondary);
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #timelineChart .axis-label {
+    fill: var(--text-primary);
+    font-size: 11px;
+  }
+  #timelineChart .bar {
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  #timelineChart .bar:hover { opacity: 0.85; }
+  #timelineChart .energy-path {
+    fill: none;
+    stroke: #e8956e;
+    stroke-width: 2;
+  }
+  #timelineChart .energy-dot {
+    fill: #e8956e;
+    cursor: pointer;
+  }
+  .timeline-tooltip {
+    position: absolute;
+    background: rgba(20, 20, 30, 0.96);
+    color: var(--text-primary);
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-size: 0.78rem;
+    pointer-events: none;
+    z-index: 10;
+    line-height: 1.4;
+    max-width: 320px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  .timeline-tooltip strong { color: var(--synthesis); }
+  .timeline-legend {
+    margin-top: 0.6rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+  }
+  .lg-item { display: inline-flex; align-items: center; gap: 0.3rem; }
+  .lg-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 10px;
+    border-radius: 2px;
+  }
+  .lg-swatch.energy-line {
+    width: 18px;
+    height: 2px;
+    border-radius: 0;
+  }
+
   /* === TRIAD HISTORY === */
   .triad-history {
     margin-top: 0.8rem;
@@ -5270,6 +5360,40 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
       </p>
     </div>
 
+    <!-- ═══ Energy & timeline graph ═══ -->
+    <section class="analysis-section">
+      <div class="analysis-step">
+        <div class="step-num">📈</div>
+        <div class="step-title" data-i18n="timelineTitle">Energija & časovnica triad</div>
+        <div class="timeline-controls" style="margin-left:auto;display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;">
+          <label style="font-size:0.75rem;color:var(--text-secondary);">Razdelitev:</label>
+          <select id="bucketSelect" class="src-input-text" style="max-width:120px;" onchange="loadTimeseriesGraph()">
+            <option value="1">⏱ ura</option>
+            <option value="6">6 ur</option>
+            <option value="24" selected>📅 dan</option>
+            <option value="168">📅 teden</option>
+            <option value="720">📅 mesec</option>
+          </select>
+          <button class="triads-btn triads-btn-ghost" style="font-size:0.75rem;" onclick="loadTimeseriesGraph()">↻ Osveži</button>
+        </div>
+      </div>
+
+      <div class="timeline-meta" id="timelineMeta" style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.6rem;">Nalagam graf...</div>
+
+      <div id="timelineChartWrap" class="timeline-chart-wrap">
+        <svg id="timelineChart" width="100%" height="320" style="display:block;"></svg>
+        <div id="timelineTooltip" class="timeline-tooltip" style="display:none;"></div>
+      </div>
+
+      <div class="timeline-legend">
+        <span class="lg-item"><span class="lg-swatch" style="background:rgba(122,158,224,0.7);"></span> tišina (silence)</span>
+        <span class="lg-item"><span class="lg-swatch" style="background:rgba(164,216,122,0.7);"></span> izraz (express)</span>
+        <span class="lg-item"><span class="lg-swatch" style="background:rgba(232,206,110,0.7);"></span> odgovor (respond)</span>
+        <span class="lg-item"><span class="lg-swatch" style="background:rgba(178,120,255,0.7);"></span> refleksija (reflect)</span>
+        <span class="lg-item"><span class="lg-swatch energy-line" style="background:#e8956e;"></span> energija (E)</span>
+      </div>
+    </section>
+
     <!-- ═══ Step 1: Question ═══ -->
     <section class="analysis-section">
       <div class="analysis-step">
@@ -7040,6 +7164,223 @@ function loadAnalysisTab() {
   fillBulkScript();
   updateAnalysisEstimate();
   loadAnalysisHistory2();
+  loadTimeseriesGraph();
+}
+
+// ════════════════════════════════════════════════════════════
+// TIMELINE / ENERGY GRAPH (pure SVG, no deps)
+// ════════════════════════════════════════════════════════════
+async function loadTimeseriesGraph() {
+  const meta = $('timelineMeta');
+  const svg = $('timelineChart');
+  if (!svg) return;
+
+  if (meta) meta.textContent = 'Nalagam graf...';
+
+  const bucketHours = parseInt($('bucketSelect')?.value, 10) || 24;
+  try {
+    const res = await fetch('/api/triads/timeseries?bucketHours=' + bucketHours);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+
+    const buckets = data.buckets || [];
+    if (buckets.length === 0) {
+      svg.innerHTML = '';
+      if (meta) meta.textContent = 'Ni triad za prikaz.';
+      return;
+    }
+
+    // ── Compute meta line ──
+    const totalTriads = buckets.reduce((s, b) => s + (b.count || 0), 0);
+    const energyBuckets = buckets.filter(b => b.avg_energy_after != null);
+    const energyCoverage = energyBuckets.length;
+    const bucketLabel = bucketHours === 1 ? 'urne razdelitve'
+      : bucketHours === 24 ? 'dnevne razdelitve'
+      : bucketHours === 168 ? 'tedenske razdelitve'
+      : bucketHours === 720 ? 'mesečne razdelitve'
+      : (bucketHours + '-urne razdelitve');
+    if (meta) {
+      const fromS = (data.from || '').slice(0, 16).replace('T', ' ');
+      const toS = (data.to || '').slice(0, 16).replace('T', ' ');
+      meta.innerHTML = '<strong>' + buckets.length + '</strong> ' + bucketLabel +
+        '  ·  <strong>' + totalTriads + '</strong> triad skupaj' +
+        '  ·  energija na voljo v <strong>' + energyCoverage + '/' + buckets.length + '</strong> razdelitev' +
+        '  ·  obdobje: ' + fromS + ' → ' + toS;
+    }
+
+    // ── Render SVG ──
+    renderTimelineSVG(svg, buckets, bucketHours);
+  } catch (e) {
+    if (meta) meta.innerHTML = '<span style="color:#ff7777;">⚠ ' + escapeHtml(e.message) + '</span>';
+    svg.innerHTML = '';
+  }
+}
+
+function renderTimelineSVG(svg, buckets, bucketHours) {
+  // Sizing
+  const wrap = svg.parentElement;
+  const W = wrap?.clientWidth ? Math.max(600, wrap.clientWidth - 24) : 900;
+  const H = 320;
+  const padL = 50, padR = 50, padT = 14, padB = 30;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  // Set svg viewBox so it scales
+  svg.setAttribute('width', String(W));
+  svg.setAttribute('height', String(H));
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+  // ── Scales ──
+  const N = buckets.length;
+  const barGap = N > 50 ? 1 : 2;
+  const barW = Math.max(1, (innerW - (N - 1) * barGap) / N);
+
+  const maxCount = Math.max(1, ...buckets.map(b => b.count || 0));
+
+  // Positions
+  const xOf = (i) => padL + i * (barW + barGap);
+  const yOfCount = (c) => padT + innerH - (c / maxCount) * innerH;
+  const yOfEnergy = (e) => padT + innerH - (Math.max(0, Math.min(1, e || 0))) * innerH;
+
+  // ── Build SVG content ──
+  const parts = [];
+
+  // Grid lines (energy axis: 0, 0.25, 0.5, 0.75, 1.0)
+  for (let i = 0; i <= 4; i++) {
+    const yVal = i / 4;
+    const y = yOfEnergy(yVal);
+    parts.push('<line class="grid-line" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y + '" y2="' + y + '" />');
+    parts.push('<text class="axis-text" x="' + (padL - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + yVal.toFixed(2) + '</text>');
+  }
+  parts.push('<text class="axis-label" x="' + 6 + '" y="' + (padT + 8) + '">E / izbira</text>');
+
+  // Right axis: count
+  parts.push('<text class="axis-label" x="' + (W - padR + 6) + '" y="' + (padT + 8) + '">N triad</text>');
+  for (let i = 0; i <= 4; i++) {
+    const cVal = Math.round((maxCount * i) / 4);
+    const y = yOfCount(cVal);
+    parts.push('<text class="axis-text" x="' + (W - padR + 6) + '" y="' + (y + 3) + '" text-anchor="start">' + cVal + '</text>');
+  }
+
+  // X axis ticks (date labels)
+  const tickEvery = Math.max(1, Math.floor(N / 8));
+  for (let i = 0; i < N; i += tickEvery) {
+    const x = xOf(i) + barW / 2;
+    const ts = (buckets[i].bucket_start || '').replace('T', ' ');
+    const label = bucketHours >= 24 ? ts.slice(5, 10) : ts.slice(5, 16);
+    parts.push('<text class="axis-text" x="' + x + '" y="' + (H - padB + 12) + '" text-anchor="middle">' + label + '</text>');
+  }
+
+  // ── Bars: stacked choices, scaled to count ──
+  const colors = {
+    silence: 'rgba(122,158,224,0.78)',
+    express: 'rgba(164,216,122,0.78)',
+    respond: 'rgba(232,206,110,0.78)',
+    reflect: 'rgba(178,120,255,0.78)',
+  };
+  for (let i = 0; i < N; i++) {
+    const b = buckets[i];
+    const total = b.count || 0;
+    if (total === 0) continue;
+    const x = xOf(i);
+    const yTop = yOfCount(total);
+    const barH = (padT + innerH) - yTop;
+
+    // Stack proportions
+    const segments = [
+      { k: 'silence', n: b.choice_silence || 0 },
+      { k: 'express', n: b.choice_express || 0 },
+      { k: 'respond', n: b.choice_respond || 0 },
+      { k: 'reflect', n: b.choice_reflect || 0 },
+    ];
+    const sumChoices = segments.reduce((s, x) => s + x.n, 0) || 1;
+    let offset = 0;
+    for (const seg of segments) {
+      if (seg.n === 0) continue;
+      const segH = (seg.n / sumChoices) * barH;
+      parts.push('<rect class="bar" data-i="' + i + '"' +
+        ' x="' + x + '" y="' + (yTop + offset) + '"' +
+        ' width="' + barW + '" height="' + segH + '"' +
+        ' fill="' + colors[seg.k] + '"' +
+        ' onmouseenter="showTimelineTip(event,' + i + ')"' +
+        ' onmouseleave="hideTimelineTip()" />');
+      offset += segH;
+    }
+  }
+
+  // ── Energy line ──
+  let pathParts = [];
+  let lastValid = false;
+  for (let i = 0; i < N; i++) {
+    const b = buckets[i];
+    if (b.avg_energy_after == null) {
+      lastValid = false;
+      continue;
+    }
+    const x = xOf(i) + barW / 2;
+    const y = yOfEnergy(b.avg_energy_after);
+    pathParts.push((lastValid ? 'L' : 'M') + x + ',' + y);
+    lastValid = true;
+    parts.push('<circle class="energy-dot" cx="' + x + '" cy="' + y + '" r="3"' +
+      ' onmouseenter="showTimelineTip(event,' + i + ')"' +
+      ' onmouseleave="hideTimelineTip()" />');
+  }
+  if (pathParts.length > 0) {
+    parts.push('<path class="energy-path" d="' + pathParts.join(' ') + '" />');
+  }
+
+  svg.innerHTML = parts.join('');
+
+  // Stash buckets for tooltip
+  window.__timelineBuckets = buckets;
+  window.__timelineBucketHours = bucketHours;
+}
+
+function showTimelineTip(ev, idx) {
+  const tip = $('timelineTooltip');
+  const buckets = window.__timelineBuckets || [];
+  const b = buckets[idx];
+  if (!tip || !b) return;
+  const ts = (b.bucket_start || '').replace('T', ' ');
+  const total = b.count || 0;
+  const eAfter = b.avg_energy_after;
+  const eBefore = b.avg_energy_before;
+  const lines = [];
+  lines.push('<strong>' + escapeHtml(ts) + '</strong>');
+  lines.push('<br>📊 ' + total + ' triad (#' + b.id_min + '–#' + b.id_max + ')');
+  if (eAfter != null) {
+    lines.push('<br>⚡ E: ' + (eBefore != null ? eBefore.toFixed(2) + ' → ' : '') + eAfter.toFixed(2));
+  }
+  if (b.top_mood) lines.push('<br>💭 ' + escapeHtml(b.top_mood));
+  const choices = [];
+  if (b.choice_silence) choices.push('🔵 ' + b.choice_silence + ' tišina');
+  if (b.choice_express) choices.push('🟢 ' + b.choice_express + ' izraz');
+  if (b.choice_respond) choices.push('🟡 ' + b.choice_respond + ' odgovor');
+  if (b.choice_reflect) choices.push('🟣 ' + b.choice_reflect + ' refleksija');
+  if (choices.length) lines.push('<br>' + choices.join(' · '));
+  const depth = [];
+  if (b.depth_full) depth.push('full:' + b.depth_full);
+  if (b.depth_quantum) depth.push('quantum:' + b.depth_quantum);
+  if (b.depth_crystal) depth.push('crystal:' + b.depth_crystal);
+  if (b.depth_silent) depth.push('silent:' + b.depth_silent);
+  if (depth.length) lines.push('<br><span style="opacity:0.7;">' + depth.join(' · ') + '</span>');
+
+  tip.innerHTML = lines.join('');
+  tip.style.display = 'block';
+
+  // Position tooltip near cursor, kept inside wrap
+  const wrap = $('timelineChartWrap');
+  const wrapRect = wrap.getBoundingClientRect();
+  const x = ev.clientX - wrapRect.left + 12;
+  const y = ev.clientY - wrapRect.top - 12;
+  const maxX = wrapRect.width - 340;
+  tip.style.left = Math.min(maxX, x) + 'px';
+  tip.style.top = Math.max(0, y) + 'px';
+}
+
+function hideTimelineTip() {
+  const tip = $('timelineTooltip');
+  if (tip) tip.style.display = 'none';
 }
 
 // Open a single triad's JSON in a new tab (cleaner than escaping quotes in onclick).

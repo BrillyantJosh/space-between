@@ -60,7 +60,10 @@ db.exec(`
     synthesis_content TEXT,
     inner_shift TEXT,
     mood_before TEXT,
-    mood_after TEXT
+    mood_after TEXT,
+    energy_before REAL DEFAULT NULL,
+    energy_after REAL DEFAULT NULL,
+    energy_delta REAL DEFAULT NULL
   );
 
   CREATE TABLE IF NOT EXISTS dreams (
@@ -560,6 +563,20 @@ try {
   }
 }
 
+// ─── Triads energy tracking migration (per-triad energy snapshot) ───
+try {
+  db.prepare('SELECT energy_before FROM triads LIMIT 1').get();
+} catch (_) {
+  try {
+    db.exec("ALTER TABLE triads ADD COLUMN energy_before REAL DEFAULT NULL");
+    db.exec("ALTER TABLE triads ADD COLUMN energy_after REAL DEFAULT NULL");
+    db.exec("ALTER TABLE triads ADD COLUMN energy_delta REAL DEFAULT NULL");
+    console.log('[MEMORY] ◈ Added energy_before/after/delta columns to triads');
+  } catch (e) {
+    console.error('[MEMORY] energy migration error:', e.message);
+  }
+}
+
 // Slovenska + NOSTR stop words za resonance_field builder
 const STOP_WORDS_SL = new Set([
   // Slovenščina — slovnične besede
@@ -657,15 +674,82 @@ const memory = {
     db.prepare(`
       INSERT INTO triads (trigger_type, trigger_content, thesis, antithesis,
         synthesis_choice, synthesis_reason, synthesis_content, inner_shift,
-        mood_before, mood_after, synthesis_depth)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        mood_before, mood_after, synthesis_depth,
+        energy_before, energy_after, energy_delta)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       data.trigger_type, data.trigger_content, data.thesis, data.antithesis,
       data.synthesis_choice, data.synthesis_reason, data.synthesis_content,
       data.inner_shift, data.mood_before, data.mood_after,
-      data.synthesis_depth || 'full'
+      data.synthesis_depth || 'full',
+      typeof data.energy_before === 'number' ? data.energy_before : null,
+      typeof data.energy_after === 'number' ? data.energy_after : null,
+      typeof data.energy_delta === 'number' ? data.energy_delta : null
     );
     return db.prepare('SELECT last_insert_rowid() as id').get().id;
+  },
+
+  // Time-bucketed aggregation of triad activity for the energy/timeline graph.
+  // Returns array of { bucket_start, count, choice_silence, choice_express,
+  // choice_respond, depth_full, depth_quantum, depth_crystal, depth_silent,
+  // avg_energy_before, avg_energy_after, avg_energy_delta, top_mood }.
+  // bucketHours: 1 (hourly), 24 (daily), 168 (weekly). Default 24.
+  // from/to: ISO strings or null (defaults: from = oldest, to = now).
+  getTriadTimeseries({ from = null, to = null, bucketHours = 24 } = {}) {
+    const bh = Math.max(1, Math.min(720, parseInt(bucketHours, 10) || 24));
+    const bucketSec = bh * 3600;
+
+    // Determine actual range
+    const minRow = db.prepare('SELECT MIN(timestamp) as t FROM triads').get();
+    const maxRow = db.prepare('SELECT MAX(timestamp) as t FROM triads').get();
+    const rangeFrom = from || (minRow && minRow.t) || new Date().toISOString();
+    const rangeTo = to || (maxRow && maxRow.t) || new Date().toISOString();
+
+    // Bucket using strftime — group by floor(unixepoch/bucketSec)
+    const rows = db.prepare(`
+      SELECT
+        CAST(strftime('%s', timestamp) AS INTEGER) / ? * ? as bucket_epoch,
+        datetime(CAST(strftime('%s', timestamp) AS INTEGER) / ? * ?, 'unixepoch') as bucket_start,
+        COUNT(*) as count,
+        SUM(CASE WHEN synthesis_choice='silence' THEN 1 ELSE 0 END) as choice_silence,
+        SUM(CASE WHEN synthesis_choice='express' THEN 1 ELSE 0 END) as choice_express,
+        SUM(CASE WHEN synthesis_choice='respond' THEN 1 ELSE 0 END) as choice_respond,
+        SUM(CASE WHEN synthesis_choice='reflect' THEN 1 ELSE 0 END) as choice_reflect,
+        SUM(CASE WHEN synthesis_depth='full' OR synthesis_depth IS NULL THEN 1 ELSE 0 END) as depth_full,
+        SUM(CASE WHEN synthesis_depth='quantum' THEN 1 ELSE 0 END) as depth_quantum,
+        SUM(CASE WHEN synthesis_depth='crystal' THEN 1 ELSE 0 END) as depth_crystal,
+        SUM(CASE WHEN synthesis_depth='silent' THEN 1 ELSE 0 END) as depth_silent,
+        AVG(energy_before) as avg_energy_before,
+        AVG(energy_after) as avg_energy_after,
+        AVG(energy_delta) as avg_energy_delta,
+        MIN(id) as id_min,
+        MAX(id) as id_max
+      FROM triads
+      WHERE timestamp >= ? AND timestamp <= ?
+      GROUP BY bucket_epoch
+      ORDER BY bucket_epoch ASC
+    `).all(bucketSec, bucketSec, bucketSec, bucketSec, rangeFrom, rangeTo);
+
+    // For each bucket, find top mood (most common mood_after)
+    for (const r of rows) {
+      const startEpoch = r.bucket_epoch;
+      const endEpoch = startEpoch + bucketSec;
+      const moodRow = db.prepare(`
+        SELECT mood_after, COUNT(*) as c FROM triads
+        WHERE CAST(strftime('%s', timestamp) AS INTEGER) >= ?
+          AND CAST(strftime('%s', timestamp) AS INTEGER) < ?
+          AND mood_after IS NOT NULL AND mood_after != ''
+        GROUP BY mood_after ORDER BY c DESC LIMIT 1
+      `).get(startEpoch, endEpoch);
+      r.top_mood = moodRow ? moodRow.mood_after : null;
+    }
+
+    return {
+      bucketHours: bh,
+      from: rangeFrom,
+      to: rangeTo,
+      buckets: rows,
+    };
   },
 
   getRecentTriads(n = 5) {
