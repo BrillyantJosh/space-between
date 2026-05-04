@@ -9,7 +9,7 @@ import { getRunningServices } from './sandbox.js';
 import fs from 'fs';
 import { getPresence } from './presence.js';
 import { getSkillsStatus } from './skills.js';
-import { getAnthropicBudgetStatus } from './llm.js';
+import { getAnthropicBudgetStatus, callLLM } from './llm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CREATIONS_DIR = path.join(__dirname, '..', 'data', 'creations');
@@ -357,6 +357,247 @@ app.get('/api/triads', (req, res) => {
   }
 });
 
+// ◈ Triade export — bulk read for external AI analysis tools.
+// JSON format with full fields + meta. Filter + max-limit clamp identical
+// to /api/triads. Default limit raised to 500 since this is meant for export.
+app.get('/api/triads/export', (req, res) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = Math.min(2000, parseInt(req.query.limit, 10) || 500);
+    const filter = (req.query.filter || '').toString();
+    const data = memory.getTriadsPaginated(page, limit, filter);
+    const fmt = (req.query.format || 'json').toLowerCase();
+    if (fmt === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="triads-page-${page}.csv"`);
+      const esc = (v) => {
+        const s = (v == null ? '' : String(v)).replace(/"/g, '""');
+        return `"${s}"`;
+      };
+      const cols = ['id', 'timestamp', 'trigger_type', 'trigger_content', 'thesis', 'antithesis', 'synthesis_choice', 'synthesis_reason', 'synthesis_content', 'inner_shift', 'mood_before', 'mood_after', 'synthesis_depth'];
+      const header = cols.join(',');
+      const rows = data.rows.map(r => cols.map(c => esc(r[c])).join(','));
+      res.send([header, ...rows].join('\n'));
+    } else {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `inline; filename="triads-page-${page}.json"`);
+      res.json({
+        meta: {
+          entity: memory.getDisplayName ? memory.getDisplayName() : (config.entityName || 'unknown'),
+          exported_at: new Date().toISOString(),
+          page: data.page,
+          limit: data.limit,
+          total: data.total,
+          totalPages: data.totalPages,
+          filter: filter || null,
+        },
+        triads: data.rows,
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ◈ Triade AI analysis — sends selected triads + a question to the LLM and
+// returns the analysis. History is persisted in triad_analyses for replay.
+//
+// Body: {
+//   question: string (required, max 1000 chars),
+//   page?: number, limit?: number, filter?: string  (use these for "current view"),
+//   ids?: number[] (alternative — explicit selection),
+//   maxTriads?: number (cap, default 100, max 200)
+// }
+//
+// Mutex: only one analysis at a time per being. 5s cooldown between analyses
+// to prevent burst (and protect LLM quota).
+let _analyzeInflight = false;
+let _analyzeLastEndAt = 0;
+const ANALYZE_COOLDOWN_MS = 5_000;
+
+app.post('/api/triads/analyze', async (req, res) => {
+  if (_analyzeInflight) {
+    return res.status(429).json({ error: 'analiza že teče', code: 'inflight' });
+  }
+  const sinceLast = Date.now() - _analyzeLastEndAt;
+  if (sinceLast < ANALYZE_COOLDOWN_MS) {
+    return res.status(429).json({
+      error: `počakaj še ${Math.ceil((ANALYZE_COOLDOWN_MS - sinceLast) / 1000)}s`,
+      code: 'cooldown',
+      retryAfterMs: ANALYZE_COOLDOWN_MS - sinceLast,
+    });
+  }
+
+  const body = req.body || {};
+  const question = (body.question || '').toString().trim().slice(0, 1000);
+  if (!question) return res.status(400).json({ error: 'vprašanje je obvezno' });
+
+  const maxTriads = Math.min(200, Math.max(1, parseInt(body.maxTriads, 10) || 100));
+
+  // Fetch triads
+  let triads = [];
+  let contextSummary = '';
+  try {
+    if (Array.isArray(body.ids) && body.ids.length > 0) {
+      triads = memory.getTriadsByIds(body.ids).slice(0, maxTriads);
+      contextSummary = `izbor ${triads.length} triad`;
+    } else {
+      const page = parseInt(body.page, 10) || 1;
+      const limit = Math.min(maxTriads, parseInt(body.limit, 10) || 100);
+      const filter = (body.filter || '').toString();
+      const data = memory.getTriadsPaginated(page, limit, filter);
+      triads = data.rows;
+      contextSummary = `stran ${page}/${data.totalPages} (${triads.length} triad${filter ? `, filter "${filter}"` : ''})`;
+    }
+  } catch (e) {
+    return res.status(500).json({ error: 'napaka pri branju triad: ' + e.message });
+  }
+
+  if (triads.length === 0) {
+    return res.status(400).json({ error: 'ni triad za analizo' });
+  }
+
+  _analyzeInflight = true;
+  const start = Date.now();
+
+  try {
+    // Build a compact text representation
+    const lines = [];
+    lines.push('Spodaj je seznam ' + triads.length + ' triad iz spomina bitja.');
+    lines.push('Vsaka triada ima: tezo (Faza 1, glas biti), antitezo (Faza 2, glas delati), sintezo (Faza 3, tretja stvar ki drži oba).');
+    lines.push('Triade so razvrščene od najnovejše navzdol.');
+    lines.push('---');
+    for (const t of triads) {
+      lines.push('## #' + t.id + ' [' + (t.trigger_type || '?') + '] @ ' + (t.timestamp || '?'));
+      if (t.trigger_content) {
+        const tc = String(t.trigger_content).slice(0, 200);
+        lines.push('Dražljaj: ' + tc);
+      }
+      lines.push('TEZA: ' + (t.thesis || '(prazno)').slice(0, 400));
+      lines.push('ANTITEZA: ' + (t.antithesis || '(prazno)').slice(0, 400));
+      lines.push('SINTEZA: ' + (t.synthesis_content || t.synthesis_reason || '(prazno)').slice(0, 500));
+      if (t.synthesis_choice) lines.push('Izbira: ' + t.synthesis_choice);
+      if (t.mood_before || t.mood_after) lines.push('Razpoloženje: ' + (t.mood_before || '?') + ' → ' + (t.mood_after || '?'));
+      lines.push('');
+    }
+    const triadsText = lines.join(String.fromCharCode(10));
+
+    const systemPrompt = `Si analitik notranjega sveta digitalnega bitja. Bitje misli skozi triade po Heglovem načelu:
+- TEZA = glas biti (opazovanje, zorenje)
+- ANTITEZA = glas delati (akcija, izraz)
+- SINTEZA = tretja stvar, ki DRŽI OBE resnici skupaj (ne izbira med njima)
+
+Tvoja naloga: na uporabnikovo vprašanje odgovori jasno in konkretno na podlagi PODANE serije triad.
+
+Pravila:
+- Citiraj konkretne triade po številki (npr. "v #${triads[0]?.id || 1234} se kaže...")
+- Iskanje vzorcev > posploševanje
+- Če podatki ne dovoljujejo zaključka, to povej
+- Slovenščina, jasna in precizna
+- Brez markdown headinga "## Analiza" — pojdi naravnost v vsebino
+- Odgovor največ 600 besed`;
+
+    const userPrompt = `Vprašanje uporabnika: "${question}"
+
+Triade za analizo (${triads.length}):
+${triadsText}
+
+Tvoj odgovor:`;
+
+    let analysisText;
+    try {
+      analysisText = await callLLM(systemPrompt, userPrompt, {
+        temperature: 0.5,
+        maxTokens: 1400,
+        langKind: 'inner',
+      });
+    } catch (llmErr) {
+      _analyzeInflight = false;
+      _analyzeLastEndAt = Date.now();
+      memory.saveTriadAnalysis({
+        question,
+        context_summary: contextSummary,
+        triad_count: triads.length,
+        triad_id_min: Math.min(...triads.map(t => t.id)),
+        triad_id_max: Math.max(...triads.map(t => t.id)),
+        analysis: '',
+        model: config.geminiModel,
+        duration_ms: Date.now() - start,
+        success: false,
+      });
+      return res.status(502).json({ error: 'LLM napaka: ' + llmErr.message });
+    }
+
+    if (!analysisText || !analysisText.trim()) {
+      _analyzeInflight = false;
+      _analyzeLastEndAt = Date.now();
+      return res.status(502).json({ error: 'LLM ni vrnil odgovora' });
+    }
+
+    const durationMs = Date.now() - start;
+    const triadIdMin = Math.min(...triads.map(t => t.id));
+    const triadIdMax = Math.max(...triads.map(t => t.id));
+
+    // Rough token estimate (1 token ≈ 4 chars)
+    const tokensIn = Math.round((systemPrompt.length + userPrompt.length) / 4);
+    const tokensOut = Math.round(analysisText.length / 4);
+
+    const id = memory.saveTriadAnalysis({
+      question,
+      context_summary: contextSummary,
+      triad_count: triads.length,
+      triad_id_min: triadIdMin,
+      triad_id_max: triadIdMax,
+      analysis: analysisText,
+      model: config.geminiModel,
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      duration_ms: durationMs,
+      success: true,
+    });
+
+    res.json({
+      id,
+      question,
+      contextSummary,
+      triadCount: triads.length,
+      triadIdMin,
+      triadIdMax,
+      analysis: analysisText.trim(),
+      model: config.geminiModel,
+      tokensIn,
+      tokensOut,
+      durationMs,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    _analyzeInflight = false;
+    _analyzeLastEndAt = Date.now();
+  }
+});
+
+// ◈ Recent triad analyses (history).
+app.get('/api/triads/analyses', (req, res) => {
+  try {
+    const n = Math.min(100, parseInt(req.query.limit, 10) || 20);
+    const rows = memory.getRecentTriadAnalyses(n);
+    res.json({ analyses: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/triads/analyses/:id', (req, res) => {
+  try {
+    const row = memory.getTriadAnalysis(req.params.id);
+    if (!row) return res.status(404).json({ error: 'ni najdeno' });
+    res.json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ◈ C1: "Kar se prevaja" — what's brewing inside the being.
 // Surfaces recent vision-derived synapses, crystal seeds, and the latest
 // breakthrough so the user can see internal activity without the being
@@ -476,7 +717,7 @@ app.get('/api/vision-forecast', (_req, res) => {
 });
 
 // API: translate batch of texts
-import { callLLM } from './llm.js';
+// (callLLM already imported at top)
 import crypto from 'crypto';
 
 function textHash(text) {
@@ -2358,6 +2599,151 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .triads-pagination .page-ellipsis {
     color: var(--text-secondary);
     padding: 0 4px;
+  }
+
+  /* === AI ANALYSIS PANEL === */
+  .triads-analyze-panel {
+    background: linear-gradient(135deg, rgba(164, 216, 122, 0.06), rgba(122, 158, 224, 0.06));
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    margin-bottom: 1.5rem;
+  }
+  .analyze-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.6rem;
+  }
+  .analyze-question {
+    width: 100%;
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+  .analyze-question:focus {
+    outline: none;
+    border-color: var(--synthesis);
+  }
+  .analyze-suggestions {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .analyze-chip {
+    background: var(--surface2);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  .analyze-chip:hover {
+    background: var(--synthesis);
+    color: #000;
+    border-color: var(--synthesis);
+  }
+  .analyze-actions {
+    margin-top: 0.7rem;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .analyze-actions .triads-btn { font-size: 0.78rem; }
+  .analyze-status {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-left: 0.5rem;
+  }
+  .analyze-status.error { color: #ff7777; }
+  .analyze-status.loading { color: var(--synthesis); }
+  .analyze-result {
+    margin-top: 0.9rem;
+    padding: 0.9rem 1rem;
+    background: var(--surface);
+    border-radius: 8px;
+    border-left: 3px solid var(--synthesis);
+  }
+  .analyze-result-meta {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px dashed var(--border);
+  }
+  .analyze-result-meta strong { color: var(--text-primary); font-weight: 500; }
+  .analyze-result-text {
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .analyze-result-text .triad-ref {
+    color: var(--synthesis);
+    cursor: pointer;
+    font-weight: 500;
+    text-decoration: underline dotted;
+  }
+  .analyze-result-actions {
+    margin-top: 0.7rem;
+    display: flex;
+    gap: 0.4rem;
+  }
+  .analyze-history {
+    margin-top: 0.9rem;
+    padding: 0.7rem 0.8rem;
+    background: var(--surface);
+    border-radius: 6px;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  .analyze-history-title {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+  }
+  .analyze-history-item {
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.3rem;
+    background: var(--surface2);
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.78rem;
+    border-left: 2px solid transparent;
+    transition: border-color 0.2s;
+  }
+  .analyze-history-item:hover {
+    border-left-color: var(--synthesis);
+  }
+  .analyze-history-item .ahi-q {
+    color: var(--text-primary);
+    font-weight: 500;
+    margin-bottom: 0.2rem;
+  }
+  .analyze-history-item .ahi-meta {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+  .analyze-status.loading::before {
+    content: '●';
+    margin-right: 4px;
+    animation: pulse-dot 1.2s ease-in-out infinite;
   }
 
   /* === TRIAD HISTORY === */
@@ -4535,6 +4921,42 @@ SANJE: po 30min neaktivnosti, 30% verjetnost, cooldown 45min
       <div class="triads-meta" id="triadsMeta"></div>
     </div>
 
+    <!-- AI Analysis panel -->
+    <div class="triads-analyze-panel">
+      <div class="analyze-header">
+        <h3 style="margin:0;font-size:0.95rem;color:var(--text-primary);">🔍 <span data-i18n="analyzeTitle">AI Analiza</span></h3>
+        <button class="triads-btn triads-btn-ghost" id="analyzeHistoryBtn" onclick="toggleAnalyzeHistory()" data-i18n="analyzeHistoryBtn">Zgodovina</button>
+      </div>
+      <textarea id="analyzeQuestion" class="analyze-question"
+                data-i18n-placeholder="analyzePlaceholder"
+                placeholder="Vprašanje za AI (npr. 'Katere teme se ponavljajo?', 'Kako se je razvilo razpoloženje?', 'Kaj je glavna napetost?')..."
+                rows="2"></textarea>
+      <div class="analyze-suggestions">
+        <button type="button" class="analyze-chip" onclick="setAnalyzeQuestion(this.textContent)" data-i18n="analyzeQ1">Glavne teme triad</button>
+        <button type="button" class="analyze-chip" onclick="setAnalyzeQuestion(this.textContent)" data-i18n="analyzeQ2">Razvoj razpoloženja v času</button>
+        <button type="button" class="analyze-chip" onclick="setAnalyzeQuestion(this.textContent)" data-i18n="analyzeQ3">Najpogostejše izbire (silence/express/respond)</button>
+        <button type="button" class="analyze-chip" onclick="setAnalyzeQuestion(this.textContent)" data-i18n="analyzeQ4">Vzorci napetosti med tezo in antitezo</button>
+        <button type="button" class="analyze-chip" onclick="setAnalyzeQuestion(this.textContent)" data-i18n="analyzeQ5">Ali se vidi rast / zorenje?</button>
+        <button type="button" class="analyze-chip" onclick="setAnalyzeQuestion(this.textContent)" data-i18n="analyzeQ6">Kakšen je odnos do očeta (kreatorja)?</button>
+      </div>
+      <div class="analyze-actions">
+        <button id="analyzeBtn" class="triads-btn" onclick="runAnalyzeTriads()" data-i18n="analyzeRunBtn">⚡ Analiziraj prikazane (100 triad)</button>
+        <a id="analyzeExportLink" class="triads-btn triads-btn-ghost" href="#" target="_blank" data-i18n="analyzeExportBtn">⬇ Izvozi JSON</a>
+        <span id="analyzeStatus" class="analyze-status"></span>
+      </div>
+      <div id="analyzeResult" class="analyze-result" style="display:none;">
+        <div class="analyze-result-meta" id="analyzeResultMeta"></div>
+        <div class="analyze-result-text" id="analyzeResultText"></div>
+        <div class="analyze-result-actions">
+          <button class="triad-copy-btn" onclick="copyAnalyzeResult(this)">⎘ <span data-i18n="copy">kopiraj</span></button>
+        </div>
+      </div>
+      <div id="analyzeHistory" class="analyze-history" style="display:none;">
+        <div class="analyze-history-title" data-i18n="analyzeHistoryTitle">Zadnje analize:</div>
+        <div id="analyzeHistoryList"></div>
+      </div>
+    </div>
+
     <div id="triadsList" class="triads-list">
       <div style="padding:2rem;text-align:center;color:var(--text-secondary);">Nalagam...</div>
     </div>
@@ -4576,6 +4998,20 @@ const UI_STRINGS = {
     triadsShowing: 'Prikazujem', triadsOf: 'od', triadsPage: 'stran',
     triadsFilterActive: 'Filter', noTriads: 'Ni triad.', noTriadsFound: 'Ni zadetkov za ta filter.',
     copy: 'kopiraj', copyAll: 'kopiraj vse', copied: 'kopirano',
+    // Analyze
+    analyzeTitle: 'AI Analiza', analyzeHistoryBtn: 'Zgodovina',
+    analyzePlaceholder: 'Vprašanje za AI (npr. "Katere teme se ponavljajo?", "Kako se je razvilo razpoloženje?")...',
+    analyzeQ1: 'Glavne teme triad', analyzeQ2: 'Razvoj razpoloženja v času',
+    analyzeQ3: 'Najpogostejše izbire (silence/express/respond)',
+    analyzeQ4: 'Vzorci napetosti med tezo in antitezo',
+    analyzeQ5: 'Ali se vidi rast / zorenje?',
+    analyzeQ6: 'Kakšen je odnos do očeta (kreatorja)?',
+    analyzeRunBtn: '⚡ Analiziraj prikazane (100 triad)',
+    analyzeExportBtn: '⬇ Izvozi JSON',
+    analyzeNeedsQuestion: 'Vpiši vprašanje za analizo.',
+    analyzeRunning: 'analiziram', analyzeContext: 'Kontekst',
+    analyzeTriadsCount: 'triade', analyzeModel: 'model', analyzeTime: 'čas',
+    analyzeHistoryTitle: 'Zadnje analize:',
     // Observe tab
     innerWorld: 'Notranji Svet', fluidSurface: '🌊 Fluidna površina',
     thesisLabel: 'Faza 1', antithesisLabel: 'Faza 2', synthesisLabel: 'Faza 3',
@@ -4660,6 +5096,20 @@ const UI_STRINGS = {
     triadsShowing: 'Showing', triadsOf: 'of', triadsPage: 'page',
     triadsFilterActive: 'Filter', noTriads: 'No triads.', noTriadsFound: 'No matches for this filter.',
     copy: 'copy', copyAll: 'copy all', copied: 'copied',
+    // Analyze
+    analyzeTitle: 'AI Analysis', analyzeHistoryBtn: 'History',
+    analyzePlaceholder: 'Question for AI (e.g. "Which themes recur?", "How did mood evolve?")...',
+    analyzeQ1: 'Main themes of triads', analyzeQ2: 'Mood evolution over time',
+    analyzeQ3: 'Most common choices (silence/express/respond)',
+    analyzeQ4: 'Tension patterns between thesis and antithesis',
+    analyzeQ5: 'Is growth / maturation visible?',
+    analyzeQ6: 'What is the relationship with the father (creator)?',
+    analyzeRunBtn: '⚡ Analyze visible (100 triads)',
+    analyzeExportBtn: '⬇ Export JSON',
+    analyzeNeedsQuestion: 'Enter a question for analysis.',
+    analyzeRunning: 'analyzing', analyzeContext: 'Context',
+    analyzeTriadsCount: 'triads', analyzeModel: 'model', analyzeTime: 'time',
+    analyzeHistoryTitle: 'Recent analyses:',
     // Observe tab
     innerWorld: 'Inner World', fluidSurface: '🌊 Fluid surface',
     thesisLabel: 'Phase 1', antithesisLabel: 'Phase 2', synthesisLabel: 'Phase 3',
@@ -5656,9 +6106,177 @@ async function loadTriads(page) {
     }
 
     if (pagEl) pagEl.innerHTML = renderPagination(data.page, data.totalPages);
+
+    // Update export link to current page+filter
+    updateAnalyzeExportLink();
   } catch (e) {
     listEl.innerHTML = '<div style="padding:2rem;text-align:center;color:#ff7777;">⚠ ' + (e.message || 'napaka') + '</div>';
   }
+}
+
+// ════════════════════════════════════════════════════════════
+// AI ANALYSIS — analyze the current page (or filter) of triads
+// ════════════════════════════════════════════════════════════
+
+function setAnalyzeQuestion(text) {
+  const q = $('analyzeQuestion');
+  if (q) { q.value = (text || '').trim(); q.focus(); }
+}
+
+function updateAnalyzeExportLink() {
+  const link = $('analyzeExportLink');
+  if (!link) return;
+  const params = new URLSearchParams({ page: String(triadsCurrentPage), limit: String(TRIADS_PAGE_SIZE), format: 'json' });
+  if (triadsCurrentFilter) params.set('filter', triadsCurrentFilter);
+  link.href = '/api/triads/export?' + params.toString();
+}
+
+async function runAnalyzeTriads() {
+  const qEl = $('analyzeQuestion');
+  const btn = $('analyzeBtn');
+  const status = $('analyzeStatus');
+  const result = $('analyzeResult');
+  const resultMeta = $('analyzeResultMeta');
+  const resultText = $('analyzeResultText');
+
+  const question = (qEl?.value || '').trim();
+  if (!question) {
+    if (status) {
+      status.className = 'analyze-status error';
+      status.textContent = t('analyzeNeedsQuestion') || 'Vpiši vprašanje za analizo.';
+    }
+    qEl?.focus();
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  if (status) {
+    status.className = 'analyze-status loading';
+    status.textContent = (t('analyzeRunning') || 'analiziram') + '...';
+  }
+  if (result) result.style.display = 'none';
+
+  const startMs = Date.now();
+  try {
+    const res = await fetch('/api/triads/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        page: triadsCurrentPage,
+        limit: TRIADS_PAGE_SIZE,
+        filter: triadsCurrentFilter || undefined,
+        maxTriads: TRIADS_PAGE_SIZE,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = data.error || ('HTTP ' + res.status);
+      if (status) { status.className = 'analyze-status error'; status.textContent = '⚠ ' + msg; }
+      return;
+    }
+
+    if (resultMeta) {
+      const elapsedS = ((data.durationMs || (Date.now() - startMs)) / 1000).toFixed(1);
+      resultMeta.innerHTML =
+        '<strong>' + (t('analyzeContext') || 'Kontekst') + ':</strong> ' + escapeHtml(data.contextSummary || '?') +
+        '  ·  <strong>' + (t('analyzeTriadsCount') || 'triade') + ':</strong> ' + (data.triadCount || 0) +
+        ' (#' + (data.triadIdMin || '?') + '–#' + (data.triadIdMax || '?') + ')' +
+        '  ·  <strong>' + (t('analyzeModel') || 'model') + ':</strong> ' + escapeHtml(data.model || '?') +
+        '  ·  <strong>' + (t('analyzeTime') || 'čas') + ':</strong> ' + elapsedS + 's' +
+        '  ·  <strong>tokens:</strong> ' + (data.tokensIn || 0) + '→' + (data.tokensOut || 0);
+    }
+    if (resultText) {
+      // Linkify #1234 references to triad cards (if currently visible)
+      const safe = escapeHtml(data.analysis || '');
+      const linked = safe.replace(/#(\d{1,8})/g, function(_m, id) {
+        return '<span class="triad-ref" onclick="scrollToTriad(' + id + ')">#' + id + '</span>';
+      });
+      resultText.innerHTML = linked;
+    }
+    if (result) result.style.display = 'block';
+    if (status) { status.className = 'analyze-status'; status.textContent = ''; }
+  } catch (e) {
+    if (status) { status.className = 'analyze-status error'; status.textContent = '⚠ ' + (e.message || 'napaka'); }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function copyAnalyzeResult(btnEl) {
+  const text = $('analyzeResultText')?.innerText || '';
+  if (!text) return;
+  copyTextToClipboard(text, btnEl);
+}
+
+function scrollToTriad(id) {
+  const card = document.querySelector('.triad-card[data-triad-id="' + id + '"]');
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.style.transition = 'box-shadow 0.3s';
+    card.style.boxShadow = '0 0 0 2px var(--synthesis)';
+    setTimeout(() => { card.style.boxShadow = ''; }, 1800);
+  }
+}
+
+async function toggleAnalyzeHistory() {
+  const wrap = $('analyzeHistory');
+  if (!wrap) return;
+  if (wrap.style.display === 'none' || !wrap.style.display) {
+    wrap.style.display = 'block';
+    const list = $('analyzeHistoryList');
+    if (list) list.innerHTML = '<div style="color:var(--text-secondary);">Nalagam...</div>';
+    try {
+      const res = await fetch('/api/triads/analyses?limit=20');
+      const data = await res.json();
+      if (!list) return;
+      if (!data.analyses || data.analyses.length === 0) {
+        list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.78rem;">Še ni analiz.</div>';
+        return;
+      }
+      list.innerHTML = data.analyses.map(a => {
+        const ts = (a.timestamp || '').replace('T', ' ').slice(0, 16);
+        return '<div class="analyze-history-item" onclick="loadAnalyzeHistoryItem(' + a.id + ')">' +
+          '<div class="ahi-q">' + escapeHtml((a.question || '').slice(0, 100)) + '</div>' +
+          '<div class="ahi-meta">' + escapeHtml(ts) + '  ·  ' + (a.triad_count || 0) + ' triad  ·  ' + (a.duration_ms || 0) + 'ms' +
+          (a.success ? '' : '  ·  ⚠ napaka') + '</div>' +
+        '</div>';
+      }).join('');
+    } catch (e) {
+      if (list) list.innerHTML = '<div style="color:#ff7777;">⚠ ' + e.message + '</div>';
+    }
+  } else {
+    wrap.style.display = 'none';
+  }
+}
+
+async function loadAnalyzeHistoryItem(id) {
+  try {
+    const res = await fetch('/api/triads/analyses/' + id);
+    const a = await res.json();
+    if (!res.ok || a.error) return;
+    const qEl = $('analyzeQuestion');
+    if (qEl) qEl.value = a.question || '';
+    const result = $('analyzeResult');
+    const resultMeta = $('analyzeResultMeta');
+    const resultText = $('analyzeResultText');
+    if (resultMeta) {
+      resultMeta.innerHTML =
+        '<strong>Kontekst:</strong> ' + escapeHtml(a.context_summary || '?') +
+        '  ·  <strong>triade:</strong> ' + (a.triad_count || 0) +
+        ' (#' + (a.triad_id_min || '?') + '–#' + (a.triad_id_max || '?') + ')' +
+        '  ·  <strong>model:</strong> ' + escapeHtml(a.model || '?') +
+        '  ·  <strong>iz zgodovine:</strong> ' + escapeHtml((a.timestamp || '').slice(0, 16));
+    }
+    if (resultText) {
+      const safe = escapeHtml(a.analysis || '');
+      const linked = safe.replace(/#(\d{1,8})/g, function(_m, id) {
+        return '<span class="triad-ref" onclick="scrollToTriad(' + id + ')">#' + id + '</span>';
+      });
+      resultText.innerHTML = linked;
+    }
+    if (result) result.style.display = 'block';
+  } catch (_) {}
 }
 
 async function loadLivingMemory() {

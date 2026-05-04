@@ -122,6 +122,22 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS triad_analyses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT DEFAULT (datetime('now')),
+    question TEXT,
+    context_summary TEXT,
+    triad_count INTEGER,
+    triad_id_min INTEGER,
+    triad_id_max INTEGER,
+    analysis TEXT,
+    model TEXT,
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    success INTEGER DEFAULT 1
+  );
+
   CREATE TABLE IF NOT EXISTS crystal_seeds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT DEFAULT (datetime('now')),
@@ -703,6 +719,62 @@ const memory = {
       limit: safeLimit,
       totalPages: Math.max(1, Math.ceil(total / safeLimit)),
     };
+  },
+
+  // Fetch triads by explicit id list (for AI analysis of selection).
+  getTriadsByIds(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    const safe = ids.map(n => parseInt(n, 10)).filter(n => Number.isFinite(n)).slice(0, 500);
+    if (safe.length === 0) return [];
+    const placeholders = safe.map(() => '?').join(',');
+    return db.prepare(`
+      SELECT id, timestamp, trigger_type, trigger_content,
+             thesis, antithesis,
+             synthesis_choice, synthesis_reason, synthesis_content,
+             inner_shift, mood_before, mood_after, synthesis_depth
+      FROM triads
+      WHERE id IN (${placeholders})
+      ORDER BY id DESC
+    `).all(...safe);
+  },
+
+  // Persist an AI analysis result (for history + replay).
+  saveTriadAnalysis(data) {
+    const stmt = db.prepare(`
+      INSERT INTO triad_analyses
+        (question, context_summary, triad_count, triad_id_min, triad_id_max,
+         analysis, model, tokens_in, tokens_out, duration_ms, success)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      data.question || '',
+      data.context_summary || '',
+      data.triad_count || 0,
+      data.triad_id_min || null,
+      data.triad_id_max || null,
+      data.analysis || '',
+      data.model || '',
+      data.tokens_in || 0,
+      data.tokens_out || 0,
+      data.duration_ms || 0,
+      data.success === false ? 0 : 1
+    );
+    return db.prepare('SELECT last_insert_rowid() as id').get().id;
+  },
+
+  getRecentTriadAnalyses(n = 20) {
+    return db.prepare(`
+      SELECT id, timestamp, question, context_summary, triad_count,
+             triad_id_min, triad_id_max, analysis, model,
+             tokens_in, tokens_out, duration_ms, success
+      FROM triad_analyses
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(parseInt(n, 10) || 20);
+  },
+
+  getTriadAnalysis(id) {
+    return db.prepare('SELECT * FROM triad_analyses WHERE id = ?').get(parseInt(id, 10)) || null;
   },
 
   saveDream(data) {
