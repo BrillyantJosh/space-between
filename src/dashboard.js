@@ -375,14 +375,24 @@ app.get('/api/triads/count', (req, res) => {
 // to /api/triads. Default limit raised to 500 since this is meant for export.
 app.get('/api/triads/export', (req, res) => {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = Math.min(2000, parseInt(req.query.limit, 10) || 500);
-    const filter = (req.query.filter || '').toString();
-    const data = memory.getTriadsPaginated(page, limit, filter);
+    const idsRaw = (req.query.ids || '').toString().trim();
+    let data;
+    if (idsRaw) {
+      // Lookup specific triads by id (comma/space separated)
+      const idsArr = idsRaw.split(/[,\s]+/).map(s => parseInt(s, 10)).filter(n => Number.isFinite(n));
+      const rows = memory.getTriadsByIds(idsArr);
+      data = { rows, total: rows.length, page: 1, limit: rows.length, totalPages: 1 };
+    } else {
+      const page = parseInt(req.query.page, 10) || 1;
+      const limit = Math.min(2000, parseInt(req.query.limit, 10) || 500);
+      const filter = (req.query.filter || '').toString();
+      const triggerType = (req.query.trigger_type || '').toString();
+      data = memory.getTriadsPaginated(page, limit, filter, triggerType);
+    }
     const fmt = (req.query.format || 'json').toLowerCase();
     if (fmt === 'csv') {
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="triads-page-${page}.csv"`);
+      res.setHeader('Content-Disposition', `attachment; filename="triads-page-${data.page}.csv"`);
       const esc = (v) => {
         const s = (v == null ? '' : String(v)).replace(/"/g, '""');
         return `"${s}"`;
@@ -393,7 +403,7 @@ app.get('/api/triads/export', (req, res) => {
       res.send([header, ...rows].join('\n'));
     } else {
       res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `inline; filename="triads-page-${page}.json"`);
+      res.setHeader('Content-Disposition', `inline; filename="triads-${idsRaw ? 'ids' : 'page-' + data.page}.json"`);
       res.json({
         meta: {
           entity: memory.getDisplayName ? memory.getDisplayName() : (config.entityName || 'unknown'),
@@ -402,7 +412,9 @@ app.get('/api/triads/export', (req, res) => {
           limit: data.limit,
           total: data.total,
           totalPages: data.totalPages,
-          filter: filter || null,
+          filter: (req.query.filter || '').toString() || null,
+          trigger_type: (req.query.trigger_type || '').toString() || null,
+          ids: idsRaw || null,
         },
         triads: data.rows,
       });
@@ -6888,8 +6900,9 @@ async function runFullAnalysis() {
     if (resultText) {
       const safe = escapeHtml(data.analysis || '');
       const _bs = String.fromCharCode(92);
+      // Just style #1234 references — clicking opens the API export for that single triad
       const linked = safe.replace(new RegExp('#(' + _bs + 'd{1,8})', 'g'), function(_m, id) {
-        return '<span class="triad-ref" onclick="window.open(\'/api/triads/export?ids=\'+'+id+', \'_blank\')">#' + id + '</span>';
+        return '<span class="triad-ref" data-triad-id="' + id + '" onclick="openTriadById(this.dataset.triadId)">#' + id + '</span>';
       });
       resultText.innerHTML = linked;
     }
@@ -7022,6 +7035,13 @@ function loadAnalysisTab() {
   fillBulkScript();
   updateAnalysisEstimate();
   loadAnalysisHistory2();
+}
+
+// Open a single triad's JSON in a new tab (cleaner than escaping quotes in onclick).
+function openTriadById(id) {
+  const cleanId = parseInt(id, 10);
+  if (!Number.isFinite(cleanId)) return;
+  window.open('/api/triads/export?ids=' + cleanId, '_blank');
 }
 
 async function loadLivingMemory() {
