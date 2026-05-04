@@ -6994,9 +6994,14 @@ function copyApiCurl(kind) {
   } else if (kind === 'list') {
     cmd = "curl -s '" + origin + "/api/triads?page=1&limit=100&filter=ranljivost' | jq";
   } else if (kind === 'analyze') {
-    cmd = "curl -s -X POST '" + origin + "/api/triads/analyze' " +
-          "-H 'Content-Type: application/json' " +
-          "-d '{\"question\":\"Kateri vzorci se ponavljajo?\",\"page\":1,\"limit\":100}'";
+    // Build JSON body via JSON.stringify to avoid quote escape issues inside template literal
+    const body = JSON.stringify({ question: 'Kateri vzorci se ponavljajo?', page: 1, limit: 100 });
+    // Wrap body in single quotes for shell, escape any embedded single quotes the bash way
+    const shellQuote = String.fromCharCode(39);
+    const safeBody = body.split(shellQuote).join(shellQuote + String.fromCharCode(92) + shellQuote + shellQuote);
+    cmd = 'curl -s -X POST ' + shellQuote + origin + '/api/triads/analyze' + shellQuote +
+          ' -H ' + shellQuote + 'Content-Type: application/json' + shellQuote +
+          ' -d ' + shellQuote + safeBody + shellQuote;
   } else if (kind === 'analyses') {
     cmd = "curl -s '" + origin + "/api/triads/analyses?limit=20' | jq";
   }
