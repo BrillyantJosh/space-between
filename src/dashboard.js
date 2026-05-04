@@ -6189,7 +6189,8 @@ async function runAnalyzeTriads() {
     if (resultText) {
       // Linkify #1234 references to triad cards (if currently visible)
       const safe = escapeHtml(data.analysis || '');
-      const linked = safe.replace(/#(\d{1,8})/g, function(_m, id) {
+      const _bs = String.fromCharCode(92);
+      const linked = safe.replace(new RegExp('#(' + _bs + 'd{1,8})', 'g'), function(_m, id) {
         return '<span class="triad-ref" onclick="scrollToTriad(' + id + ')">#' + id + '</span>';
       });
       resultText.innerHTML = linked;
@@ -6270,7 +6271,8 @@ async function loadAnalyzeHistoryItem(id) {
     }
     if (resultText) {
       const safe = escapeHtml(a.analysis || '');
-      const linked = safe.replace(/#(\d{1,8})/g, function(_m, id) {
+      const _bs = String.fromCharCode(92);
+      const linked = safe.replace(new RegExp('#(' + _bs + 'd{1,8})', 'g'), function(_m, id) {
         return '<span class="triad-ref" onclick="scrollToTriad(' + id + ')">#' + id + '</span>';
       });
       resultText.innerHTML = linked;
