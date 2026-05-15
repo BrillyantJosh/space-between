@@ -5425,7 +5425,7 @@ maxConversationHistory: 50           (zadnjih 50 sporočil v pogovoru)
 maxTriadHistory: 200                 (zadnjih 200 triad v kontekstu)
 maxSelfObservations: 50              (zadnjih 50 samopazovanj)
 silenceAppreciation: true            (spoštuje tišino)
-geminiModel: gemini-2.0-flash       (za triado in sanje)
+geminiModel: gemini-2.5-flash-lite   (za triado in sanje)
 anthropicModel: claude-sonnet-4      (za ROKE — ustvarjanje)</div>
   </div>
 
